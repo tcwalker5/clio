@@ -1,0 +1,574 @@
+"""
+bradford_invoice.py — Parse PL Bradford Law LLC invoice PDF and post time entries to Clio.
+
+Two invoice formats handled:
+  1. Attorney time (main invoice, pages 1-3)
+       Item=Hours, Description=CLIENTNAME- M/D/YY- ACTIVITY
+       Price: omitted from payload — Clio uses PAM's matter-defined rate
+  2. Paralegal time (Clio export attachments, pages 4-8)
+       Price: PARALEGAL_RATE ($150), regardless of what the attachment shows
+
+Skipped:
+  - ADMIN entries (not entered in Clio)
+  - "PARALEGAL TIME ***SEE ATTACHED" summary lines (detail is on pages 4-8)
+
+All entries posted under USER_ID_PAM (Pamela Bradford).
+
+Usage:
+  uv run src/bradford_invoice.py --input "data/Invoice-*.pdf" --dry-run
+  uv run src/bradford_invoice.py --input "data/Invoice-*.pdf"
+  uv run src/bradford_invoice.py --input "data/Invoice-*.pdf" --matter wells
+"""
+
+import argparse
+import csv
+import json
+import logging
+import os
+import re
+import sys
+import time
+from dataclasses import dataclass
+from datetime import datetime
+from decimal import ROUND_HALF_UP, Decimal
+from pathlib import Path
+
+import pdfplumber
+import requests
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# Suppress pdfminer font-descriptor warnings — benign, not actionable
+logging.getLogger("pdfminer").setLevel(logging.ERROR)
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+PARALEGAL_RATE = 150.0  # price sent to Clio for paralegal (Taijah Miles) entries
+
+BASE_URL       = os.getenv("CLIO_BASE_URL", "https://app.clio.com").rstrip("/")
+ACCESS_TOKEN   = os.getenv("CLIO_ACCESS_TOKEN", "")
+PAM_USER_ID    = int(os.getenv("USER_ID_PAM", "0"))
+ACTIVITIES_URL = f"{BASE_URL}/api/v4/activities.json"
+MATTERS_URL    = f"{BASE_URL}/api/v4/matters.json"
+POST_DELAY     = 1.5  # seconds between POSTs — stay under 50 req/min
+
+# Invoice last-name → Clio matter ID.
+# Add entries after a dry-run surfaces exceptions or ambiguous matches.
+MANUAL_MATTER_MAP: dict[str, int] = {
+    "HJERMSTAD":  1786831923,  # Clio: HJERMSTAD, HANS CHRISTIAN
+    "LARSON":     1786834653,  # Clio: LARSEN, NOEL (typo on invoice)
+    "VISWANATH":  1786847118,  # Clio: VISWANATHAN, VIDYA (name truncated on invoice)
+    "BULTMIERE":  1786823793,  # Clio: BULTEMEIER, HANNAH (spelling varies on invoice)
+    "WELLS":      1786847613,  # Clio: WELLS, ANDREW (BRITTNEY is closed but not yet in Clio)
+}
+
+
+# ---------------------------------------------------------------------------
+# Data model
+# ---------------------------------------------------------------------------
+
+@dataclass
+class InvoiceEntry:
+    client_name: str        # normalized last name for matter matching
+    date: str               # ISO YYYY-MM-DD
+    description: str        # activity note
+    hours: float            # decimal hours
+    source: str             # "attorney" or "paralegal"
+    paralegal_rate: float | None  # None for attorney (Clio uses matter rate); 150.0 for paralegal
+
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+
+def setup_logging(log_dir: Path) -> None:
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / f"bradford_invoice_{datetime.today().strftime('%Y%m%d')}.log"
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s  %(levelname)-8s  %(message)s",
+        force=True,
+        handlers=[
+            logging.FileHandler(log_file, encoding="utf-8"),
+            logging.StreamHandler(
+                open(sys.stdout.fileno(), mode="w", encoding="utf-8",
+                     errors="replace", closefd=False)
+            ),
+        ],
+    )
+    logging.info("Log: %s", log_file)
+
+
+# ---------------------------------------------------------------------------
+# Date helpers
+# ---------------------------------------------------------------------------
+
+def parse_invoice_date(s: str) -> str | None:
+    """Parse M/D/YY or M-D-YY (4-digit year also accepted) -> YYYY-MM-DD."""
+    s = s.strip()
+    for fmt in ("%m/%d/%y", "%m-%d-%y", "%m/%d/%Y", "%m-%d-%Y"):
+        try:
+            return datetime.strptime(s, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            pass
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Main invoice parsing — pages 1-3
+#
+# Strategy: try pdfplumber table extraction; fall back to line-by-line regex
+# if a page yields no table rows.
+# ---------------------------------------------------------------------------
+
+# Description field pattern: NAME[-; ] DATE [-] ACTIVITY
+_DESC_RE = re.compile(
+    r'^([A-Z][A-Z ]*?)\s*[;,\-]?\s*(\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4})\s*[-]?\s*(.+)$',
+    re.DOTALL,
+)
+
+
+def _parse_desc(desc: str, qty_s: str) -> InvoiceEntry | None:
+    """
+    Parse a main-invoice description + quantity string into an InvoiceEntry.
+    Returns None for ADMIN, SEE ATTACHED, or unparseable rows.
+    """
+    desc = " ".join(desc.split())
+
+    if desc.upper().startswith("ADMIN"):
+        logging.debug("Skip ADMIN: %.60s", desc)
+        return None
+    if "PARALEGAL TIME" in desc.upper():
+        logging.debug("Skip SEE ATTACHED: %.60s", desc)
+        return None
+
+    try:
+        hours = float(qty_s.replace(",", ""))
+    except ValueError:
+        return None
+
+    m = _DESC_RE.match(desc)
+    if not m:
+        logging.warning("Cannot parse description: %.80s", desc)
+        return None
+
+    client   = m.group(1).strip().rstrip(",;- ").strip().upper()
+    date_iso = parse_invoice_date(m.group(2))
+    activity = m.group(3).strip()
+
+    if not date_iso:
+        logging.warning("Cannot parse date in: %.80s", desc)
+        return None
+
+    return InvoiceEntry(
+        client_name=client,
+        date=date_iso,
+        description=activity,
+        hours=hours,
+        source="attorney",
+        paralegal_rate=None,  # Clio uses PAM's matter rate
+    )
+
+
+# Matches a full invoice row: "Hours DESC  PRICE  HRS  TOTAL"
+# All three trailing numbers are required; desc may be truncated (multi-line PDFs
+# split long descriptions across lines — we use what appears on the Hours line).
+_LINE_RE = re.compile(
+    r'^Hours\s+(.+?)\s+([\d,]+\.\d{2})\s+([\d.]+)\s+([\d,]+\.\d{2})\s*$'
+)
+
+
+_SECTION_STARTS = ("Hours", "Subtotal", "Total", "Amount", "Balance", "Item", "PL ")
+
+
+def parse_main_invoice(pdf: pdfplumber.PDF) -> list[InvoiceEntry]:
+    """
+    Parse attorney time entries from invoice pages 1-3.
+
+    Uses extract_text() line-by-line (not extract_table) because pdfplumber's
+    table detection on invoices with header content returns partial rows.
+    Continuation lines (description text that wraps in the PDF) are joined onto
+    the Hours line so the full activity note is preserved.
+    """
+    entries: list[InvoiceEntry] = []
+
+    for page_idx in range(min(3, len(pdf.pages))):
+        lines = (pdf.pages[page_idx].extract_text() or "").splitlines()
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+            m = _LINE_RE.match(line)
+            if not m:
+                i += 1
+                continue
+
+            desc_part = m.group(1)
+            qty_s     = m.group(3)
+
+            # Append continuation lines until the next "Hours" row or section header
+            j = i + 1
+            while j < len(lines):
+                nxt = lines[j].strip()
+                if not nxt or any(nxt.startswith(s) for s in _SECTION_STARTS):
+                    break
+                desc_part += " " + nxt
+                j += 1
+
+            i = j
+            entry = _parse_desc(desc_part, qty_s)
+            if entry:
+                entries.append(entry)
+
+    logging.info("Parsed %d attorney entries from main invoice", len(entries))
+    return entries
+
+
+# ---------------------------------------------------------------------------
+# Paralegal page parsing — pages 4-8
+#
+# Clio "Time entries" export columns (0-based):
+#   0: Date  |  2: Duration  |  3: Description  |  8: Case
+# Rate overridden to PARALEGAL_RATE for all entries.
+# ---------------------------------------------------------------------------
+
+def _client_from_case(case: str) -> str:
+    """
+    Extract client last name from a Clio matter title.
+      'Ron Joyce v. Ellen Joyce (San Diego)' -> 'JOYCE'
+      'Viswanathan, Vidya'                  -> 'VISWANATHAN'
+      'Andrew Wells v. Christina Smith'     -> 'WELLS'
+    """
+    case = case.strip()
+    if not case:
+        return ""
+    if "," in case and " v." not in case.lower():
+        return case.split(",")[0].strip().upper()
+    m = re.match(r'^\w+\s+(\w+)\s+v\.', case, re.IGNORECASE)
+    if m:
+        return m.group(1).upper()
+    return case.split()[0].upper()
+
+
+def parse_paralegal_pages(pdf: pdfplumber.PDF) -> list[InvoiceEntry]:
+    entries: list[InvoiceEntry] = []
+
+    for page_idx in range(3, min(8, len(pdf.pages))):
+        page  = pdf.pages[page_idx]
+        table = page.extract_table()
+        current_client = ""
+
+        if table:
+            for row in table:
+                if not row:
+                    continue
+                date_s = (row[0] or "").strip()
+                if date_s.lower() in ("date", "date ▲", ""):
+                    continue
+                dur_s = (row[2] or "").strip() if len(row) > 2 else ""
+                desc  = " ".join((row[3] or "").split()) if len(row) > 3 else ""
+                case  = (row[8] or "").strip() if len(row) > 8 else ""
+
+                if case:
+                    current_client = _client_from_case(case)
+                if not date_s or not dur_s or not current_client:
+                    continue
+
+                try:
+                    date_iso = datetime.strptime(date_s, "%b %d, %Y").strftime("%Y-%m-%d")
+                    hours    = float(dur_s)
+                except ValueError:
+                    logging.debug("Paralegal page %d: skip non-data row '%s' / '%s'",
+                                  page_idx + 1, date_s, dur_s)
+                    continue
+
+                entries.append(InvoiceEntry(
+                    client_name=current_client,
+                    date=date_iso,
+                    description=desc,
+                    hours=hours,
+                    source="paralegal",
+                    paralegal_rate=PARALEGAL_RATE,
+                ))
+        else:
+            # Fallback: text-line parsing
+            text = page.extract_text() or ""
+            for line in text.splitlines():
+                # Grab case from "v." lines to set current_client
+                case_m = re.search(r'\b(\w+)\s+v\.\s+\w+', line)
+                if case_m:
+                    current_client = case_m.group(1).upper()
+                    continue
+                comma_m = re.match(r'^([A-Z][a-z]+),\s+[A-Z]', line)
+                if comma_m:
+                    current_client = comma_m.group(1).upper()
+                    continue
+
+                tm = re.match(
+                    r'^([A-Z][a-z]{2}\s+\d{1,2},\s+\d{4})\s+\S.*?\s+([\d.]+)\s+(.+?)\s+\$[\d.]+/hr',
+                    line.strip()
+                )
+                if not tm or not current_client:
+                    continue
+                try:
+                    date_iso = datetime.strptime(tm.group(1), "%b %d, %Y").strftime("%Y-%m-%d")
+                    hours    = float(tm.group(2))
+                except ValueError:
+                    continue
+                entries.append(InvoiceEntry(
+                    client_name=current_client,
+                    date=date_iso,
+                    description=tm.group(3).strip(),
+                    hours=hours,
+                    source="paralegal",
+                    paralegal_rate=PARALEGAL_RATE,
+                ))
+
+    logging.info("Parsed %d paralegal entries from attached pages", len(entries))
+    return entries
+
+
+# ---------------------------------------------------------------------------
+# Clio matter fetch — last-name index
+# ---------------------------------------------------------------------------
+
+def fetch_matters(session: requests.Session) -> dict[str, int | None]:
+    """
+    Returns last_name -> matter_id for all open matters.
+    Returns None when multiple open matters share the same last name.
+    """
+    raw: dict[str, list[int]] = {}
+    page_token: str | None = None
+    page = 1
+
+    while True:
+        params: dict = {"status": "open", "fields": "id,display_number", "limit": 200}
+        if page_token:
+            params["page_token"] = page_token
+
+        resp = session.get(MATTERS_URL, params=params)
+        if resp.status_code != 200:
+            logging.error("Failed to fetch matters page %d: %s %s",
+                          page, resp.status_code, resp.text[:200])
+            sys.exit(1)
+
+        body = resp.json()
+        for m in body.get("data", []):
+            display = (m.get("display_number") or "").strip()
+            if not display:
+                continue
+            last = display.split(",")[0].strip().upper()
+            raw.setdefault(last, []).append(int(m["id"]))
+
+        page_token = (body.get("meta") or {}).get("paging", {}).get("next")
+        logging.info("Fetched matters page %d — %d records", page, len(body.get("data", [])))
+        page += 1
+        if not page_token:
+            break
+
+    result: dict[str, int | None] = {}
+    for name, ids in raw.items():
+        result[name] = ids[0] if len(ids) == 1 else None
+
+    logging.info("Indexed %d last names from Clio API", len(result))
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Build Clio API payloads
+# ---------------------------------------------------------------------------
+
+def build_payloads(
+    entries: list[InvoiceEntry],
+    matters: dict[str, int | None],
+    pam_user_id: int,
+) -> tuple[list[dict], list[dict]]:
+    payloads: list[dict] = []
+    exceptions: list[dict] = []
+
+    for e in entries:
+        name = e.client_name
+
+        if name in MANUAL_MATTER_MAP:
+            matter_id: int | None = MANUAL_MATTER_MAP[name]
+            logging.info("[%-10s] %-14s %s  %.2fh  manual override -> %s",
+                         e.source, name, e.date, e.hours, matter_id)
+        elif name not in matters:
+            exceptions.append({"name": name, "date": e.date, "hours": e.hours,
+                                "source": e.source, "reason": "No matching open matter"})
+            logging.warning("[%-10s] %-14s %s  %.2fh  NO MATCH", e.source, name, e.date, e.hours)
+            continue
+        elif matters[name] is None:
+            exceptions.append({"name": name, "date": e.date, "hours": e.hours,
+                                "source": e.source,
+                                "reason": "Ambiguous — multiple open matters; add ID to MANUAL_MATTER_MAP"})
+            logging.warning("[%-10s] %-14s %s  %.2fh  AMBIGUOUS", e.source, name, e.date, e.hours)
+            continue
+        else:
+            matter_id = matters[name]
+            logging.info("[%-10s] %-14s %s  %.2fh  -> matter %s",
+                         e.source, name, e.date, e.hours, matter_id)
+
+        # Round to firm standard of 0.1-hour increments using half-up rounding.
+        # Python's built-in round() uses banker's rounding (0.25 → 0.2), which
+        # diverges from Clio's own rounding (0.25 → 0.3). Decimal ROUND_HALF_UP
+        # matches Clio and standard legal billing practice.
+        hours_billed = float(
+            Decimal(str(e.hours)).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+        )
+        if hours_billed != e.hours:
+            logging.info("Rounded %s %s: %.4fh -> %.1fh", e.client_name, e.date, e.hours, hours_billed)
+
+        data: dict = {
+            "type":     "TimeEntry",
+            "date":     e.date,
+            "matter":   {"id": matter_id},
+            "user":     {"id": pam_user_id},
+            "quantity": round(hours_billed * 3600),  # Clio API v4: seconds
+            "note":     e.description,
+        }
+        # Attorney entries: omit price — Clio applies PAM's matter rate
+        # Paralegal entries: explicit $150/hr
+        if e.paralegal_rate is not None:
+            data["price"] = e.paralegal_rate
+
+        payloads.append({"data": data})
+
+    return payloads, exceptions
+
+
+# ---------------------------------------------------------------------------
+# Post to Clio
+# ---------------------------------------------------------------------------
+
+def post_entry(session: requests.Session, payload: dict) -> bool:
+    d            = payload["data"]
+    matter_id    = d["matter"]["id"]
+    note_preview = d["note"][:50]
+
+    for attempt in range(1, 3):
+        resp = session.post(ACTIVITIES_URL, json=payload)
+        if resp.status_code in (200, 201):
+            activity_id = resp.json().get("data", {}).get("id", "?")
+            logging.info("POSTED  matter=%s  activity=%s  %s",
+                         matter_id, activity_id, note_preview)
+            return True
+        elif resp.status_code == 429:
+            wait = 60
+            m = re.search(r"Retry in (\d+) seconds", resp.text)
+            if m:
+                wait = int(m.group(1)) + 2
+            logging.warning("RATE LIMITED  matter=%s  waiting %ds (attempt %d/2)",
+                            matter_id, wait, attempt)
+            time.sleep(wait)
+        else:
+            logging.error("FAILED  matter=%s  status=%s  body=%s",
+                          matter_id, resp.status_code, resp.text[:300])
+            return False
+
+    logging.error("FAILED  matter=%s  gave up after 2 attempts", matter_id)
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument("--input",   required=True, help="Path to Bradford invoice PDF")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="Parse, match, and write payloads — do not POST")
+    ap.add_argument("--matter",  default="",
+                    help="Process only entries whose client name contains this string")
+    args = ap.parse_args()
+
+    setup_logging(Path("logs"))
+
+    if not ACCESS_TOKEN:
+        logging.error("CLIO_ACCESS_TOKEN not set in .env")
+        sys.exit(1)
+    if not PAM_USER_ID:
+        logging.error("USER_ID_PAM not set in .env")
+        sys.exit(1)
+
+    pdf_path = Path(args.input)
+    if not pdf_path.exists():
+        logging.error("PDF not found: %s", pdf_path)
+        sys.exit(1)
+
+    logging.info("Reading %s", pdf_path)
+    with pdfplumber.open(pdf_path) as pdf:
+        attorney_entries  = parse_main_invoice(pdf)
+        paralegal_entries = parse_paralegal_pages(pdf)
+
+    all_entries = attorney_entries + paralegal_entries
+    logging.info("Total entries: %d attorney + %d paralegal = %d",
+                 len(attorney_entries), len(paralegal_entries), len(all_entries))
+
+    if args.matter:
+        f = args.matter.upper()
+        all_entries = [e for e in all_entries if f in e.client_name]
+        logging.info("--matter '%s' matched %d entries", args.matter, len(all_entries))
+        if not all_entries:
+            logging.error("No entries matched --matter '%s'", args.matter)
+            sys.exit(1)
+
+    session = requests.Session()
+    session.headers.update({
+        "Authorization": f"Bearer {ACCESS_TOKEN}",
+        "Content-Type":  "application/json",
+    })
+
+    matters = fetch_matters(session)
+    payloads, exceptions = build_payloads(all_entries, matters, PAM_USER_ID)
+
+    output_dir = Path("output")
+    output_dir.mkdir(exist_ok=True)
+    stem = re.sub(r"[^\w\-]", "_", pdf_path.stem)
+
+    payloads_path = output_dir / f"{stem}_payloads.json"
+    with open(payloads_path, "w", encoding="utf-8") as f:
+        json.dump(payloads, f, indent=2)
+    logging.info("Wrote %d payloads -> %s", len(payloads), payloads_path)
+
+    if exceptions:
+        exc_path = output_dir / f"{stem}_exceptions.csv"
+        with open(exc_path, "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=["name", "date", "hours", "source", "reason"])
+            w.writeheader()
+            w.writerows(exceptions)
+        logging.warning("Wrote %d exceptions -> %s", len(exceptions), exc_path)
+
+    total_hrs = sum(p["data"]["quantity"] / 3600 for p in payloads)
+    logging.info(
+        "Summary: %d entries / %d payloads / %d exceptions  |  %.2f total hours",
+        len(all_entries), len(payloads), len(exceptions), total_hrs,
+    )
+
+    if not payloads:
+        return
+
+    if args.dry_run:
+        logging.info("--- DRY RUN: no entries posted ---")
+        return
+
+    ok = err = 0
+    for payload in payloads:
+        if post_entry(session, payload):
+            ok += 1
+        else:
+            err += 1
+        time.sleep(POST_DELAY)
+
+    logging.info("Done: %d posted, %d failed", ok, err)
+    if err:
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

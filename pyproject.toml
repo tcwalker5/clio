@@ -6,4 +6,5 @@ requires-python = ">=3.14"
 dependencies = [
     "requests>=2.34.0",
     "python-dotenv>=1.0.0",
+    "pdfplumber>=0.11.0",
 ]

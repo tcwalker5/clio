@@ -45,15 +45,23 @@ USER_ID_DAHANN
 
 ```
 clio/
-├── data/               # Input files — CSV reports, matter exports
+├── data/               # Input files — CSV reports, matter exports, invoice PDFs
 ├── output/             # Generated payloads and exception reports
 ├── logs/               # Per-run API logs
-├── src/                # Python scripts, one per subproject
+├── src/
+│   ├── clio_auth.py              # OAuth token management (shared)
+│   ├── printer_expenses.py       # Subproject 1
+│   ├── bradford_invoice.py       # Subproject 2
+│   └── main.py                   # (planned) Master dispatcher with subcommands
 ├── .env                # Credentials (gitignored)
 ├── .env.example
 ├── pyproject.toml
 └── CLAUDE.md
 ```
+
+Each subproject script has its own `main()` and can be run directly via `uv run src/<script>.py`.
+The planned `src/main.py` will be a thin dispatcher with argparse subcommands that calls each
+script's `main()` — no logic of its own.
 
 ---
 
@@ -153,15 +161,65 @@ uv run src/printer_expenses.py
 
 ---
 
-# Subproject 2 — Contractor Invoice Import
+# Subproject 2 — Bradford Invoice Import
 
-**Script:** (planned) `src/contractor_invoice.py`
+**Script:** `src/bradford_invoice.py`
 
-**Input:** PDF invoice (e.g., `Invoice-40024 THROUGH JUNE 30, 2026.pdf`)
+**Purpose:** Parse PL Bradford Law LLC monthly invoice PDF and post time entries to Clio
+as TimeEntry activities under Pamela Bradford (PAM).
 
-**Purpose:** Parse contractor time entries from PDF and post as Clio activities.
+**Input:** `data/Invoice-NNNNN THROUGH MONTH DD, YYYY.pdf` (Bradford invoice PDF)
 
-Details TBD once first subproject is complete.
+**Contractor:** PL Bradford Law LLC — Pamela Bradford, Esq. + paralegal Taijah Miles.
+
+**Two invoice formats in one PDF:**
+- Pages 1-3: Attorney time — `Hours  CLIENT-DATE-ACTIVITY  PRICE  QTY  TOTAL`
+- Pages 4-8: Paralegal time — Clio export attachment with Date / Duration / Description / Case columns
+
+**Billing rules:**
+- Attorney entries: omit `price` from payload — Clio applies PAM's matter-defined rate
+- Paralegal entries: `price = $150/hr` (PARALEGAL_RATE constant), posted under PAM user ID
+- ADMIN entries on main invoice: skipped — firm absorbs, not billed to clients
+- "PARALEGAL TIME ***SEE ATTACHED" summary lines: skipped — detail comes from pages 4-8
+
+**User:** All entries posted under `USER_ID_PAM` (359115091)
+
+**Hours rounding:** Pre-rounded to nearest 0.1h using half-up rounding before sending
+to Clio (matches Clio's own billing increment; avoids post-upload surprises).
+
+**Outputs:**
+- `output/{stem}_payloads.json` — API payloads (always written)
+- `output/{stem}_exceptions.csv` — unmatched client names (if any)
+- `logs/bradford_invoice_YYYYMMDD.log`
+
+## Manual overrides
+Invoice uses only last names. When auto-match fails or is ambiguous, add to
+`MANUAL_MATTER_MAP` at the top of the script:
+```python
+MANUAL_MATTER_MAP: dict[str, int] = {
+    "LARSON": 1786834653,  # Clio: LARSEN, NOEL (typo on invoice)
+}
+```
+
+## Workflow
+```powershell
+# 1. Save Bradford PDF to data/
+
+# 2. Dry run — check log for exceptions or unmatched names
+uv run src/bradford_invoice.py --input "data/Invoice-*.pdf" --dry-run
+
+# 3. Fix exceptions: add matter IDs to MANUAL_MATTER_MAP, re-run dry-run
+
+# 4. Live run
+uv run src/bradford_invoice.py --input "data/Invoice-*.pdf"
+
+# 5. Export TimeEntries from Clio and reconcile against invoice
+```
+
+## Exception types
+- **No matching open matter** — client last name not in Clio open matters
+- **Ambiguous** — multiple open matters share the same last name; add to MANUAL_MATTER_MAP
+- **Closed matter** — client matter closed in Clio; redirect to active matter via MANUAL_MATTER_MAP
 
 ---
 
