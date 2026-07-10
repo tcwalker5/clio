@@ -1,0 +1,150 @@
+:root {
+    --bg: #f5f6f8;
+    --panel: #ffffff;
+    --border: #dfe3e8;
+    --text: #1f2933;
+    --text-muted: #6b7280;
+    --accent: #1d4ed8;
+    --accent-hover: #1e40af;
+    --ok: #15803d;
+    --ok-bg: #dcfce7;
+    --warn: #b45309;
+    --warn-bg: #fef3c7;
+    --err: #b91c1c;
+    --err-bg: #fee2e2;
+    --radius: 8px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.45;
+}
+
+header.topbar {
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    padding: 0.9rem 1.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+header.topbar a.brand {
+    font-weight: 600;
+    font-size: 1.1rem;
+    color: var(--text);
+    text-decoration: none;
+}
+
+header.topbar nav a {
+    color: var(--text-muted);
+    text-decoration: none;
+    margin-left: 1.25rem;
+    font-size: 0.9rem;
+}
+
+header.topbar nav a:hover { color: var(--text); }
+
+main {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem 4rem;
+}
+
+h1 { font-size: 1.5rem; margin-bottom: 0.25rem; }
+h2 { font-size: 1.15rem; }
+p.subtitle { color: var(--text-muted); margin-top: 0; }
+
+.card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 1rem;
+    margin-top: 1.5rem;
+}
+
+.card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.25rem;
+    text-decoration: none;
+    color: var(--text);
+    transition: box-shadow 0.15s, transform 0.15s;
+}
+
+.card:hover { box-shadow: 0 4px 14px rgba(0,0,0,0.08); transform: translateY(-1px); }
+.card h3 { margin: 0 0 0.4rem; font-size: 1.05rem; }
+.card p { margin: 0; color: var(--text-muted); font-size: 0.9rem; }
+
+.panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.5rem;
+    margin-top: 1.5rem;
+}
+
+.dropzone {
+    border: 2px dashed var(--border);
+    border-radius: var(--radius);
+    padding: 3rem 1.5rem;
+    text-align: center;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+}
+
+.dropzone.dragover { border-color: var(--accent); background: #eef2ff; }
+.dropzone input[type="file"] { display: none; }
+
+button, .btn {
+    display: inline-block;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: var(--radius);
+    padding: 0.55rem 1.1rem;
+    font-size: 0.9rem;
+    cursor: pointer;
+    text-decoration: none;
+}
+
+button:hover, .btn:hover { background: var(--accent-hover); }
+button.secondary, .btn.secondary { background: transparent; color: var(--text); border: 1px solid var(--border); }
+button.secondary:hover, .btn.secondary:hover { background: var(--bg); }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+table { width: 100%; border-collapse: collapse; margin-top: 1rem; font-size: 0.9rem; }
+th, td { text-align: left; padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--border); }
+th { color: var(--text-muted); font-weight: 600; font-size: 0.8rem; text-transform: uppercase; }
+
+.badge { display: inline-block; padding: 0.15rem 0.55rem; border-radius: 999px; font-size: 0.78rem; font-weight: 600; }
+.badge.ok { background: var(--ok-bg); color: var(--ok); }
+.badge.warn { background: var(--warn-bg); color: var(--warn); }
+.badge.err { background: var(--err-bg); color: var(--err); }
+
+.summary-bar { display: flex; gap: 1.5rem; margin: 1rem 0; flex-wrap: wrap; }
+.summary-stat { font-size: 0.85rem; color: var(--text-muted); }
+.summary-stat strong { color: var(--text); font-size: 1.1rem; display: block; }
+
+form.stacked label { display: block; margin-bottom: 0.3rem; font-size: 0.85rem; color: var(--text-muted); }
+form.stacked input[type="text"], form.stacked input[type="password"] {
+    width: 100%; padding: 0.55rem 0.7rem; border: 1px solid var(--border);
+    border-radius: var(--radius); font-size: 0.95rem; margin-bottom: 1rem;
+}
+
+.login-wrap { max-width: 360px; margin: 4rem auto; }
+.error-text { color: var(--err); font-size: 0.85rem; margin-top: -0.5rem; margin-bottom: 1rem; }
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg: #14161a; --panel: #1d2025; --border: #30343b;
+        --text: #e6e8eb; --text-muted: #9aa1ab;
+        --ok-bg: #14301f; --warn-bg: #3a2a05; --err-bg: #3a1414;
+    }
+}

@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<h1>Clio Dashboard</h1>
+<p class="subtitle">Custom Clio tools for Collier Law</p>
+
+<div class="card-grid">
+  <a class="card" href="/bradford">
+    <h3>Bradford Invoice Import</h3>
+    <p>Drag in the PL Bradford Law invoice PDF, preview matched time entries, then post to Clio.</p>
+  </a>
+  <a class="card" href="/printer">
+    <h3>Printer Expenses</h3>
+    <p>Drag in the monthly Papercut CSV, preview matched expense entries, then post to Clio.</p>
+  </a>
+  <a class="card" href="/calendar">
+    <h3>Court Calendar Sync</h3>
+    <p>Compare the SD Superior Court calendar against Clio calendar entries.</p>
+  </a>
+</div>
+{% endblock %}

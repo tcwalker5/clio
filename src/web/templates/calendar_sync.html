@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}Court Calendar Sync{% endblock %}
+{% block content %}
+<h1>Court Calendar Sync</h1>
+<p class="subtitle">Compare the SD Superior Court calendar against Clio calendar entries.</p>
+
+{% if error %}
+<div class="panel"><p class="error-text">{{ error }}</p></div>
+{% endif %}
+
+{% if imported_count is defined %}
+<div class="panel"><p>Parsed and stored {{ imported_count }} court event(s).</p></div>
+{% endif %}
+
+<div class="panel">
+  <h2>1. Paste court calendar text</h2>
+  <p class="subtitle">Copy the full results page from the SD Superior Court calendar search and paste it below.</p>
+  <form method="post" action="/calendar/import" class="stacked">
+    <textarea name="calendar_text" rows="10" style="width:100%;font-family:monospace;font-size:0.85rem;" required></textarea>
+    <div style="margin-top:0.75rem;"><button type="submit">Parse &amp; Store</button></div>
+  </form>
+</div>
+
+<div class="panel">
+  <h2>2. Stored upcoming events ({{ events|length }})</h2>
+  {% if events %}
+  <form method="post" action="/calendar/compare" style="display:inline-block;margin-right:0.5rem;">
+    <button type="submit">Compare with Clio Calendar</button>
+  </form>
+  <a class="btn secondary" href="/calendar/client-list" target="_blank">Client Court-Date List</a>
+  <table>
+    <thead><tr><th>Date</th><th>Time</th><th>Dept</th><th>Party</th><th>P/R</th><th>Purpose</th><th>Case #</th><th>Judge</th></tr></thead>
+    <tbody>
+      {% for e in events %}
+      <tr>
+        <td>{{ e.date }}</td><td>{{ e.start_time }}</td><td>{{ e.dept }}</td>
+        <td>{{ e.party }}</td><td>{{ e.party_role or "" }}</td>
+        <td>{{ e.purpose }}</td><td>{{ e.case_number }}</td><td>{{ e.judge }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="subtitle">No upcoming events stored yet — paste calendar text above.</p>
+  {% endif %}
+</div>
+
+{% if results is not none %}
+<div class="panel">
+  <h2>3. Comparison — {{ from_date }} to {{ to_date }}</h2>
+  {% set matched = results|selectattr("status", "equalto", "matched")|list %}
+  {% set to_update = results|selectattr("status", "equalto", "to_update")|list %}
+  {% set to_create = results|selectattr("status", "equalto", "to_create")|list %}
+  <div class="summary-bar">
+    <div class="summary-stat"><strong>{{ matched|length }}</strong>in sync</div>
+    <div class="summary-stat"><strong>{{ to_update|length }}</strong>need changes</div>
+    <div class="summary-stat"><strong>{{ to_create|length }}</strong>missing from Clio</div>
+    <div class="summary-stat"><strong>{{ orphaned|length }}</strong>in Clio, not on court calendar</div>
+  </div>
+
+  <table>
+    <thead><tr><th>Status</th><th>Date</th><th>Party</th><th>Dept</th><th>Purpose</th><th>Matched via</th><th>Staff</th><th>Notes</th></tr></thead>
+    <tbody>
+      {% for r in results %}
+      <tr>
+        <td>
+          {% if r.status == "matched" %}<span class="badge ok">In sync</span>
+          {% elif r.status == "to_update" %}<span class="badge warn">Needs update</span>
+          {% else %}<span class="badge err">Missing</span>{% endif %}
+        </td>
+        <td>{{ r.court_event.date }} {{ r.court_event.start_time }}</td>
+        <td>{{ r.court_event.party }}</td>
+        <td>{{ r.court_event.dept }}</td>
+        <td>{{ r.court_event.purpose_raw }}</td>
+        <td>{{ r.match_method }}</td>
+        <td>{{ r.assigned_staff|join(", ") }}</td>
+        <td>{{ r.changes|join("; ") }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% if orphaned %}
+  <h3>In Clio, not on court calendar <span class="badge warn">review</span></h3>
+  <table>
+    <thead><tr><th>Date</th><th>Matter</th><th>Summary</th></tr></thead>
+    <tbody>
+      {% for o in orphaned %}
+      <tr><td>{{ o.start_at.strftime("%Y-%m-%d %H:%M") }}</td><td>{{ o.matter_display_number or "—" }}</td><td>{{ o.summary }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

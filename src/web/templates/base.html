@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Clio Dashboard{% endblock %} — Collier Law</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+{% if authenticated %}
+<header class="topbar">
+  <a class="brand" href="/">Clio Dashboard</a>
+  <nav>
+    <a href="/calendar">Court Calendar</a>
+    <a href="/bradford">Bradford Invoice</a>
+    <a href="/printer">Printer Expenses</a>
+    <a href="/logout">Log out</a>
+  </nav>
+</header>
+{% endif %}
+<main>
+{% block content %}{% endblock %}
+</main>
+</body>
+</html>

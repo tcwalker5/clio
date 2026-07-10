@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Bradford Invoice Import{% endblock %}
+{% block content %}
+<h1>Bradford Invoice Import</h1>
+<p class="subtitle">Drag in the PL Bradford Law invoice PDF to preview and post time entries.</p>
+
+<form id="upload-form" method="post" action="/bradford/preview" enctype="multipart/form-data">
+  <div class="dropzone" id="dropzone">
+    <p><strong>Drag the invoice PDF here</strong>, or click to browse.</p>
+    <input type="file" id="file-input" name="file" accept=".pdf">
+  </div>
+</form>
+
+{% if error %}
+<div class="panel"><p class="error-text">{{ error }}</p></div>
+{% endif %}
+
+{% if result %}
+<div class="panel">
+  {% if live %}
+  <h2>Posted to Clio</h2>
+  <div class="summary-bar">
+    <div class="summary-stat"><strong>{{ result.posted }}</strong>posted</div>
+    <div class="summary-stat"><strong>{{ result.failed }}</strong>failed</div>
+  </div>
+  {% else %}
+  <h2>Dry-run preview — {{ filename }}</h2>
+  <div class="summary-bar">
+    <div class="summary-stat"><strong>{{ result.total_entries }}</strong>entries parsed</div>
+    <div class="summary-stat"><strong>{{ result.payloads|length }}</strong>matched</div>
+    <div class="summary-stat"><strong>{{ result.exceptions|length }}</strong>exceptions</div>
+  </div>
+  {% endif %}
+
+  {% if result.exceptions %}
+  <h3>Exceptions <span class="badge warn">needs manual resolution</span></h3>
+  <table>
+    <thead><tr><th>Name</th><th>Date</th><th>Hours</th><th>Source</th><th>Reason</th></tr></thead>
+    <tbody>
+      {% for e in result.exceptions %}
+      <tr><td>{{ e.name }}</td><td>{{ e.date }}</td><td>{{ e.hours }}</td><td>{{ e.source }}</td><td>{{ e.reason }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if result.payloads %}
+  <h3>{{ "Posted entries" if live else "Matched entries" }}</h3>
+  <table>
+    <thead><tr><th>Client</th><th>Date</th><th>Hours</th><th>Rate</th><th>Note</th></tr></thead>
+    <tbody>
+      {% for p in result.payloads %}
+      {% set d = p.data %}
+      <tr>
+        <td>{{ result.matter_names.get(d.matter.id, d.matter.id) }}</td>
+        <td>{{ d.date }}</td>
+        <td>{{ "%.1f"|format(d.quantity / 3600) }}</td>
+        <td>{{ ("$%.2f/hr"|format(d.price)) if d.price is defined else "matter rate" }}</td>
+        <td>{{ d.note }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if not live and token and result.payloads %}
+  <form method="post" action="/bradford/confirm" style="margin-top:1rem;">
+    <input type="hidden" name="token" value="{{ token }}">
+    <button type="submit">Confirm &amp; Post {{ result.payloads|length }} Entries to Clio</button>
+  </form>
+  {% endif %}
+</div>
+{% endif %}
+
+<script src="/static/dropzone.js"></script>
+<script>initDropzone('dropzone', 'file-input', 'upload-form');</script>
+{% endblock %}

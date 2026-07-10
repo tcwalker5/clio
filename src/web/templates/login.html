@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Log in{% endblock %}
+{% block content %}
+<div class="login-wrap">
+  <h1>Clio Dashboard</h1>
+  <p class="subtitle">Collier Law — internal tools</p>
+  <div class="panel">
+    <form class="stacked" method="post" action="/login">
+      <label for="passphrase">Passphrase</label>
+      <input type="password" id="passphrase" name="passphrase" autofocus required>
+      {% if error %}<p class="error-text">{{ error }}</p>{% endif %}
+      <input type="hidden" name="next" value="{{ next }}">
+      <button type="submit">Log in</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

@@ -27,11 +27,14 @@ import os
 import re
 import sys
 import time
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
+
+from matter_matching import fetch_open_matters, index_by_display_name, normalize_name
 
 load_dotenv()
 
@@ -70,13 +73,6 @@ ACTIVITIES_ENDPOINT = f"{BASE_URL}/api/v4/activities.json"
 # Helpers
 # ---------------------------------------------------------------------------
 
-def normalize_name(raw: str) -> str:
-    """Strip extra quotes/whitespace, normalize comma spacing, uppercase."""
-    s = raw.strip().strip('"').strip("'").strip()
-    s = re.sub(r",\s*", ", ", s)
-    return s.upper()
-
-
 def extract_report_date(header_line: str) -> str:
     """
     Parse the Papercut comment line to extract the report end date as ISO-8601.
@@ -110,75 +106,6 @@ def setup_logging(log_dir: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Fetch Clio matters via API
-# ---------------------------------------------------------------------------
-
-MATTERS_ENDPOINT = f"{BASE_URL}/api/v4/matters.json"
-MATTERS_FIELDS = "id,display_number,custom_number,status"
-MATTERS_PAGE_SIZE = 200
-
-
-def fetch_matters(session: requests.Session) -> dict[str, int | None]:
-    """
-    Fetch all open matters from Clio API and build a mapping:
-      normalized display_number → matter ID
-
-    If multiple open matters share the same display_number:
-      - Prefer the one with a custom_number (MUID).
-      - If still ambiguous, store None to flag for manual resolution.
-    """
-    raw_index: dict[str, list[tuple[int, bool]]] = {}
-    page_token: str | None = None
-    page = 1
-
-    while True:
-        params: dict = {
-            "status": "open",
-            "fields": MATTERS_FIELDS,
-            "limit": MATTERS_PAGE_SIZE,
-        }
-        if page_token:
-            params["page_token"] = page_token
-
-        resp = session.get(MATTERS_ENDPOINT, params=params)
-        if resp.status_code != 200:
-            logging.error("Failed to fetch matters (page %d): %s %s", page, resp.status_code, resp.text[:200])
-            sys.exit(1)
-
-        body = resp.json()
-        records = body.get("data", [])
-        for m in records:
-            display = (m.get("display_number") or "").strip()
-            if not display:
-                continue
-            matter_id = int(m["id"])
-            has_ref = bool((m.get("custom_number") or "").strip())
-            key = normalize_name(display)
-            raw_index.setdefault(key, []).append((matter_id, has_ref))
-
-        paging = body.get("meta", {}).get("paging", {})
-        page_token = paging.get("next")
-        logging.info("Fetched matters page %d — %d records", page, len(records))
-        page += 1
-        if not page_token:
-            break
-
-    result: dict[str, int | None] = {}
-    for name, entries in raw_index.items():
-        if len(entries) == 1:
-            result[name] = entries[0][0]
-        else:
-            with_ref = [mid for mid, has_ref in entries if has_ref]
-            if len(with_ref) == 1:
-                result[name] = with_ref[0]
-            else:
-                result[name] = None  # ambiguous — needs manual override
-
-    logging.info("Loaded %d distinct open matter names from Clio API", len(result))
-    return result
-
-
-# ---------------------------------------------------------------------------
 # Parse printer report
 # ---------------------------------------------------------------------------
 
@@ -188,8 +115,7 @@ def parse_printer_report(csv_path: Path) -> tuple[str, dict[str, dict]]:
       { normalized_name: { "print": int, "scan": int, "copy": int, "total": int } }
     """
     if not csv_path.exists():
-        logging.error("Printer CSV not found: %s", csv_path)
-        sys.exit(1)
+        raise FileNotFoundError(f"Printer CSV not found: {csv_path}")
 
     report_date = datetime.today().strftime("%Y-%m-%d")
     aggregated: dict[str, dict] = {}
@@ -358,6 +284,106 @@ def post_expense(session: requests.Session, payload: dict, dry_run: bool) -> boo
 
 
 # ---------------------------------------------------------------------------
+# Pipeline (shared by the CLI and the web dashboard)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class RunResult:
+    report_date: str
+    period: str
+    payloads: list[dict] = field(default_factory=list)
+    exceptions: list[dict] = field(default_factory=list)
+    total_clients: int = 0
+    posted: int = 0
+    failed: int = 0
+    payloads_path: Path | None = None
+    exceptions_path: Path | None = None
+    matter_names: dict[int, str] = field(default_factory=dict)  # matter_id -> display name, for UI
+
+
+def run_pipeline(
+    input_path: Path,
+    dry_run: bool,
+    matter_filter: str = "",
+    output_dir: Path = Path("output"),
+) -> RunResult:
+    """
+    Parse the printer CSV, match to Clio matters, write payload/exception
+    output files, and (unless dry_run) POST expense entries.
+
+    Raises FileNotFoundError / RuntimeError on hard failures instead of
+    exiting the process, so it's safe to call from a long-running server.
+    """
+    if not ACCESS_TOKEN:
+        raise RuntimeError("CLIO_ACCESS_TOKEN not set in .env")
+
+    session = requests.Session()
+    session.headers.update({
+        "Authorization": f"Bearer {ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    })
+
+    report_date, aggregated = parse_printer_report(input_path)
+
+    if matter_filter:
+        filter_key = matter_filter.upper()
+        aggregated = {k: v for k, v in aggregated.items() if filter_key in k}
+        if not aggregated:
+            raise RuntimeError(f"--matter filter '{matter_filter}' matched no entries")
+        logging.info("--matter filter '%s' matched %d entry/entries", matter_filter, len(aggregated))
+
+    matters = index_by_display_name(fetch_open_matters(session))
+    payloads, exceptions = match_and_build(aggregated, report_date, matters)
+
+    output_dir.mkdir(exist_ok=True)
+    period = report_date[:7]  # YYYY-MM
+    matter_names = {mid: name for name, mid in matters.items() if mid}
+    result = RunResult(report_date=report_date, period=period, payloads=payloads,
+                        exceptions=exceptions, total_clients=len(aggregated),
+                        matter_names=matter_names)
+
+    result.payloads_path = output_dir / f"expenses_{period}.json"
+    with open(result.payloads_path, "w", encoding="utf-8") as f:
+        json.dump(payloads, f, indent=2)
+    logging.info("Wrote %d payloads to %s", len(payloads), result.payloads_path)
+
+    if exceptions:
+        result.exceptions_path = output_dir / f"exceptions_{period}.csv"
+        with open(result.exceptions_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=["name", "total_pages", "cost", "reason"])
+            writer.writeheader()
+            writer.writerows(exceptions)
+        logging.warning("Wrote %d exceptions to %s — these need manual resolution", len(exceptions), result.exceptions_path)
+
+    logging.info(
+        "Summary: %d matched, %d exceptions, %d total clients",
+        len(payloads), len(exceptions), len(aggregated),
+    )
+
+    if not payloads or dry_run:
+        if not payloads:
+            logging.info("Nothing to post.")
+        else:
+            logging.info("--- DRY RUN: no expense entries posted ---")
+            for p in payloads:
+                d = p["data"]
+                logging.info("  matter=%-12s  qty=%-4s  total=$%.2f  %s",
+                             d["matter"]["id"], d["quantity"],
+                             d["quantity"] * d["price"], d["note"])
+        return result
+
+    for payload in payloads:
+        if post_expense(session, payload, dry_run=False):
+            result.posted += 1
+        else:
+            result.failed += 1
+        time.sleep(POST_DELAY_SECONDS)
+
+    logging.info("Done: %d posted, %d failed", result.posted, result.failed)
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -370,75 +396,13 @@ def main() -> None:
 
     setup_logging(Path("logs"))
 
-    if not ACCESS_TOKEN:
-        logging.error("CLIO_ACCESS_TOKEN not set in .env")
+    try:
+        result = run_pipeline(Path(args.input), dry_run=args.dry_run, matter_filter=args.matter)
+    except (FileNotFoundError, RuntimeError) as e:
+        logging.error(str(e))
         sys.exit(1)
 
-    session = requests.Session()
-    session.headers.update({
-        "Authorization": f"Bearer {ACCESS_TOKEN}",
-        "Content-Type": "application/json",
-    })
-
-    printer_csv = Path(args.input)
-    report_date, aggregated = parse_printer_report(printer_csv)
-
-    if args.matter:
-        filter_key = args.matter.upper()
-        aggregated = {k: v for k, v in aggregated.items() if filter_key in k}
-        if not aggregated:
-            logging.error("--matter filter '%s' matched no entries", args.matter)
-            sys.exit(1)
-        logging.info("--matter filter '%s' matched %d entry/entries", args.matter, len(aggregated))
-
-    matters = fetch_matters(session)
-    payloads, exceptions = match_and_build(aggregated, report_date, matters)
-
-    output_dir = Path("output")
-    output_dir.mkdir(exist_ok=True)
-    period = report_date[:7]  # YYYY-MM
-
-    payloads_path = output_dir / f"expenses_{period}.json"
-    with open(payloads_path, "w", encoding="utf-8") as f:
-        json.dump(payloads, f, indent=2)
-    logging.info("Wrote %d payloads to %s", len(payloads), payloads_path)
-
-    if exceptions:
-        exc_path = output_dir / f"exceptions_{period}.csv"
-        with open(exc_path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=["name", "total_pages", "cost", "reason"])
-            writer.writeheader()
-            writer.writerows(exceptions)
-        logging.warning("Wrote %d exceptions to %s — these need manual resolution", len(exceptions), exc_path)
-
-    logging.info(
-        "Summary: %d matched, %d exceptions, %d total clients",
-        len(payloads), len(exceptions), len(aggregated),
-    )
-
-    if not payloads:
-        logging.info("Nothing to post.")
-        return
-
-    if args.dry_run:
-        logging.info("--- DRY RUN: no expense entries posted ---")
-        for p in payloads:
-            d = p["data"]
-            logging.info("  matter=%-12s  qty=%-4s  total=$%.2f  %s",
-                         d["matter"]["id"], d["quantity"],
-                         d["quantity"] * d["price"], d["note"])
-        return
-
-    ok = err = 0
-    for payload in payloads:
-        if post_expense(session, payload, dry_run=False):
-            ok += 1
-        else:
-            err += 1
-        time.sleep(POST_DELAY_SECONDS)
-
-    logging.info("Done: %d posted, %d failed", ok, err)
-    if err:
+    if result.failed:
         sys.exit(1)
 
 

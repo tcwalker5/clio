@@ -1,0 +1,89 @@
+"""
+app.py — Clio dashboard FastAPI application.
+
+Run:
+  uv run uvicorn web.app:app --app-dir src --host 0.0.0.0 --port 8420
+
+(--app-dir src puts src/ on sys.path, matching how the standalone scripts in
+this repo resolve flat imports like `import matter_matching`.)
+"""
+
+import os
+import secrets
+from pathlib import Path
+
+from dotenv import load_dotenv
+from fastapi import Depends, FastAPI, Form, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from starlette.middleware.sessions import SessionMiddleware
+
+ENV_PATH = Path(__file__).resolve().parent.parent.parent / ".env"
+load_dotenv(ENV_PATH)
+
+from web import db  # noqa: E402
+from web.auth import PASSPHRASE, AuthRequired, is_authenticated, require_auth  # noqa: E402
+
+WEB_DIR = Path(__file__).resolve().parent
+
+app = FastAPI(title="Clio Dashboard")
+
+SECRET_KEY = os.getenv("CLIO_DASHBOARD_SECRET") or secrets.token_urlsafe(32)
+app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="lax")
+app.mount("/static", StaticFiles(directory=WEB_DIR / "static"), name="static")
+
+templates = Jinja2Templates(directory=WEB_DIR / "templates")
+
+
+@app.exception_handler(AuthRequired)
+async def auth_required_handler(request: Request, exc: AuthRequired):
+    return RedirectResponse(url=f"/login?next={request.url.path}", status_code=303)
+
+
+def render(request: Request, template: str, **context):
+    context.setdefault("authenticated", is_authenticated(request))
+    return templates.TemplateResponse(request, template, context)
+
+
+@app.on_event("startup")
+def startup() -> None:
+    db.init_db()
+    if not PASSPHRASE:
+        print("WARNING: CLIO_DASHBOARD_PASSPHRASE not set in .env — /login will reject all attempts.")
+
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_form(request: Request, next: str = "/"):
+    if is_authenticated(request):
+        return RedirectResponse(url=next, status_code=303)
+    return render(request, "login.html", authenticated=False, next=next, error=None)
+
+
+@app.post("/login", response_class=HTMLResponse)
+async def login_submit(request: Request, passphrase: str = Form(...), next: str = Form("/")):
+    if PASSPHRASE and secrets.compare_digest(passphrase, PASSPHRASE):
+        request.session["authenticated"] = True
+        return RedirectResponse(url=next or "/", status_code=303)
+    return render(request, "login.html", authenticated=False, next=next,
+                  error="Incorrect passphrase.")
+
+
+@app.get("/logout")
+async def logout(request: Request):
+    request.session.clear()
+    return RedirectResponse(url="/login", status_code=303)
+
+
+@app.get("/", response_class=HTMLResponse)
+async def dashboard_home(request: Request, _: None = Depends(require_auth)):
+    return render(request, "dashboard.html")
+
+
+from web.routes_bradford import router as bradford_router  # noqa: E402
+from web.routes_calendar import router as calendar_router  # noqa: E402
+from web.routes_printer import router as printer_router  # noqa: E402
+
+app.include_router(bradford_router)
+app.include_router(calendar_router)
+app.include_router(printer_router)

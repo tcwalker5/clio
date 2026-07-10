@@ -28,7 +28,7 @@ import os
 import re
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
@@ -36,6 +36,8 @@ from pathlib import Path
 import pdfplumber
 import requests
 from dotenv import load_dotenv
+
+from matter_matching import fetch_open_matters, index_by_last_name
 
 load_dotenv()
 
@@ -52,7 +54,6 @@ BASE_URL       = os.getenv("CLIO_BASE_URL", "https://app.clio.com").rstrip("/")
 ACCESS_TOKEN   = os.getenv("CLIO_ACCESS_TOKEN", "")
 PAM_USER_ID    = int(os.getenv("USER_ID_PAM", "0"))
 ACTIVITIES_URL = f"{BASE_URL}/api/v4/activities.json"
-MATTERS_URL    = f"{BASE_URL}/api/v4/matters.json"
 POST_DELAY     = 1.5  # seconds between POSTs — stay under 50 req/min
 
 # Invoice last-name → Clio matter ID.
@@ -331,52 +332,6 @@ def parse_paralegal_pages(pdf: pdfplumber.PDF) -> list[InvoiceEntry]:
 
 
 # ---------------------------------------------------------------------------
-# Clio matter fetch — last-name index
-# ---------------------------------------------------------------------------
-
-def fetch_matters(session: requests.Session) -> dict[str, int | None]:
-    """
-    Returns last_name -> matter_id for all open matters.
-    Returns None when multiple open matters share the same last name.
-    """
-    raw: dict[str, list[int]] = {}
-    page_token: str | None = None
-    page = 1
-
-    while True:
-        params: dict = {"status": "open", "fields": "id,display_number", "limit": 200}
-        if page_token:
-            params["page_token"] = page_token
-
-        resp = session.get(MATTERS_URL, params=params)
-        if resp.status_code != 200:
-            logging.error("Failed to fetch matters page %d: %s %s",
-                          page, resp.status_code, resp.text[:200])
-            sys.exit(1)
-
-        body = resp.json()
-        for m in body.get("data", []):
-            display = (m.get("display_number") or "").strip()
-            if not display:
-                continue
-            last = display.split(",")[0].strip().upper()
-            raw.setdefault(last, []).append(int(m["id"]))
-
-        page_token = (body.get("meta") or {}).get("paging", {}).get("next")
-        logging.info("Fetched matters page %d — %d records", page, len(body.get("data", [])))
-        page += 1
-        if not page_token:
-            break
-
-    result: dict[str, int | None] = {}
-    for name, ids in raw.items():
-        result[name] = ids[0] if len(ids) == 1 else None
-
-    logging.info("Indexed %d last names from Clio API", len(result))
-    return result
-
-
-# ---------------------------------------------------------------------------
 # Build Clio API payloads
 # ---------------------------------------------------------------------------
 
@@ -473,6 +428,109 @@ def post_entry(session: requests.Session, payload: dict) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Pipeline (shared by the CLI and the web dashboard)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class RunResult:
+    stem: str
+    payloads: list[dict] = field(default_factory=list)
+    exceptions: list[dict] = field(default_factory=list)
+    total_entries: int = 0
+    posted: int = 0
+    failed: int = 0
+    payloads_path: Path | None = None
+    exceptions_path: Path | None = None
+    matter_names: dict[int, str] = field(default_factory=dict)  # matter_id -> last name, for UI
+
+
+def run_pipeline(
+    input_path: Path,
+    dry_run: bool,
+    matter_filter: str = "",
+    output_dir: Path = Path("output"),
+) -> RunResult:
+    """
+    Parse the Bradford invoice PDF, match to Clio matters, write
+    payload/exception output files, and (unless dry_run) POST time entries.
+
+    Raises FileNotFoundError / RuntimeError on hard failures instead of
+    exiting the process, so it's safe to call from a long-running server.
+    """
+    if not ACCESS_TOKEN:
+        raise RuntimeError("CLIO_ACCESS_TOKEN not set in .env")
+    if not PAM_USER_ID:
+        raise RuntimeError("USER_ID_PAM not set in .env")
+    if not input_path.exists():
+        raise FileNotFoundError(f"PDF not found: {input_path}")
+
+    logging.info("Reading %s", input_path)
+    with pdfplumber.open(input_path) as pdf:
+        attorney_entries = parse_main_invoice(pdf)
+        paralegal_entries = parse_paralegal_pages(pdf)
+
+    all_entries = attorney_entries + paralegal_entries
+    logging.info("Total entries: %d attorney + %d paralegal = %d",
+                 len(attorney_entries), len(paralegal_entries), len(all_entries))
+
+    if matter_filter:
+        f = matter_filter.upper()
+        all_entries = [e for e in all_entries if f in e.client_name]
+        logging.info("--matter '%s' matched %d entries", matter_filter, len(all_entries))
+        if not all_entries:
+            raise RuntimeError(f"No entries matched --matter '{matter_filter}'")
+
+    session = requests.Session()
+    session.headers.update({
+        "Authorization": f"Bearer {ACCESS_TOKEN}",
+        "Content-Type":  "application/json",
+    })
+
+    matters = index_by_last_name(fetch_open_matters(session))
+    payloads, exceptions = build_payloads(all_entries, matters, PAM_USER_ID)
+
+    output_dir.mkdir(exist_ok=True)
+    stem = re.sub(r"[^\w\-]", "_", input_path.stem)
+    matter_names = {mid: name for name, mid in matters.items() if mid}
+    result = RunResult(stem=stem, payloads=payloads, exceptions=exceptions,
+                        total_entries=len(all_entries), matter_names=matter_names)
+
+    result.payloads_path = output_dir / f"{stem}_payloads.json"
+    with open(result.payloads_path, "w", encoding="utf-8") as f:
+        json.dump(payloads, f, indent=2)
+    logging.info("Wrote %d payloads -> %s", len(payloads), result.payloads_path)
+
+    if exceptions:
+        result.exceptions_path = output_dir / f"{stem}_exceptions.csv"
+        with open(result.exceptions_path, "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=["name", "date", "hours", "source", "reason"])
+            w.writeheader()
+            w.writerows(exceptions)
+        logging.warning("Wrote %d exceptions -> %s", len(exceptions), result.exceptions_path)
+
+    total_hrs = sum(p["data"]["quantity"] / 3600 for p in payloads)
+    logging.info(
+        "Summary: %d entries / %d payloads / %d exceptions  |  %.2f total hours",
+        len(all_entries), len(payloads), len(exceptions), total_hrs,
+    )
+
+    if not payloads or dry_run:
+        if dry_run and payloads:
+            logging.info("--- DRY RUN: no entries posted ---")
+        return result
+
+    for payload in payloads:
+        if post_entry(session, payload):
+            result.posted += 1
+        else:
+            result.failed += 1
+        time.sleep(POST_DELAY)
+
+    logging.info("Done: %d posted, %d failed", result.posted, result.failed)
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -489,84 +547,13 @@ def main() -> None:
 
     setup_logging(Path("logs"))
 
-    if not ACCESS_TOKEN:
-        logging.error("CLIO_ACCESS_TOKEN not set in .env")
-        sys.exit(1)
-    if not PAM_USER_ID:
-        logging.error("USER_ID_PAM not set in .env")
-        sys.exit(1)
-
-    pdf_path = Path(args.input)
-    if not pdf_path.exists():
-        logging.error("PDF not found: %s", pdf_path)
+    try:
+        result = run_pipeline(Path(args.input), dry_run=args.dry_run, matter_filter=args.matter)
+    except (FileNotFoundError, RuntimeError) as e:
+        logging.error(str(e))
         sys.exit(1)
 
-    logging.info("Reading %s", pdf_path)
-    with pdfplumber.open(pdf_path) as pdf:
-        attorney_entries  = parse_main_invoice(pdf)
-        paralegal_entries = parse_paralegal_pages(pdf)
-
-    all_entries = attorney_entries + paralegal_entries
-    logging.info("Total entries: %d attorney + %d paralegal = %d",
-                 len(attorney_entries), len(paralegal_entries), len(all_entries))
-
-    if args.matter:
-        f = args.matter.upper()
-        all_entries = [e for e in all_entries if f in e.client_name]
-        logging.info("--matter '%s' matched %d entries", args.matter, len(all_entries))
-        if not all_entries:
-            logging.error("No entries matched --matter '%s'", args.matter)
-            sys.exit(1)
-
-    session = requests.Session()
-    session.headers.update({
-        "Authorization": f"Bearer {ACCESS_TOKEN}",
-        "Content-Type":  "application/json",
-    })
-
-    matters = fetch_matters(session)
-    payloads, exceptions = build_payloads(all_entries, matters, PAM_USER_ID)
-
-    output_dir = Path("output")
-    output_dir.mkdir(exist_ok=True)
-    stem = re.sub(r"[^\w\-]", "_", pdf_path.stem)
-
-    payloads_path = output_dir / f"{stem}_payloads.json"
-    with open(payloads_path, "w", encoding="utf-8") as f:
-        json.dump(payloads, f, indent=2)
-    logging.info("Wrote %d payloads -> %s", len(payloads), payloads_path)
-
-    if exceptions:
-        exc_path = output_dir / f"{stem}_exceptions.csv"
-        with open(exc_path, "w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=["name", "date", "hours", "source", "reason"])
-            w.writeheader()
-            w.writerows(exceptions)
-        logging.warning("Wrote %d exceptions -> %s", len(exceptions), exc_path)
-
-    total_hrs = sum(p["data"]["quantity"] / 3600 for p in payloads)
-    logging.info(
-        "Summary: %d entries / %d payloads / %d exceptions  |  %.2f total hours",
-        len(all_entries), len(payloads), len(exceptions), total_hrs,
-    )
-
-    if not payloads:
-        return
-
-    if args.dry_run:
-        logging.info("--- DRY RUN: no entries posted ---")
-        return
-
-    ok = err = 0
-    for payload in payloads:
-        if post_entry(session, payload):
-            ok += 1
-        else:
-            err += 1
-        time.sleep(POST_DELAY)
-
-    logging.info("Done: %d posted, %d failed", ok, err)
-    if err:
+    if result.failed:
         sys.exit(1)
 
 
