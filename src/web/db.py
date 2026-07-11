@@ -111,30 +111,44 @@ CREATE TABLE IF NOT EXISTS staff_cache (
     name TEXT NOT NULL,
     first_name TEXT,
     email TEXT,
+    is_attorney INTEGER DEFAULT 0,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 """
 
 
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
+    """Adds a column to an already-existing table if it predates that column (schema drift guard)."""
+    existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+
+
 def get_connection() -> sqlite3.Connection:
+    """
+    Opens a connection and ensures the schema exists. Deliberately re-checked
+    on every call (not just once at app startup) — CREATE TABLE IF NOT EXISTS
+    and INSERT OR IGNORE are cheap and idempotent, and this makes the app
+    self-healing if data/clio_dashboard.db is ever deleted or replaced while
+    the server keeps running (a startup-only check would otherwise 500 on
+    every request until the process is restarted).
+    """
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.executescript(SCHEMA)
+    _ensure_column(conn, "staff_cache", "is_attorney", "INTEGER DEFAULT 0")
+    conn.executemany(
+        "INSERT OR IGNORE INTO purpose_mappings (raw_pattern, canonical_code, description) VALUES (?, ?, ?)",
+        DEFAULT_PURPOSE_MAPPINGS,
+    )
+    conn.commit()
     return conn
 
 
 def init_db() -> None:
-    conn = get_connection()
-    try:
-        conn.executescript(SCHEMA)
-        conn.executemany(
-            "INSERT OR IGNORE INTO purpose_mappings (raw_pattern, canonical_code, description) VALUES (?, ?, ?)",
-            DEFAULT_PURPOSE_MAPPINGS,
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    get_connection().close()
 
 
 if __name__ == "__main__":

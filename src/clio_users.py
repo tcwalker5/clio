@@ -24,7 +24,7 @@ load_dotenv(ENV_PATH)
 BASE_URL = os.getenv("CLIO_BASE_URL", "https://app.clio.com").rstrip("/")
 ACCESS_TOKEN = os.getenv("CLIO_ACCESS_TOKEN", "")
 USERS_ENDPOINT = f"{BASE_URL}/api/v4/users.json"
-USERS_FIELDS = "id,name,first_name,last_name,email,enabled"
+USERS_FIELDS = "id,name,first_name,last_name,email,enabled,subscription_type"
 USERS_PAGE_SIZE = 200
 
 
@@ -69,7 +69,10 @@ def fetch_staff_directory(session: requests.Session | None = None) -> list[dict]
 def get_staff_directory() -> dict[int, dict]:
     """
     Fetch the current staff directory keyed by Clio user ID:
-      { user_id: {"name": "Pamela Bradford", "first_name": "Pamela", "email": "..."} }
+      { user_id: {"name": ..., "first_name": ..., "email": ..., "is_attorney": bool} }
+
+    `is_attorney` comes from Clio's own `subscription_type` field ("Attorney" vs
+    "NonAttorney") — the source of truth for who's an attorney, not a role guess.
 
     Also persists to the staff_cache table (via web.db) so pages can render
     without an extra live API call; callers needing fresh data should call
@@ -83,6 +86,7 @@ def get_staff_directory() -> dict[int, dict]:
             "name": u.get("name", ""),
             "first_name": u.get("first_name", ""),
             "email": u.get("email", ""),
+            "is_attorney": u.get("subscription_type") == "Attorney",
         }
         for u in users
         if u.get("id")
@@ -92,15 +96,16 @@ def get_staff_directory() -> dict[int, dict]:
     try:
         conn.executemany(
             """
-            INSERT INTO staff_cache (id, name, first_name, email, updated_at)
-            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            INSERT INTO staff_cache (id, name, first_name, email, is_attorney, updated_at)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 first_name = excluded.first_name,
                 email = excluded.email,
+                is_attorney = excluded.is_attorney,
                 updated_at = CURRENT_TIMESTAMP
             """,
-            [(uid, d["name"], d["first_name"], d["email"]) for uid, d in directory.items()],
+            [(uid, d["name"], d["first_name"], d["email"], int(d["is_attorney"])) for uid, d in directory.items()],
         )
         conn.commit()
     finally:
@@ -115,4 +120,5 @@ if __name__ == "__main__":
         sys.exit(1)
     directory = get_staff_directory()
     for uid, info in sorted(directory.items(), key=lambda kv: kv[1]["name"]):
-        print(f"{uid:>12}  {info['name']:<25} {info['email']}")
+        tag = "Attorney" if info["is_attorney"] else "Non-Attorney"
+        print(f"{uid:>12}  {info['name']:<25} {tag:<14} {info['email']}")

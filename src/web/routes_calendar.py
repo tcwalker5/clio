@@ -1,8 +1,8 @@
 """
 routes_calendar.py — Court calendar sync UI.
 
-Paste SD Superior Court calendar text -> parse & store -> compare against
-Clio calendar entries -> read-only diff (no writes to Clio; matches
+Fetch (or paste) SD Superior Court calendar text -> parse & store -> compare
+against Clio calendar entries -> read-only diff (no writes to Clio; matches
 calendar-check's "shows what would change" behavior).
 """
 
@@ -13,8 +13,10 @@ import requests
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 
+from clio_users import get_staff_directory
 from court_calendar.client_list import build_client_list, render_docx, render_html
 from court_calendar.clio_calendar import fetch_calendar_entries
+from court_calendar.court_fetch import fetch_court_calendar_text
 from court_calendar.matcher import compare_events
 from court_calendar.normalizer import parse_court_calendar_line
 from court_calendar.store import fetch_date_range, fetch_upcoming_events, get_purpose_mappings, upsert_court_events
@@ -22,6 +24,8 @@ from matter_matching import fetch_open_matters, index_by_last_name
 from web.auth import require_auth
 
 router = APIRouter(prefix="/calendar", tags=["calendar"])
+
+DEFAULT_ATTORNEY_LAST_NAME = "Collier"
 
 
 def _session() -> requests.Session:
@@ -33,35 +37,77 @@ def _session() -> requests.Session:
     return s
 
 
+def _staff_names() -> list[str]:
+    return sorted({
+        info["name"] for info in get_staff_directory().values()
+        if info.get("name") and info.get("is_attorney")
+    })
+
+
+def _default_attorney(names: list[str]) -> str:
+    for name in names:
+        if name.split()[-1].lower() == DEFAULT_ATTORNEY_LAST_NAME.lower():
+            return name
+    return names[0] if names else ""
+
+
+def _render_calendar_page(request: Request, **overrides):
+    from web.app import render
+
+    names = _staff_names()
+    context = {
+        "events": fetch_upcoming_events(),
+        "results": None,
+        "orphaned": None,
+        "error": None,
+        "calendar_text": "",
+        "fetch_stats": None,
+        "staff_names": names,
+        "selected_attorney": _default_attorney(names),
+    }
+    context.update(overrides)
+    return render(request, "calendar_sync.html", **context)
+
+
 @router.get("", response_class=HTMLResponse)
 async def calendar_home(request: Request, _: None = Depends(require_auth)):
-    from web.app import render
-    events = fetch_upcoming_events()
-    return render(request, "calendar_sync.html", events=events, results=None, orphaned=None, error=None)
+    return _render_calendar_page(request)
+
+
+@router.post("/fetch", response_class=HTMLResponse)
+async def calendar_fetch(request: Request, attorney: str = Form(...), _: None = Depends(require_auth)):
+    error = None
+    calendar_text = ""
+    fetch_stats = None
+    try:
+        last_name = attorney.strip().split()[-1]
+        calendar_text, fetch_stats = fetch_court_calendar_text(last_name, attorney)
+        if fetch_stats["filtered_events"] == 0:
+            error = f"No court events found for {attorney} on the court website right now."
+    except (RuntimeError, requests.RequestException) as e:
+        error = f"Failed to fetch court calendar: {e}"
+
+    return _render_calendar_page(request, error=error, calendar_text=calendar_text,
+                                  fetch_stats=fetch_stats, selected_attorney=attorney)
 
 
 @router.post("/import", response_class=HTMLResponse)
 async def calendar_import(request: Request, calendar_text: str = Form(...), _: None = Depends(require_auth)):
-    from web.app import render
-
     parsed = [parse_court_calendar_line(line) for line in calendar_text.splitlines()]
     parsed = [ce for ce in parsed if ce]
     upsert_court_events(parsed)
 
-    events = fetch_upcoming_events()
-    return render(request, "calendar_sync.html", events=events, results=None, orphaned=None,
-                  error=None, imported_count=len(parsed))
+    return _render_calendar_page(request, imported_count=len(parsed))
 
 
 @router.post("/compare", response_class=HTMLResponse)
 async def calendar_compare(request: Request, _: None = Depends(require_auth)):
-    from web.app import render
-
     events = fetch_upcoming_events()
     date_range = fetch_date_range()
     if not date_range:
-        return render(request, "calendar_sync.html", events=events, results=None, orphaned=None,
-                      error="No upcoming court events stored — paste the court calendar text first.")
+        return _render_calendar_page(
+            request, error="No upcoming court events stored — fetch or paste the court calendar text first.",
+        )
 
     from_date, to_date = date_range
     court_events = [parse_court_calendar_line(row["raw_line"]) for row in events]
@@ -71,11 +117,12 @@ async def calendar_compare(request: Request, _: None = Depends(require_auth)):
     matters = index_by_last_name(fetch_open_matters(session))
     purpose_mappings = get_purpose_mappings()
     clio_entries = fetch_calendar_entries(from_date, to_date, session)
+    staff_directory = get_staff_directory()
 
-    results, orphaned = compare_events(court_events, clio_entries, matters, purpose_mappings)
+    results, orphaned = compare_events(court_events, clio_entries, matters, purpose_mappings, staff_directory)
 
-    return render(request, "calendar_sync.html", events=events, results=results,
-                  orphaned=orphaned, error=None, from_date=from_date, to_date=to_date)
+    return _render_calendar_page(request, results=results, orphaned=orphaned,
+                                  from_date=from_date, to_date=to_date)
 
 
 @router.get("/client-list", response_class=HTMLResponse)

@@ -90,6 +90,26 @@ def normalize_purpose(raw: str, mappings: dict[str, str]) -> str:
     return raw.strip()
 
 
+def initials(full_name: str | None) -> str:
+    """'Dahann Bowers' -> 'DB'. Used for compact Staff/Attorney columns."""
+    if not full_name:
+        return ""
+    return "".join(word[0].upper() for word in full_name.split() if word)
+
+
+_NAME_SUFFIXES = {"JR", "SR", "II", "III", "IV"}
+
+
+def judge_last_name(judge: str | None) -> str:
+    """'CHARLES E. BELL JR' -> 'BELL'. Display-only; the full name stays in storage."""
+    if not judge:
+        return ""
+    parts = judge.strip().split()
+    while parts and parts[-1].rstrip(".").upper() in _NAME_SUFFIXES:
+        parts.pop()
+    return parts[-1] if parts else ""
+
+
 def normalize_party_name(name: str | None) -> str:
     """Trim/uppercase, strip a leading R)/P) role marker, drop anything after a comma."""
     if not name:

@@ -22,6 +22,7 @@ from starlette.middleware.sessions import SessionMiddleware
 ENV_PATH = Path(__file__).resolve().parent.parent.parent / ".env"
 load_dotenv(ENV_PATH)
 
+from court_calendar.normalizer import judge_last_name  # noqa: E402
 from web import db  # noqa: E402
 from web.auth import PASSPHRASE, AuthRequired, is_authenticated, require_auth  # noqa: E402
 
@@ -34,6 +35,7 @@ app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="lax")
 app.mount("/static", StaticFiles(directory=WEB_DIR / "static"), name="static")
 
 templates = Jinja2Templates(directory=WEB_DIR / "templates")
+templates.env.filters["judge_last_name"] = judge_last_name
 
 
 @app.exception_handler(AuthRequired)

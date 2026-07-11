@@ -26,7 +26,6 @@ CALENDAR_ENTRIES_FIELDS = (
     "id,summary,description,location,start_at,end_at,all_day,"
     "matter{id,display_number},calendar_owner{id,name},attendees{id,name,email,type}"
 )
-FIRM_CALENDAR_NAME = "Firm"  # the shared AccountCalendar — not an individual staff member
 PAGE_SIZE = 200
 
 
@@ -44,24 +43,6 @@ class CalendarEntry:
     calendar_owner_name: str | None
     attendees: list[dict] = field(default_factory=list)  # [{id, name, email, type}]
     raw: dict = field(default_factory=dict)
-
-    @property
-    def assigned_names(self) -> list[str]:
-        """
-        Staff names attached to this entry — from calendar_owner/attendees,
-        which are Clio Calendar/Attendee records (not User records; there's
-        no shared numeric ID space to join against /users.json), so the name
-        Clio already reports is what we display. Filters out the shared
-        "Firm" account calendar, which isn't an individual.
-        """
-        names = [a["name"] for a in self.attendees if a.get("name")]
-        if self.calendar_owner_name and self.calendar_owner_name != FIRM_CALENDAR_NAME:
-            names.append(self.calendar_owner_name)
-        seen = []
-        for n in names:
-            if n not in seen:
-                seen.append(n)
-        return seen
 
 
 def _parse_entry(raw: dict) -> CalendarEntry:

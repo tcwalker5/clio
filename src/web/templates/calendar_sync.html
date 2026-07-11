@@ -12,11 +12,32 @@
 <div class="panel"><p>Parsed and stored {{ imported_count }} court event(s).</p></div>
 {% endif %}
 
+{% if fetch_stats %}
 <div class="panel">
-  <h2>1. Paste court calendar text</h2>
-  <p class="subtitle">Copy the full results page from the SD Superior Court calendar search and paste it below.</p>
+  <p>Fetched {{ fetch_stats.total_events }} total event(s) from the court website —
+     {{ fetch_stats.filtered_events }} for {{ selected_attorney }}
+     ({{ fetch_stats.excluded_events }} other-attorney events excluded).</p>
+</div>
+{% endif %}
+
+<div class="panel">
+  <h2>1. Get the court calendar text</h2>
+  <p class="subtitle">Fetch directly from the SD Superior Court website, or paste a copied results page below.</p>
+
+  <form method="post" action="/calendar/fetch" class="stacked" style="margin-bottom:1.5rem;">
+    <label for="attorney">Attorney</label>
+    <div style="display:flex;gap:0.5rem;align-items:flex-start;">
+      <select name="attorney" id="attorney" style="flex:1;padding:0.55rem 0.7rem;border:1px solid var(--border);border-radius:8px;">
+        {% for name in staff_names %}
+        <option value="{{ name }}" {% if name == selected_attorney %}selected{% endif %}>{{ name }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit">Fetch Calendar</button>
+    </div>
+  </form>
+
   <form method="post" action="/calendar/import" class="stacked">
-    <textarea name="calendar_text" rows="10" style="width:100%;font-family:monospace;font-size:0.85rem;" required></textarea>
+    <textarea name="calendar_text" rows="10" style="width:100%;font-family:monospace;font-size:0.85rem;" required>{{ calendar_text }}</textarea>
     <div style="margin-top:0.75rem;"><button type="submit">Parse &amp; Store</button></div>
   </form>
 </div>
@@ -35,7 +56,7 @@
       <tr>
         <td>{{ e.date }}</td><td>{{ e.start_time }}</td><td>{{ e.dept }}</td>
         <td>{{ e.party }}</td><td>{{ e.party_role or "" }}</td>
-        <td>{{ e.purpose }}</td><td>{{ e.case_number }}</td><td>{{ e.judge }}</td>
+        <td>{{ e.purpose }}</td><td>{{ e.case_number }}</td><td>{{ e.judge|judge_last_name }}</td>
       </tr>
       {% endfor %}
     </tbody>
@@ -58,8 +79,9 @@
     <div class="summary-stat"><strong>{{ orphaned|length }}</strong>in Clio, not on court calendar</div>
   </div>
 
-  <table>
-    <thead><tr><th>Status</th><th>Date</th><th>Party</th><th>Dept</th><th>Purpose</th><th>Matched via</th><th>Staff</th><th>Notes</th></tr></thead>
+  <div style="overflow-x:auto;">
+  <table class="nowrap">
+    <thead><tr><th>Status</th><th>Date</th><th>Time</th><th>Party</th><th>Dept</th><th>Purpose</th><th>Matched via</th><th>Attorney</th><th>Staff</th></tr></thead>
     <tbody>
       {% for r in results %}
       <tr>
@@ -68,17 +90,19 @@
           {% elif r.status == "to_update" %}<span class="badge warn">Needs update</span>
           {% else %}<span class="badge err">Missing</span>{% endif %}
         </td>
-        <td>{{ r.court_event.date }} {{ r.court_event.start_time }}</td>
+        <td>{{ r.court_event.date }}</td>
+        <td>{{ r.court_event.start_time }}</td>
         <td>{{ r.court_event.party }}</td>
         <td>{{ r.court_event.dept }}</td>
         <td>{{ r.court_event.purpose_raw }}</td>
         <td>{{ r.match_method }}</td>
-        <td>{{ r.assigned_staff|join(", ") }}</td>
-        <td>{{ r.changes|join("; ") }}</td>
+        <td>{{ r.assigned_attorney_initials|join(", ") }}</td>
+        <td>{{ r.assigned_staff_initials|join(", ") }}</td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
+  </div>
 
   {% if orphaned %}
   <h3>In Clio, not on court calendar <span class="badge warn">review</span></h3>

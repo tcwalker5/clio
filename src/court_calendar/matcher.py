@@ -20,6 +20,7 @@ from court_calendar.normalizer import (
     CourtEvent,
     extract_all_purposes,
     extract_dept_from_text,
+    initials,
     normalize_party_name,
     normalize_purpose,
     party_names_match,
@@ -36,7 +37,44 @@ class MatchResult:
     matter_id: int | None
     match_method: str  # "matter_id" | "text_fallback" | "none"
     changes: list[str] = field(default_factory=list)
-    assigned_staff: list[str] = field(default_factory=list)
+    assigned_attorney_initials: list[str] = field(default_factory=list)
+    assigned_staff_initials: list[str] = field(default_factory=list)
+
+
+def _classify_assigned(entry: CalendarEntry, staff_directory: dict[int, dict]) -> tuple[list[str], list[str]]:
+    """
+    Splits an entry's calendar_owner/attendees into (attorney initials, staff
+    initials), using Clio's own subscription_type (is_attorney) as the source
+    of truth. Matched by email where available (attendees), else by name
+    (calendar_owner, which has no email) — see clio_calendar.py for why there's
+    no shared numeric ID to join on directly.
+    """
+    by_email = {info["email"].lower(): info for info in staff_directory.values() if info.get("email")}
+    by_name = {info["name"]: info for info in staff_directory.values() if info.get("name")}
+
+    attorneys: list[str] = []
+    staff: list[str] = []
+
+    def _add(name: str, is_attorney: bool) -> None:
+        target = attorneys if is_attorney else staff
+        ini = initials(name)
+        if ini and ini not in target:
+            target.append(ini)
+
+    for attendee in entry.attendees:
+        name = attendee.get("name")
+        if not name:
+            continue
+        email = (attendee.get("email") or "").lower()
+        info = by_email.get(email) or by_name.get(name)
+        _add(name, info["is_attorney"] if info else False)
+
+    if entry.calendar_owner_name:
+        info = by_name.get(entry.calendar_owner_name)
+        if info:
+            _add(entry.calendar_owner_name, info["is_attorney"])
+
+    return attorneys, staff
 
 
 def _resolve_matter_id(party: str, matters_index: dict[str, int | None]) -> tuple[int | None, bool]:
@@ -114,6 +152,7 @@ def compare_events(
     clio_entries: list[CalendarEntry],
     matters_index: dict[str, int | None],
     purpose_mappings: dict[str, str],
+    staff_directory: dict[int, dict],
 ) -> tuple[list[MatchResult], list[CalendarEntry]]:
     """
     Read-only diff (no writes to Clio) — mirrors calendar-check's sync/diff:
@@ -141,10 +180,12 @@ def compare_events(
                 entry = same_day[0]
                 changes = _diff_entry(ce, entry, purpose_code, purpose_mappings)
                 matched_entry_ids.add(entry.id)
+                attorney_initials, staff_initials = _classify_assigned(entry, staff_directory)
                 results.append(MatchResult(
                     court_event=ce, status="matched" if not changes else "to_update",
                     clio_entry=entry, matter_id=matter_id, match_method="matter_id",
-                    changes=changes, assigned_staff=entry.assigned_names,
+                    changes=changes, assigned_attorney_initials=attorney_initials,
+                    assigned_staff_initials=staff_initials,
                 ))
             elif candidates:
                 results.append(MatchResult(
@@ -164,10 +205,12 @@ def compare_events(
         if entry:
             changes = _diff_entry(ce, entry, purpose_code, purpose_mappings)
             matched_entry_ids.add(entry.id)
+            attorney_initials, staff_initials = _classify_assigned(entry, staff_directory)
             results.append(MatchResult(
                 court_event=ce, status="matched" if not changes else "to_update",
                 clio_entry=entry, matter_id=entry.matter_id, match_method="text_fallback",
-                changes=changes, assigned_staff=_resolve_staff(entry, staff_directory),
+                changes=changes, assigned_attorney_initials=attorney_initials,
+                assigned_staff_initials=staff_initials,
             ))
         else:
             note = "Ambiguous matter match — add to MANUAL_MATTER_MAP" if ambiguous else "No matching matter or calendar entry found"
