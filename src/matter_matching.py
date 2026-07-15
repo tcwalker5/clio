@@ -103,6 +103,20 @@ def index_by_last_name(matters: list[dict]) -> dict[str, int | None]:
     LAST name (from display_number's "LAST, FIRST") -> matter ID.
     None when multiple open matters share the same last name.
     """
+    raw = index_by_last_name_all(matters)
+    result: dict[str, int | None] = {name: (ids[0] if len(ids) == 1 else None) for name, ids in raw.items()}
+    logging.info("Indexed %d distinct open matter last names", len(result))
+    return result
+
+
+def index_by_last_name_all(matters: list[dict]) -> dict[str, list[int]]:
+    """
+    LAST name -> every open matter ID sharing it (unlike index_by_last_name,
+    doesn't collapse to None on ambiguity) — a client with two open matters
+    (e.g. two different case numbers) shows up with both IDs, so a caller can
+    disambiguate some other way (see court_calendar/matcher.py's case-number
+    cross-check).
+    """
     raw: dict[str, list[int]] = {}
     for m in matters:
         display = (m.get("display_number") or "").strip()
@@ -110,7 +124,4 @@ def index_by_last_name(matters: list[dict]) -> dict[str, int | None]:
             continue
         last = display.split(",")[0].strip().upper()
         raw.setdefault(last, []).append(int(m["id"]))
-
-    result: dict[str, int | None] = {name: (ids[0] if len(ids) == 1 else None) for name, ids in raw.items()}
-    logging.info("Indexed %d distinct open matter last names", len(result))
-    return result
+    return raw

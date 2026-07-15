@@ -2,8 +2,10 @@
 routes_calendar.py — Court calendar sync UI.
 
 Fetch (or paste) SD Superior Court calendar text -> parse & store -> compare
-against Clio calendar entries -> read-only diff (no writes to Clio; matches
-calendar-check's "shows what would change" behavior).
+against Clio calendar entries. The comparison itself is read-only (matches
+calendar-check's "shows what would change" behavior); the one write path is
+/update-case-number, fired only by an explicit button click on a mismatched
+or missing case-number row.
 """
 
 import os
@@ -11,21 +13,24 @@ from datetime import date
 
 import requests
 from fastapi import APIRouter, Depends, Form, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 from clio_users import get_staff_directory
 from court_calendar.client_list import build_client_list, render_docx, render_html
 from court_calendar.clio_calendar import fetch_calendar_entries
+from court_calendar.clio_matter_update import update_matter_case_number
 from court_calendar.court_fetch import fetch_court_calendar_text
 from court_calendar.matcher import compare_events
+from court_calendar.matters_csv import index_case_numbers_by_matter_id, load_open_matter_rows
 from court_calendar.normalizer import parse_court_calendar_line
 from court_calendar.store import fetch_date_range, fetch_upcoming_events, get_purpose_mappings, upsert_court_events
-from matter_matching import fetch_open_matters, index_by_last_name
+from matter_matching import fetch_open_matters, index_by_last_name_all
 from web.auth import require_auth
 
 router = APIRouter(prefix="/calendar", tags=["calendar"])
 
 DEFAULT_ATTORNEY_LAST_NAME = "Collier"
+CLIO_BASE_URL = os.getenv("CLIO_BASE_URL", "https://app.clio.com").rstrip("/")
 
 
 def _session() -> requests.Session:
@@ -64,6 +69,7 @@ def _render_calendar_page(request: Request, **overrides):
         "fetch_stats": None,
         "staff_names": names,
         "selected_attorney": _default_attorney(names),
+        "clio_base_url": CLIO_BASE_URL,
     }
     context.update(overrides)
     return render(request, "calendar_sync.html", **context)
@@ -114,15 +120,30 @@ async def calendar_compare(request: Request, _: None = Depends(require_auth)):
     court_events = [ce for ce in court_events if ce]
 
     session = _session()
-    matters = index_by_last_name(fetch_open_matters(session))
+    matters_by_name = index_by_last_name_all(fetch_open_matters(session))
+    case_numbers_by_matter = index_case_numbers_by_matter_id(load_open_matter_rows())
     purpose_mappings = get_purpose_mappings()
     clio_entries = fetch_calendar_entries(from_date, to_date, session)
     staff_directory = get_staff_directory()
 
-    results, orphaned = compare_events(court_events, clio_entries, matters, purpose_mappings, staff_directory)
+    results, orphaned = compare_events(court_events, clio_entries, matters_by_name, purpose_mappings,
+                                        staff_directory, case_numbers_by_matter)
 
     return _render_calendar_page(request, results=results, orphaned=orphaned,
                                   from_date=from_date, to_date=to_date)
+
+
+@router.post("/update-case-number")
+async def update_case_number(
+    matter_id: int = Form(...),
+    case_number: str = Form(...),
+    _: None = Depends(require_auth),
+):
+    try:
+        update_matter_case_number(_session(), matter_id, case_number)
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+    return JSONResponse({"success": True})
 
 
 @router.get("/client-list", response_class=HTMLResponse)

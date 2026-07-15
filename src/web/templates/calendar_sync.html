@@ -81,7 +81,7 @@
 
   <div style="overflow-x:auto;">
   <table class="nowrap">
-    <thead><tr><th>Status</th><th>Date</th><th>Time</th><th>Party</th><th>Dept</th><th>Purpose</th><th>Matched via</th><th>Attorney</th><th>Staff</th></tr></thead>
+    <thead><tr><th>Status</th><th>Date</th><th>Time</th><th>Party</th><th>Dept</th><th>Purpose</th><th>Case #</th><th>Matched via</th><th>Attorney</th><th>Staff</th></tr></thead>
     <tbody>
       {% for r in results %}
       <tr>
@@ -95,6 +95,26 @@
         <td>{{ r.court_event.party }}</td>
         <td>{{ r.court_event.dept }}</td>
         <td>{{ r.court_event.purpose_raw }}</td>
+        <td>
+          <div class="case-number-cell" data-matter-id="{{ r.matter_id or '' }}" data-case-number="{{ r.court_event.case_number }}"
+               style="display:flex;align-items:center;gap:0.4rem;">
+            <span class="case-number-text">
+            {% if r.case_number_status == "mismatch" %}
+              <span class="badge err" title="Clio has: {{ r.clio_case_number }}">{{ r.court_event.case_number }} &ne;</span>
+            {% elif r.case_number_status == "not_on_file" %}
+              <span title="Not on file in Clio">{{ r.court_event.case_number }}</span>
+            {% else %}
+              {{ r.court_event.case_number }}
+            {% endif %}
+            </span>
+          {% if r.matter_id and r.case_number_status in ("mismatch", "not_on_file") %}
+            <button type="button" class="secondary update-case-btn" style="padding:0.2rem 0.6rem;font-size:0.8rem;"
+                    onclick="updateCaseNumber(this)">Update in Clio</button>
+            <a class="btn secondary" style="padding:0.2rem 0.6rem;font-size:0.8rem;"
+               href="{{ clio_base_url }}/nc/#/matters/{{ r.matter_id }}" target="_blank">Open Matter</a>
+          {% endif %}
+          </div>
+        </td>
         <td>{{ r.match_method }}</td>
         <td>{{ r.assigned_attorney_initials|join(", ") }}</td>
         <td>{{ r.assigned_staff_initials|join(", ") }}</td>
@@ -116,5 +136,45 @@
   </table>
   {% endif %}
 </div>
+<script>
+function markCaseNumberResolved(cell, btn) {
+  btn.textContent = "Updated";
+  btn.disabled = true;
+  const textSpan = cell.querySelector(".case-number-text");
+  if (textSpan) textSpan.textContent = cell.dataset.caseNumber;
+}
+
+async function updateCaseNumber(btn) {
+  const cell = btn.closest(".case-number-cell");
+  const matterId = cell.dataset.matterId;
+  const caseNumber = cell.dataset.caseNumber;
+
+  btn.disabled = true;
+  btn.textContent = "Updating...";
+  try {
+    const resp = await fetch("/calendar/update-case-number", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: `matter_id=${encodeURIComponent(matterId)}&case_number=${encodeURIComponent(caseNumber)}`,
+    });
+    if (resp.ok) {
+      // Resolve every other row for the same matter + case number instantly
+      // (no reload) — e.g. two hearings on one case both clear at once.
+      document.querySelectorAll(".case-number-cell").forEach((other) => {
+        if (other.dataset.matterId === matterId && other.dataset.caseNumber === caseNumber) {
+          const otherBtn = other.querySelector(".update-case-btn");
+          if (otherBtn) markCaseNumberResolved(other, otherBtn);
+        }
+      });
+    } else {
+      btn.textContent = "Failed — retry";
+      btn.disabled = false;
+    }
+  } catch (e) {
+    btn.textContent = "Failed — retry";
+    btn.disabled = false;
+  }
+}
+</script>
 {% endif %}
 {% endblock %}

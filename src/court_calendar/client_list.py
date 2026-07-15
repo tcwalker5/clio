@@ -9,19 +9,16 @@ Clio API's Matter object — they only come through the matters CSV export
 matter lookup already relies on being kept current).
 """
 
-import csv
 from dataclasses import dataclass, field
 from datetime import datetime
 from io import BytesIO
-from pathlib import Path
 
 from docx import Document
 from docx.shared import Pt
 
+from court_calendar.matters_csv import load_open_matter_rows
 from court_calendar.normalizer import normalize_party_name, party_names_match
 from court_calendar.store import fetch_upcoming_events
-
-MATTERS_CSV = Path("data/clio-matters.csv")
 
 
 @dataclass
@@ -35,19 +32,13 @@ class ClientEntry:
 
 def _load_matter_rows() -> dict[str, dict]:
     """LAST NAME -> matters.csv row, open matters only. First match wins on ambiguity."""
-    if not MATTERS_CSV.exists():
-        raise FileNotFoundError(f"Matters export not found: {MATTERS_CSV}")
-
     index: dict[str, dict] = {}
-    with open(MATTERS_CSV, encoding="utf-8-sig") as f:
-        for row in csv.DictReader(f):
-            if (row.get("Status") or "").strip().lower() != "open":
-                continue
-            display = (row.get("Display Number") or "").strip()
-            if not display:
-                continue
-            last = display.split(",")[0].strip().upper()
-            index.setdefault(last, row)
+    for row in load_open_matter_rows():
+        display = (row.get("Display Number") or "").strip()
+        if not display:
+            continue
+        last = display.split(",")[0].strip().upper()
+        index.setdefault(last, row)
     return index
 
 

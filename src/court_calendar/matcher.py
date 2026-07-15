@@ -39,6 +39,8 @@ class MatchResult:
     changes: list[str] = field(default_factory=list)
     assigned_attorney_initials: list[str] = field(default_factory=list)
     assigned_staff_initials: list[str] = field(default_factory=list)
+    case_number_status: str = "n/a"  # "match" | "mismatch" | "not_on_file" | "n/a"
+    clio_case_number: str = ""  # on-file number in Clio, when case_number_status == "mismatch"
 
 
 def _classify_assigned(entry: CalendarEntry, staff_directory: dict[int, dict]) -> tuple[list[str], list[str]]:
@@ -77,20 +79,55 @@ def _classify_assigned(entry: CalendarEntry, staff_directory: dict[int, dict]) -
     return attorneys, staff
 
 
-def _resolve_matter_id(party: str, matters_index: dict[str, int | None]) -> tuple[int | None, bool]:
-    """
-    Returns (matter_id, ambiguous). matter_id is None with ambiguous=True when
-    the party matched multiple candidates and couldn't be disambiguated.
-    """
-    if party in matters_index:
-        return matters_index[party], matters_index[party] is None
+def _candidate_matter_ids(party: str, matters_by_name: dict[str, list[int]]) -> list[int]:
+    if party in matters_by_name:
+        return matters_by_name[party]
+    candidates: set[int] = set()
+    for name, ids in matters_by_name.items():
+        if party_names_match(party, name):
+            candidates.update(ids)
+    return list(candidates)
 
-    candidates = {mid for name, mid in matters_index.items() if mid and party_names_match(party, name)}
-    if len(candidates) == 1:
-        return next(iter(candidates)), False
+
+def _resolve_matter(
+    party: str,
+    case_number: str,
+    matters_by_name: dict[str, list[int]],
+    case_numbers_by_matter: dict[int, str],
+) -> tuple[int | None, str, str, str]:
+    """
+    Resolves a court event's party to a Clio matter, using the court
+    calendar's case number to disambiguate a client with more than one open
+    matter/case number, and to flag when Clio's on-file case number doesn't
+    match what the court calendar shows.
+
+    Returns (matter_id, resolution_status, case_number_status, clio_case_number):
+      resolution_status:   "ok" | "ambiguous" | "not_found"
+      case_number_status:   "match" | "mismatch" | "not_on_file" | "n/a"
+      clio_case_number:     the on-file number, when case_number_status == "mismatch"
+    """
+    candidates = _candidate_matter_ids(party, matters_by_name)
+    if not candidates:
+        return None, "not_found", "n/a", ""
+
+    case_number = (case_number or "").strip().upper()
+
     if len(candidates) > 1:
-        return None, True
-    return None, False
+        # A client with two open matters (e.g. two case numbers) — try to
+        # disambiguate using which candidate's on-file case number matches.
+        matches = [mid for mid in candidates if case_numbers_by_matter.get(mid) == case_number]
+        if len(matches) == 1:
+            return matches[0], "ok", "match", ""
+        return None, "ambiguous", "n/a", ""
+
+    matter_id = candidates[0]
+    on_file = case_numbers_by_matter.get(matter_id, "")
+    if not on_file:
+        # Not populated in Clio — go with what the court calendar shows, no flag.
+        return matter_id, "ok", "not_on_file", ""
+    if on_file != case_number:
+        return matter_id, "ok", "mismatch", on_file
+    return matter_id, "ok", "match", ""
 
 
 def _diff_entry(
@@ -150,9 +187,10 @@ def _text_fallback_match(
 def compare_events(
     court_events: list[CourtEvent],
     clio_entries: list[CalendarEntry],
-    matters_index: dict[str, int | None],
+    matters_by_name: dict[str, list[int]],
     purpose_mappings: dict[str, str],
     staff_directory: dict[int, dict],
+    case_numbers_by_matter: dict[int, str],
 ) -> tuple[list[MatchResult], list[CalendarEntry]]:
     """
     Read-only diff (no writes to Clio) — mirrors calendar-check's sync/diff:
@@ -170,7 +208,9 @@ def compare_events(
 
         purpose_code = normalize_purpose(ce.purpose_raw, purpose_mappings)
         party_norm = normalize_party_name(ce.party)
-        matter_id, ambiguous = _resolve_matter_id(party_norm, matters_index)
+        matter_id, resolution_status, case_number_status, clio_case_number = _resolve_matter(
+            party_norm, ce.case_number, matters_by_name, case_numbers_by_matter,
+        )
 
         if matter_id:
             candidates = entries_by_matter.get(matter_id, [])
@@ -186,17 +226,20 @@ def compare_events(
                     clio_entry=entry, matter_id=matter_id, match_method="matter_id",
                     changes=changes, assigned_attorney_initials=attorney_initials,
                     assigned_staff_initials=staff_initials,
+                    case_number_status=case_number_status, clio_case_number=clio_case_number,
                 ))
             elif candidates:
                 results.append(MatchResult(
                     court_event=ce, status="to_update", clio_entry=None, matter_id=matter_id,
                     match_method="matter_id",
                     changes=[f"No Clio calendar entry on {ce.date} — matter has {len(candidates)} other entries in range"],
+                    case_number_status=case_number_status, clio_case_number=clio_case_number,
                 ))
             else:
                 results.append(MatchResult(
                     court_event=ce, status="to_create", clio_entry=None,
                     matter_id=matter_id, match_method="matter_id",
+                    case_number_status=case_number_status, clio_case_number=clio_case_number,
                 ))
             continue
 
@@ -213,7 +256,9 @@ def compare_events(
                 assigned_staff_initials=staff_initials,
             ))
         else:
-            note = "Ambiguous matter match — add to MANUAL_MATTER_MAP" if ambiguous else "No matching matter or calendar entry found"
+            note = ("Client has multiple open matters and no case-number match — "
+                    "add Court Case Number in Clio or add to MANUAL_MATTER_MAP") \
+                if resolution_status == "ambiguous" else "No matching matter or calendar entry found"
             results.append(MatchResult(
                 court_event=ce, status="to_create", clio_entry=None,
                 matter_id=None, match_method="none", changes=[note],
