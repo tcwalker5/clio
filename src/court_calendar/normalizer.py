@@ -32,18 +32,22 @@ PURPOSE_PHRASES = [
 # specific codes (MSC-R, MSC-FAM) must precede their shorter prefix (MSC).
 PURPOSE_CODES = [
     "FRC", "RFO", "MSC-R", "MSC-FAM", "MSC", "CSC", "TRIAL", "SRH", "DCSS", "FSD", "EPH",
-    "TRC", "TSC", "OSC", "REV", "REVIEW", "CMC", "HOSC", "MED", "FCSS", "CCRC", "CCON",
+    "TRC", "TSC", "OSC", "REV", "CMC", "HOSC", "MED", "FCSS", "CCRC", "CCON",
     "PTR", "HRG", "S/C", "DVRO", "DV", "CONT", "CTN", "MIN", "RRC", "DR", "JUDG", "TRO",
 ]
 
 _PHRASE_RE = re.compile("|".join(re.escape(p) for p in PURPOSE_PHRASES), re.IGNORECASE)
 _CODE_RE = re.compile(r"\b(?:" + "|".join(re.escape(c) for c in PURPOSE_CODES) + r")\b", re.IGNORECASE)
 
+_ALL_PURPOSE_TERMS = PURPOSE_PHRASES + PURPOSE_CODES  # phrases first: longer alternatives must win
+
 _PARTY_BEFORE_PURPOSE_RE = re.compile(
-    r"^([A-Z][A-Za-z\s,.'-]+?)\s*(?:\([^)]+\))?\s+(" + "|".join(re.escape(c) for c in PURPOSE_CODES) + r")\b",
+    r"^([A-Z][A-Za-z\s,.'-]+?)\s*(?:\([^)]+\))?\s+(" + "|".join(re.escape(c) for c in _ALL_PURPOSE_TERMS) + r")\b",
+    re.IGNORECASE,
 )
 _PARTY_AFTER_PURPOSE_RE = re.compile(
-    r"(?:Court:|" + "|".join(re.escape(c) for c in PURPOSE_CODES) + r")\s*[-:]\s*(.+?)(?:\s*[-(]|$)",
+    r"(?:Court:|" + "|".join(re.escape(c) for c in _ALL_PURPOSE_TERMS) + r")\s*[-:]\s*(.+?)(?:\s*[-(]|$)",
+    re.IGNORECASE,
 )
 
 _ROLE_PREFIX_RE = re.compile(r"^([RP])\)")

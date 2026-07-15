@@ -383,6 +383,113 @@ CSV import or `client_case_mappings`-style conflict resolution here.
 
 ---
 
+# Subproject 5 — Outlook Calendar Migration
+
+**Modules:** `src/outlook_auth.py`, `src/outlook_calendar/`, `src/outlook_migration.py`
+
+**Purpose:** Migrate Heidi Collier's Outlook calendar into Clio — the calendar of
+record since June 1, 2026 (`data/clio-matters.csv` and the Clio account both start
+there). Started as a one-time backfill; now run on an ongoing basis (re-run
+periodically with an updated `--to-date`, including future-scheduled events) since
+Outlook is still where hearings/calls get entered day to day.
+
+**How it writes to Clio:** it doesn't, directly. This script only *reads* Outlook
+(Microsoft Graph) and Clio (matters + existing calendar entries, to skip anything
+already migrated). All writing happens when the generated CSV is imported through
+Clio's own UI (Settings > Data Import > Calendar Events) — chosen over the API
+specifically because Clio's import can be undone from there if something's off; a
+bulk API-created batch can't be undone that easily.
+
+**Auth:** reuses `calendar-check`'s existing Azure app registration and its exact
+registered redirect URI (`http://localhost:3020/api/auth/callback`) — no Azure Portal
+changes needed, just a one-time browser consent:
+```powershell
+uv run src/outlook_auth.py             # first time (browser flow)
+uv run src/outlook_auth.py --refresh   # token expired
+```
+Scope is `Calendars.Read` only — nothing here writes back to Outlook.
+
+**Matching — two event types, two paths (`outlook_calendar/event_parser.py`):**
+- **Hearings** (FRC, RFO, MSC, etc.): reuses `court_calendar/normalizer.py`'s
+  `extract_party_name()`/`party_names_match()` (already built for Outlook-subject-style
+  text) and the existing `purpose_mappings` table, same as the court calendar sync.
+- **Calls** (`TCON`/`OCON`): a deliberately separate, simpler path per project
+  decision — no purpose_mappings involved. Recognizes `TCON`, `OCON`, `TCN` (typo
+  variant), and `T/C`/`T-C`/`T.C.` in two subject conventions: `"NAME TCON"` (party
+  immediately precedes the marker) and `"Last, First- [staff] t/c w/CL"` (party
+  precedes the first dash). **Bare `"OC"` is deliberately NOT treated as a call
+  marker** — real-data check found it almost always means "Opposing Counsel"
+  (e.g. `"SATTERLY OC's Responsive Dec due"`), not "office conference"; only the
+  unambiguous forms above are recognized. Hearings are tried first; calls are a
+  fallback only when no hearing-style match is found.
+- Both paths resolve to a Clio matter via `matter_matching.index_by_last_name()` — the
+  same shared lookup Subprojects 1/2/4 use. Unlike the court calendar sync, there's no
+  case number here to disambiguate a client with two open matters — those go straight
+  to the exceptions file.
+- **Known limitation:** the underlying substring party-matching (shared with the rest
+  of the project) can mismatch when one client's exact last name is a literal substring
+  of another client's compound name — e.g. an event for "NIALEA ORTEGA" incorrectly
+  matched client "ORTEGA, LAURA L." instead of "ORTEGA-GUACHENA, NIALEA". Rare, but a
+  reason to actually read the CSV before importing, not just skim it.
+
+**Skips Dahann's and Pam's events entirely**, via Outlook category color (not text
+parsing) — `SKIP_CATEGORIES` at the top of `outlook_migration.py` maps `"Purple
+category"` -> Dahann and `"Green category"` -> Pam, confirmed against real subject
+text. Extend that dict if another color convention shows up.
+
+**OP/CL — RFOs only.** Whether an event concerns the Opposing Party or our Client
+can't be reliably derived from the Outlook data, and only matters for RFOs (it
+indicates who's asking for the order) — every RFO title has a literal `OP/CL`
+placeholder for a paralegal to resolve by hand (search/replace in Excel); every
+other purpose omits that token entirely rather than carrying a meaningless one.
+
+**Event title format:** `{client last} {purpose} [{OP/CL}] {Department} {Time}`, e.g.
+`WELLS RFO OP/CL N-10 9:00 AM` (RFO) vs `LARSEN FRC N-17 9:00 AM` (no OP/CL). Missing
+purpose/department show as `?` rather than being silently dropped.
+
+**Event type = Heidi:** Clio has a `calendar_entry_event_type` concept already in use
+at this firm (types named "Heidi", "Dahann", "Pam", "Staff" — ids from
+`/calendar_entry_event_types.json`, currently Heidi = `591618`). The CSV import has
+no column for this, so it's a separate follow-up step, `src/outlook_migration_tag.py`
+— run it *after* you've imported the CSV in Clio. It re-queries Clio for the same
+matter+date and matches the summary text verbatim against your CSV to find the exact
+entries it just created (not a "created recently" heuristic, which could tag someone
+else's entry), then PATCHes each one's type to Heidi.
+
+**Outputs:**
+- `output/outlook_migration_{from}_{to}.csv` — ready to import into Clio as-is (after
+  resolving `OP/CL` placeholders on RFOs)
+- `output/outlook_migration_{from}_{to}_exceptions.csv` — unmatched/ambiguous events
+- `output/outlook_migration_{from}_{to}_already_in_clio.csv` — matched events skipped
+  because Clio already has an entry for that matter on that date (safe to re-run)
+- `output/outlook_migration_{from}_{to}_tag_not_found.csv` — from the tagging step:
+  CSV rows whose matching Clio entry couldn't be found (not actually imported yet, or
+  the summary drifted on import — check by hand)
+- `logs/outlook_migration_YYYYMMDD.log`, `logs/outlook_migration_tag_YYYYMMDD.log`
+
+## Workflow
+```powershell
+# 1. Auth (if token expired)
+uv run src/outlook_auth.py --refresh
+
+# 2. Generate the CSV — always start from 2026-06-01 (Clio's start date);
+#    push --to-date out far enough to catch future-scheduled events too
+uv run src/outlook_migration.py --from-date 2026-06-01 --to-date 2028-06-01
+
+# 3. Open the CSV, resolve every "OP/CL" placeholder (RFOs only), fix any names in
+#    MANUAL_MATTER_MAP (top of outlook_migration.py) that showed up in the
+#    exceptions file, then re-run if you changed the map. Read it, don't just
+#    skim it — see the substring-matching limitation noted above.
+
+# 4. Import output/outlook_migration_*.csv in Clio: Settings > Data Import > Calendar Events
+#    (undo from there if something looks wrong)
+
+# 5. Tag the entries you just imported with type = Heidi
+uv run src/outlook_migration_tag.py --csv output/outlook_migration_2026-06-01_to_2028-06-01.csv
+```
+
+---
+
 # Related Projects (legacy — do not duplicate)
 
 | Project | Path | Status |

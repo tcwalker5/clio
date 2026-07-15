@@ -8,6 +8,7 @@ a Matter when creating a hearing's calendar entry.
 
 import logging
 import os
+import time as time_module
 from dataclasses import dataclass, field
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
@@ -24,9 +25,11 @@ ACCESS_TOKEN = os.getenv("CLIO_ACCESS_TOKEN", "")
 CALENDAR_ENTRIES_ENDPOINT = f"{BASE_URL}/api/v4/calendar_entries.json"
 CALENDAR_ENTRIES_FIELDS = (
     "id,summary,description,location,start_at,end_at,all_day,"
-    "matter{id,display_number},calendar_owner{id,name},attendees{id,name,email,type}"
+    "matter{id,display_number},calendar_owner{id,name},attendees{id,name,email,type},"
+    "calendar_entry_event_type{id,name}"
 )
 PAGE_SIZE = 200
+RETRY_DELAYS = [5, 15, 30]  # seconds between retries on 429, matches clio_matter_update.py's pattern
 
 
 @dataclass
@@ -41,6 +44,8 @@ class CalendarEntry:
     matter_id: int | None
     matter_display_number: str | None
     calendar_owner_name: str | None
+    event_type_id: int | None
+    event_type_name: str | None
     attendees: list[dict] = field(default_factory=list)  # [{id, name, email, type}]
     raw: dict = field(default_factory=dict)
 
@@ -48,6 +53,7 @@ class CalendarEntry:
 def _parse_entry(raw: dict) -> CalendarEntry:
     matter = raw.get("matter") or {}
     owner = raw.get("calendar_owner") or {}
+    event_type = raw.get("calendar_entry_event_type") or {}
     return CalendarEntry(
         id=int(raw["id"]),
         summary=raw.get("summary") or "",
@@ -59,9 +65,31 @@ def _parse_entry(raw: dict) -> CalendarEntry:
         matter_id=int(matter["id"]) if matter.get("id") else None,
         matter_display_number=matter.get("display_number"),
         calendar_owner_name=owner.get("name"),
+        event_type_id=int(event_type["id"]) if event_type.get("id") else None,
+        event_type_name=event_type.get("name"),
         attendees=raw.get("attendees") or [],
         raw=raw,
     )
+
+
+def set_calendar_entry_type(session: requests.Session, entry_id: int, event_type_id: int) -> None:
+    """PATCH a calendar entry's calendar_entry_event_type. Retries on 429."""
+    url = f"{BASE_URL}/api/v4/calendar_entries/{entry_id}.json"
+    body = {"data": {"calendar_entry_event_type": {"id": event_type_id}}}
+
+    for attempt, delay in enumerate([0, *RETRY_DELAYS], start=1):
+        if delay:
+            logging.warning("Rate limited updating calendar entry %s — waiting %ds (attempt %d)", entry_id, delay, attempt)
+            time_module.sleep(delay)
+
+        resp = session.patch(url, json=body)
+        if resp.status_code == 200:
+            return
+        if resp.status_code == 429:
+            continue
+        raise RuntimeError(f"Failed to set type on calendar entry {entry_id}: {resp.status_code} {resp.text[:300]}")
+
+    raise RuntimeError(f"Failed to set type on calendar entry {entry_id}: gave up after rate limiting")
 
 
 def fetch_calendar_entries(
