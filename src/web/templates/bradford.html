@@ -47,8 +47,9 @@
         </td>
         <td>
           {% if token %}
+          <div style="display:flex; align-items:center; gap:1.25rem; flex-wrap:wrap;">
           {% if e.suggested_matter_id %}
-          <form method="post" action="/bradford/resolve-exception" style="display:inline-block; margin-right:0.5rem;">
+          <form method="post" action="/bradford/resolve-exception" style="display:flex; flex-shrink:0;">
             <input type="hidden" name="token" value="{{ token }}">
             <input type="hidden" name="name" value="{{ e.name }}">
             <input type="hidden" name="matter_id" value="{{ e.suggested_matter_id }}">
@@ -56,12 +57,13 @@
             <button type="submit">Use suggested match</button>
           </form>
           {% endif %}
-          <form method="post" action="/bradford/resolve-exception" style="display:inline-block;">
+          <form method="post" action="/bradford/resolve-exception" style="display:flex; align-items:center; gap:0.4rem; flex-shrink:0;">
             <input type="hidden" name="token" value="{{ token }}">
             <input type="hidden" name="name" value="{{ e.name }}">
             <input type="number" name="matter_id" placeholder="Matter ID" required style="width:9rem;">
             <button type="submit">Save</button>
           </form>
+          </div>
           {% endif %}
         </td>
       </tr>
@@ -73,15 +75,16 @@
   {% if result.payloads %}
   <h3>{{ "Posted entries" if live else "Matched entries" }}</h3>
   <table>
-    <thead><tr><th>Client</th><th>Date</th><th>Hours</th><th>Rate</th><th>Note</th></tr></thead>
+    <thead><tr><th>Posted by</th><th>Client</th><th>Date</th><th>Hours</th><th>Rate</th><th>Note</th></tr></thead>
     <tbody>
       {% for p in result.payloads %}
       {% set d = p.data %}
       <tr>
+        <td>{{ p.posted_by }}</td>
         <td>{{ result.matter_names.get(d.matter.id, d.matter.id) }}</td>
         <td>{{ d.date }}</td>
         <td>{{ "%.1f"|format(d.quantity / 3600) }}</td>
-        <td>{{ ("$%.2f/hr"|format(d.price)) if d.price is defined else "matter rate" }}</td>
+        <td>{{ ("$%.2f/hr"|format(p.display_rate)) if p.display_rate is not none else "rate unknown" }}</td>
         <td>{{ d.note }}</td>
       </tr>
       {% endfor %}

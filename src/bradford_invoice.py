@@ -50,12 +50,21 @@ logging.getLogger("pdfminer").setLevel(logging.ERROR)
 # ---------------------------------------------------------------------------
 
 PARALEGAL_RATE = 150.0  # price sent to Clio for paralegal (Taijah Miles) entries
+PAM_INITIALS   = "PB"   # Pamela Bradford — every entry posts under her, dashboard display only
 
 BASE_URL       = os.getenv("CLIO_BASE_URL", "https://app.clio.com").rstrip("/")
 ACCESS_TOKEN   = os.getenv("CLIO_ACCESS_TOKEN", "")
 PAM_USER_ID    = int(os.getenv("USER_ID_PAM", "0"))
 ACTIVITIES_URL = f"{BASE_URL}/api/v4/activities.json"
 POST_DELAY     = 1.5  # seconds between POSTs — stay under 50 req/min
+
+# Matters fields for the same fetch_open_matters() call bradford_invoice already
+# makes — custom_rate{type,rates} requires the Clio app's Billing (Read)
+# permission (granted 2026-07-22); the shallow selector is what actually works —
+# a deeper `rates{rate,user}` selector is rejected by Clio's API as invalid, but
+# `custom_rate{type,rates}` already returns each rate entry fully expanded
+# (id, rate, user{id,name}) with no further subfield selection needed or accepted.
+MATTERS_FIELDS_WITH_RATES = "id,display_number,custom_number,status,custom_rate{type,rates}"
 
 # Invoice last-name → Clio matter ID.
 # Add entries after a dry-run surfaces exceptions or ambiguous matches.
@@ -403,6 +412,27 @@ def suggest_match(name: str, matters: dict[str, int | None]) -> tuple[str, int |
 
 
 # ---------------------------------------------------------------------------
+# Pam's actual per-matter rate — display only, never sent to Clio
+#
+# Attorney entries still omit "price" from the real POST payload (Clio applies
+# the matter-defined rate itself) — this is purely so the dashboard can show
+# what that rate actually is, e.g. to make it visually obvious when paralegal
+# work ($150 flat) is billed lower than Pam's own matter-defined rate.
+# ---------------------------------------------------------------------------
+
+def index_pam_rate_by_matter_id(matters_raw: list[dict], pam_user_id: int) -> dict[int, float]:
+    rates: dict[int, float] = {}
+    for m in matters_raw:
+        custom_rate = m.get("custom_rate") or {}
+        for entry in custom_rate.get("rates") or []:
+            user = entry.get("user") or {}
+            if user.get("id") == pam_user_id and entry.get("rate") is not None:
+                rates[int(m["id"])] = float(entry["rate"])
+                break
+    return rates
+
+
+# ---------------------------------------------------------------------------
 # Build Clio API payloads
 # ---------------------------------------------------------------------------
 
@@ -411,8 +441,10 @@ def build_payloads(
     matters: dict[str, int | None],
     pam_user_id: int,
     manual_map: dict[str, int] | None = None,
+    pam_rates: dict[int, float] | None = None,
 ) -> tuple[list[dict], list[dict]]:
     manual_map = MANUAL_MATTER_MAP if manual_map is None else manual_map
+    pam_rates = pam_rates or {}
     payloads: list[dict] = []
     exceptions: list[dict] = []
 
@@ -471,7 +503,14 @@ def build_payloads(
         if e.paralegal_rate is not None:
             data["price"] = e.paralegal_rate
 
-        payloads.append({"data": data})
+        # display_rate/posted_by are dashboard-only — never sent to Clio (see
+        # post_entry, which POSTs payload["data"] alone, not this whole dict).
+        # For attorney entries this is Pam's actual matter-defined rate fetched
+        # via custom_rate (None if that matter has no rate on file for her);
+        # for paralegal entries it's just the same flat $150 already in "price".
+        display_rate = e.paralegal_rate if e.paralegal_rate is not None else pam_rates.get(matter_id)
+
+        payloads.append({"data": data, "display_rate": display_rate, "posted_by": PAM_INITIALS})
 
     return payloads, exceptions
 
@@ -486,7 +525,9 @@ def post_entry(session: requests.Session, payload: dict) -> bool:
     note_preview = d["note"][:50]
 
     for attempt in range(1, 3):
-        resp = session.post(ACTIVITIES_URL, json=payload)
+        # Send {"data": ...} only — payload also carries display_rate/posted_by
+        # for the dashboard, which must never reach Clio's API.
+        resp = session.post(ACTIVITIES_URL, json={"data": d})
         if resp.status_code in (200, 201):
             activity_id = resp.json().get("data", {}).get("id", "?")
             logging.info("POSTED  matter=%s  activity=%s  %s",
@@ -568,8 +609,12 @@ def run_pipeline(
         "Content-Type":  "application/json",
     })
 
-    matters = index_by_last_name(fetch_open_matters(session))
-    payloads, exceptions = build_payloads(all_entries, matters, PAM_USER_ID, effective_manual_matter_map())
+    matters_raw = fetch_open_matters(session, fields=MATTERS_FIELDS_WITH_RATES)
+    matters = index_by_last_name(matters_raw)
+    pam_rates = index_pam_rate_by_matter_id(matters_raw, PAM_USER_ID)
+    payloads, exceptions = build_payloads(
+        all_entries, matters, PAM_USER_ID, effective_manual_matter_map(), pam_rates
+    )
 
     output_dir.mkdir(exist_ok=True)
     stem = re.sub(r"[^\w\-]", "_", input_path.stem)

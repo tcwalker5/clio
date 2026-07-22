@@ -302,7 +302,27 @@ as TimeEntry activities under Pamela Bradford (PAM).
 - ADMIN entries on main invoice: skipped — firm absorbs, not billed to clients
 - "PARALEGAL TIME ***SEE ATTACHED" summary lines: skipped — detail comes from pages 4-8
 
-**User:** All entries posted under `USER_ID_PAM` (359115091)
+**User:** All entries posted under `USER_ID_PAM` (359115091). The dashboard's Matched/
+Posted entries table shows a **Posted by** column (`PAM_INITIALS = "PB"`, a display-only
+constant) so this isn't just implicit — it's the same for every row today since Bradford
+always posts under Pam, but visible rather than assumed.
+
+**Rate display (dashboard-only, never sent to Clio):** attorney entries still omit
+`price` from the real POST payload as above — but `/bradford` shows Pam's *actual*
+matter-defined rate next to each row instead of a vague "matter rate" placeholder,
+fetched via `custom_rate{type,rates}` on the same `fetch_open_matters()` call
+(`index_pam_rate_by_matter_id()`). This needs the Clio app's **Billing (Read)**
+permission — granted 2026-07-22, confirmed working: without it, `custom_rate` comes
+back as `{"redacted": true}` rather than a 403, so it fails quietly unless you know to
+check for that shape specifically. A shallow field selector (`custom_rate{type,rates}`)
+already returns each rate entry fully expanded (`rate`, `user{id,name}`) — a deeper
+selector like `rates{rate,user}` is rejected as invalid, don't try to nest further.
+Not every matter has a rate on file for Pam specifically (real example: `FULMER`,
+`LASHGARI`, `SWEET` on this account have rates for other staff but not her) — the
+dashboard shows "rate unknown" rather than guessing when that happens. `payload["data"]`
+is the only thing ever POSTed to Clio (`post_entry` sends `{"data": payload["data"]}`
+explicitly) — `display_rate`/`posted_by` are sibling keys on the payload dict, present
+in the local JSON output for audit purposes but never part of the API call.
 
 **Hours rounding:** Pre-rounded to nearest 0.1h using half-up rounding before sending
 to Clio (matches Clio's own billing increment; avoids post-upload surprises).
