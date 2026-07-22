@@ -31,8 +31,18 @@ def normalize_name(raw: str) -> str:
     return s.upper()
 
 
-def fetch_open_matters(session: requests.Session, base_url: str = BASE_URL_DEFAULT) -> list[dict]:
-    """Fetch all open matters from the Clio API, handling pagination."""
+def fetch_open_matters(
+    session: requests.Session,
+    base_url: str = BASE_URL_DEFAULT,
+    fields: str = MATTERS_FIELDS,
+) -> list[dict]:
+    """Fetch all open matters from the Clio API, handling pagination.
+
+    `fields` defaults to the id/display_number/custom_number/status callers
+    normally need; pass a wider string (e.g. adding `,client{id}`) when a
+    caller also needs a nested relationship — the `relationship{subfields}`
+    syntax is the same one relationships.py already uses successfully.
+    """
     matters_endpoint = f"{base_url.rstrip('/')}/api/v4/matters.json"
     matters: list[dict] = []
     next_url: str | None = None
@@ -48,7 +58,7 @@ def fetch_open_matters(session: requests.Session, base_url: str = BASE_URL_DEFAU
         else:
             params = {
                 "status": "open",
-                "fields": MATTERS_FIELDS,
+                "fields": fields,
                 "limit": MATTERS_PAGE_SIZE,
             }
             resp = session.get(matters_endpoint, params=params)

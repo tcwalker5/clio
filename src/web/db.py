@@ -114,6 +114,17 @@ CREATE TABLE IF NOT EXISTS staff_cache (
     is_attorney INTEGER DEFAULT 0,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS ringcentral_sync_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    changed INTEGER NOT NULL,
+    included_count INTEGER NOT NULL,
+    conflict_count INTEGER NOT NULL,
+    csv_path TEXT,
+    conflicts_path TEXT,
+    snapshot_hash TEXT NOT NULL
+);
 """
 
 

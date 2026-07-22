@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}RingCentral Directory{% endblock %}
+{% block content %}
+<h1>RingCentral Directory Sync</h1>
+<p class="subtitle">Keeps RingCentral's company phone directory in sync with Clio clients and opposing counsel/party contacts on open matters.</p>
+
+{% if error %}
+<div class="panel"><p class="error-text">{{ error }}</p></div>
+{% endif %}
+
+<div class="panel">
+  {% if last_run %}
+  <h2>Last sync — {{ last_run.run_at }}</h2>
+  <div class="summary-bar">
+    <div class="summary-stat"><strong>{{ last_run.included_count }}</strong>in directory</div>
+    <div class="summary-stat"><strong>{{ last_run.conflict_count }}</strong>conflicts</div>
+    <div class="summary-stat"><strong>{{ "Yes" if last_run.changed else "No" }}</strong>changed</div>
+  </div>
+
+  {% if last_run.changed %}
+  <p>The directory changed since the previous sync — upload the current CSV to RingCentral.</p>
+  <p>
+    <a href="/ringcentral/download">Download current CSV</a>
+    {% if last_run.csv_filename %}<code>{{ last_run.csv_filename }}</code>{% endif %}
+    &nbsp;|&nbsp;
+    <a href="{{ import_url }}" target="_blank" rel="noopener">Open RingCentral Import Page ↗</a>
+  </p>
+  {% else %}
+  <p>No changes since the last sync — nothing to upload.</p>
+  <p>
+    <a href="/ringcentral/download">Download current CSV anyway</a>
+    {% if last_run.csv_filename %}<code>{{ last_run.csv_filename }}</code>{% endif %}
+  </p>
+  {% endif %}
+  {% else %}
+  <p>No sync has run yet. Click "Sync now" to build the directory from Clio.</p>
+  {% endif %}
+
+  <form method="post" action="/ringcentral/sync" style="margin-top:1rem;">
+    <button type="submit">Sync now</button>
+  </form>
+</div>
+
+{% if conflicts %}
+<div class="panel">
+  <h3>Conflicts <span class="badge warn">needs manual resolution</span></h3>
+  <p>These contacts share a phone number with someone else and were omitted from the
+     directory CSV. Decide on a canonical name/company for the phone, then add one row
+     to <code>data/ringcentral_phone_knowledge_base.csv</code> and sync again.</p>
+  <table>
+    <thead><tr><th>Phone</th><th>Clio ID</th><th>First Name</th><th>Last Name</th><th>Company</th></tr></thead>
+    <tbody>
+      {% for c in conflicts %}
+      <tr>
+        <td>{{ c["Phone"] }}</td>
+        <td>{{ c["Clio ID"] }}</td>
+        <td>{{ c["First Name"] }}</td>
+        <td>{{ c["Last Name"] }}</td>
+        <td>{{ c["Company"] }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}
