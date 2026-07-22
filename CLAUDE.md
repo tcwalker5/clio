@@ -337,7 +337,16 @@ uv run src/bradford_invoice.py --input "data/Invoice-*.pdf"
 ```
 
 ## Exception types
-- **No matching open matter** — client last name not in Clio open matters
+- **No matching open matter** — client last name not in Clio open matters. The
+  exceptions CSV includes a `suggested_match`/`suggested_matter_id` column
+  (`difflib.get_close_matches()` against all open-matter last names, cutoff 0.6) —
+  Bradford's invoices frequently misspell/truncate names (real examples:
+  "LASHGHARI" → LASHGARI, "BULTIMIER" → BULTEMEIER, the same client already in
+  `MANUAL_MATTER_MAP` under yet another misspelling, "BULTMIERE" — the contractor
+  isn't consistent invoice to invoice). This is a suggestion only, never
+  auto-applied — still fails loud per this project's philosophy; a misrouted
+  billing entry is a real problem, so a human copies the suggested ID into
+  `MANUAL_MATTER_MAP` themselves rather than the script guessing for them.
 - **Ambiguous** — multiple open matters share the same last name; add to MANUAL_MATTER_MAP
 - **Closed matter** — client matter closed in Clio; redirect to active matter via MANUAL_MATTER_MAP
 

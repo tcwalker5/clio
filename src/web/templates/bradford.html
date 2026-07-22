@@ -35,10 +35,17 @@
   {% if result.exceptions %}
   <h3>Exceptions <span class="badge warn">needs manual resolution</span></h3>
   <table>
-    <thead><tr><th>Name</th><th>Date</th><th>Hours</th><th>Source</th><th>Reason</th></tr></thead>
+    <thead><tr><th>Name</th><th>Date</th><th>Hours</th><th>Source</th><th>Reason</th><th>Suggested match</th></tr></thead>
     <tbody>
       {% for e in result.exceptions %}
-      <tr><td>{{ e.name }}</td><td>{{ e.date }}</td><td>{{ e.hours }}</td><td>{{ e.source }}</td><td>{{ e.reason }}</td></tr>
+      <tr>
+        <td>{{ e.name }}</td><td>{{ e.date }}</td><td>{{ e.hours }}</td><td>{{ e.source }}</td><td>{{ e.reason }}</td>
+        <td>
+          {% if e.suggested_match %}
+            {{ e.suggested_match }}{% if e.suggested_matter_id %} (matter {{ e.suggested_matter_id }}){% else %} (ambiguous){% endif %}
+          {% endif %}
+        </td>
+      </tr>
       {% endfor %}
     </tbody>
   </table>

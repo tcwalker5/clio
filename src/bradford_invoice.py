@@ -22,6 +22,7 @@ Usage:
 
 import argparse
 import csv
+import difflib
 import json
 import logging
 import os
@@ -332,6 +333,32 @@ def parse_paralegal_pages(pdf: pdfplumber.PDF) -> list[InvoiceEntry]:
 
 
 # ---------------------------------------------------------------------------
+# Fuzzy suggestions for unmatched names
+#
+# The contractor (Bradford) frequently misspells or truncates client last
+# names on the invoice — real examples: "LARSON" for LARSEN, "BULTMIERE" and
+# separately "BULTIMIER" for the same BULTEMEIER client on different invoices.
+# Per this project's philosophy, an unmatched name still fails loud rather
+# than auto-posting to a guess — but attaching the closest real open-matter
+# name to the exceptions file turns "search clio-matters.csv by hand" into a
+# copy-paste into MANUAL_MATTER_MAP, which is where the actual decision stays.
+# ---------------------------------------------------------------------------
+
+SUGGESTION_CUTOFF = 0.6  # difflib similarity ratio; below this, no suggestion offered
+
+
+def suggest_match(name: str, matters: dict[str, int | None]) -> tuple[str, int | None] | None:
+    """Closest open-matter last name to an unmatched invoice name, plus its
+    matter ID (None if that name is itself ambiguous). None if nothing close
+    enough to be worth suggesting."""
+    candidates = difflib.get_close_matches(name, matters.keys(), n=1, cutoff=SUGGESTION_CUTOFF)
+    if not candidates:
+        return None
+    best = candidates[0]
+    return best, matters[best]
+
+
+# ---------------------------------------------------------------------------
 # Build Clio API payloads
 # ---------------------------------------------------------------------------
 
@@ -351,9 +378,18 @@ def build_payloads(
             logging.info("[%-10s] %-14s %s  %.2fh  manual override -> %s",
                          e.source, name, e.date, e.hours, matter_id)
         elif name not in matters:
-            exceptions.append({"name": name, "date": e.date, "hours": e.hours,
-                                "source": e.source, "reason": "No matching open matter"})
-            logging.warning("[%-10s] %-14s %s  %.2fh  NO MATCH", e.source, name, e.date, e.hours)
+            suggestion = suggest_match(name, matters)
+            exceptions.append({
+                "name": name, "date": e.date, "hours": e.hours,
+                "source": e.source, "reason": "No matching open matter",
+                "suggested_match": suggestion[0] if suggestion else "",
+                "suggested_matter_id": suggestion[1] if suggestion and suggestion[1] else "",
+            })
+            if suggestion:
+                logging.warning("[%-10s] %-14s %s  %.2fh  NO MATCH — did you mean %s? (matter %s)",
+                                 e.source, name, e.date, e.hours, suggestion[0], suggestion[1] or "ambiguous")
+            else:
+                logging.warning("[%-10s] %-14s %s  %.2fh  NO MATCH", e.source, name, e.date, e.hours)
             continue
         elif matters[name] is None:
             exceptions.append({"name": name, "date": e.date, "hours": e.hours,
@@ -503,7 +539,10 @@ def run_pipeline(
     if exceptions:
         result.exceptions_path = output_dir / f"{stem}_exceptions.csv"
         with open(result.exceptions_path, "w", newline="", encoding="utf-8-sig") as f:
-            w = csv.DictWriter(f, fieldnames=["name", "date", "hours", "source", "reason"])
+            w = csv.DictWriter(f, fieldnames=[
+                "name", "date", "hours", "source", "reason",
+                "suggested_match", "suggested_matter_id",
+            ])
             w.writeheader()
             w.writerows(exceptions)
         logging.warning("Wrote %d exceptions -> %s", len(exceptions), result.exceptions_path)
