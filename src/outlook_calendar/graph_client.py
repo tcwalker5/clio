@@ -22,7 +22,7 @@ PACIFIC = ZoneInfo("America/Los_Angeles")
 ACCESS_TOKEN = os.getenv("MICROSOFT_ACCESS_TOKEN", "")
 CALENDAR_OWNER_EMAIL = os.getenv("MICROSOFT_CALENDAR_OWNER_EMAIL", "")
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
-EVENT_FIELDS = "id,subject,start,end,location,bodyPreview,categories,isAllDay"
+EVENT_FIELDS = "id,subject,start,end,location,bodyPreview,categories,isAllDay,seriesMasterId"
 PAGE_SIZE = 100
 
 
@@ -36,6 +36,7 @@ class OutlookEvent:
     body_preview: str
     categories: list[str] = field(default_factory=list)
     is_all_day: bool = False
+    series_master_id: str | None = None
     raw: dict = field(default_factory=dict)
 
 
@@ -65,8 +66,96 @@ def _parse_event(raw: dict) -> OutlookEvent:
         body_preview=raw.get("bodyPreview") or "",
         categories=raw.get("categories") or [],
         is_all_day=bool(raw.get("isAllDay")),
+        series_master_id=raw.get("seriesMasterId"),
         raw=raw,
     )
+
+
+@dataclass
+class RecurringSeries:
+    series_master_id: str
+    subject: str
+    start: datetime
+    end: datetime
+    location: str
+    body_preview: str
+    categories: list[str]
+    is_all_day: bool
+    pattern: dict  # Graph recurrence.pattern — see recurrence.py for translation
+
+
+def fetch_recurring_series(from_date: str, to_date: str, email: str | None = None) -> list[RecurringSeries]:
+    """
+    Every distinct recurring series with at least one occurrence in
+    [from_date, to_date] — one entry per series (not per occurrence).
+    calendarview already expands occurrences (that's what fetch_calendar_events
+    uses), so this scans it just to collect distinct seriesMasterId values,
+    then fetches each master individually for its `recurrence` pattern —
+    calendarview itself doesn't return `recurrence` on expanded instances.
+    """
+    email = email or CALENDAR_OWNER_EMAIL
+    if not email:
+        raise RuntimeError("MICROSOFT_CALENDAR_OWNER_EMAIL not set in .env")
+
+    session = requests.Session()
+    session.headers.update({
+        "Authorization": f"Bearer {ACCESS_TOKEN}",
+        "Prefer": 'outlook.timezone="Pacific Standard Time"',
+    })
+
+    view_url = f"{GRAPH_BASE}/users/{email}/calendarview"
+    master_ids: dict[str, dict] = {}  # seriesMasterId -> first-seen occurrence (for categories)
+    next_url: str | None = None
+
+    while True:
+        if next_url:
+            resp = session.get(next_url)
+        else:
+            resp = session.get(view_url, params={
+                "startDateTime": f"{from_date}T00:00:00",
+                "endDateTime": f"{to_date}T23:59:59",
+                "$select": "id,subject,seriesMasterId,categories",
+                "$top": PAGE_SIZE,
+            })
+        if resp.status_code != 200:
+            raise RuntimeError(f"Failed to fetch calendar view for series scan: {resp.status_code} {resp.text[:300]}")
+
+        body = resp.json()
+        for r in body.get("value", []):
+            sid = r.get("seriesMasterId")
+            if sid and sid not in master_ids:
+                master_ids[sid] = r
+        next_url = body.get("@odata.nextLink")
+        if not next_url:
+            break
+
+    series: list[RecurringSeries] = []
+    for sid in master_ids:
+        resp = session.get(f"{GRAPH_BASE}/users/{email}/events/{sid}", params={
+            "$select": "subject,start,end,location,bodyPreview,categories,isAllDay,recurrence",
+        })
+        if resp.status_code != 200:
+            raise RuntimeError(f"Failed to fetch series master {sid}: {resp.status_code} {resp.text[:300]}")
+        raw = resp.json()
+        recurrence = raw.get("recurrence") or {}
+        pattern = recurrence.get("pattern")
+        if not pattern:
+            continue  # shouldn't happen for a real seriesMasterId, but don't crash the run over one bad record
+        start = raw.get("start") or {}
+        end = raw.get("end") or {}
+        series.append(RecurringSeries(
+            series_master_id=sid,
+            subject=raw.get("subject") or "",
+            start=_parse_graph_datetime(start["dateTime"]) if start.get("dateTime") else None,
+            end=_parse_graph_datetime(end["dateTime"]) if end.get("dateTime") else None,
+            location=(raw.get("location") or {}).get("displayName", ""),
+            body_preview=raw.get("bodyPreview") or "",
+            categories=raw.get("categories") or [],
+            is_all_day=bool(raw.get("isAllDay")),
+            pattern=pattern,
+        ))
+
+    return series
 
 
 def fetch_calendar_events(from_date: str, to_date: str, email: str | None = None) -> list[OutlookEvent]:

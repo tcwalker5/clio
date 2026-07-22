@@ -502,7 +502,7 @@ def run_pipeline(
 
     if exceptions:
         result.exceptions_path = output_dir / f"{stem}_exceptions.csv"
-        with open(result.exceptions_path, "w", newline="", encoding="utf-8") as f:
+        with open(result.exceptions_path, "w", newline="", encoding="utf-8-sig") as f:
             w = csv.DictWriter(f, fieldnames=["name", "date", "hours", "source", "reason"])
             w.writeheader()
             w.writerows(exceptions)

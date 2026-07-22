@@ -349,7 +349,7 @@ def run_pipeline(
 
     if exceptions:
         result.exceptions_path = output_dir / f"exceptions_{period}.csv"
-        with open(result.exceptions_path, "w", newline="", encoding="utf-8") as f:
+        with open(result.exceptions_path, "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.DictWriter(f, fieldnames=["name", "total_pages", "cost", "reason"])
             writer.writeheader()
             writer.writerows(exceptions)
