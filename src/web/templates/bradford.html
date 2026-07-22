@@ -35,7 +35,7 @@
   {% if result.exceptions %}
   <h3>Exceptions <span class="badge warn">needs manual resolution</span></h3>
   <table>
-    <thead><tr><th>Name</th><th>Date</th><th>Hours</th><th>Source</th><th>Reason</th><th>Suggested match</th></tr></thead>
+    <thead><tr><th>Name</th><th>Date</th><th>Hours</th><th>Source</th><th>Reason</th><th>Suggested match</th><th>Resolve</th></tr></thead>
     <tbody>
       {% for e in result.exceptions %}
       <tr>
@@ -43,6 +43,25 @@
         <td>
           {% if e.suggested_match %}
             {{ e.suggested_match }}{% if e.suggested_matter_id %} (matter {{ e.suggested_matter_id }}){% else %} (ambiguous){% endif %}
+          {% endif %}
+        </td>
+        <td>
+          {% if token %}
+          {% if e.suggested_matter_id %}
+          <form method="post" action="/bradford/resolve-exception" style="display:inline-block; margin-right:0.5rem;">
+            <input type="hidden" name="token" value="{{ token }}">
+            <input type="hidden" name="name" value="{{ e.name }}">
+            <input type="hidden" name="matter_id" value="{{ e.suggested_matter_id }}">
+            <input type="hidden" name="note" value="dashboard: used suggested match">
+            <button type="submit">Use suggested match</button>
+          </form>
+          {% endif %}
+          <form method="post" action="/bradford/resolve-exception" style="display:inline-block;">
+            <input type="hidden" name="token" value="{{ token }}">
+            <input type="hidden" name="name" value="{{ e.name }}">
+            <input type="number" name="matter_id" placeholder="Matter ID" required style="width:9rem;">
+            <button type="submit">Save</button>
+          </form>
           {% endif %}
         </td>
       </tr>

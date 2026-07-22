@@ -67,6 +67,50 @@ MANUAL_MATTER_MAP: dict[str, int] = {
     "WELLS":      1786847613,  # Clio: WELLS, ANDREW (BRITTNEY is closed but not yet in Clio)
 }
 
+# Overrides added live from the dashboard (exception's "Use suggested match" button
+# or manual matter-ID entry) — a data file rather than editing this source file from
+# a web request, same pattern as data/outlook_call_overrides.csv. Merged with
+# MANUAL_MATTER_MAP at run time; the code constant above wins on conflict since it's
+# the deliberately-reviewed one.
+PERSISTED_MATTER_MAP_PATH = Path("data") / "bradford_manual_matter_map.csv"
+
+
+def load_persisted_matter_map(path: Path = PERSISTED_MATTER_MAP_PATH) -> dict[str, int]:
+    if not path.exists():
+        return {}
+    out: dict[str, int] = {}
+    with open(path, encoding="utf-8-sig") as f:
+        for row in csv.DictReader(f):
+            name = (row.get("name") or "").strip().upper()
+            matter_id = (row.get("matter_id") or "").strip()
+            if name and matter_id.isdigit():
+                out[name] = int(matter_id)
+    return out
+
+
+def save_persisted_override(name: str, matter_id: int, note: str = "",
+                             path: Path = PERSISTED_MATTER_MAP_PATH) -> None:
+    """Appends one override row, writing a header (and BOM, for Excel) only if
+    the file doesn't exist yet — utf-8-sig on every open() would otherwise
+    write a fresh BOM into the middle of the file on each append."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    is_new = not path.exists()
+    with open(path, "a", newline="", encoding="utf-8") as f:
+        if is_new:
+            f.write("﻿")
+            csv.writer(f).writerow(["name", "matter_id", "note", "added_at"])
+        csv.writer(f).writerow([
+            name.strip().upper(), matter_id, note,
+            datetime.now().isoformat(timespec="seconds"),
+        ])
+    logging.info("Persisted override: %s -> matter %s", name.strip().upper(), matter_id)
+
+
+def effective_manual_matter_map() -> dict[str, int]:
+    combined = load_persisted_matter_map()
+    combined.update(MANUAL_MATTER_MAP)
+    return combined
+
 
 # ---------------------------------------------------------------------------
 # Data model
@@ -366,15 +410,17 @@ def build_payloads(
     entries: list[InvoiceEntry],
     matters: dict[str, int | None],
     pam_user_id: int,
+    manual_map: dict[str, int] | None = None,
 ) -> tuple[list[dict], list[dict]]:
+    manual_map = MANUAL_MATTER_MAP if manual_map is None else manual_map
     payloads: list[dict] = []
     exceptions: list[dict] = []
 
     for e in entries:
         name = e.client_name
 
-        if name in MANUAL_MATTER_MAP:
-            matter_id: int | None = MANUAL_MATTER_MAP[name]
+        if name in manual_map:
+            matter_id: int | None = manual_map[name]
             logging.info("[%-10s] %-14s %s  %.2fh  manual override -> %s",
                          e.source, name, e.date, e.hours, matter_id)
         elif name not in matters:
@@ -523,7 +569,7 @@ def run_pipeline(
     })
 
     matters = index_by_last_name(fetch_open_matters(session))
-    payloads, exceptions = build_payloads(all_entries, matters, PAM_USER_ID)
+    payloads, exceptions = build_payloads(all_entries, matters, PAM_USER_ID, effective_manual_matter_map())
 
     output_dir.mkdir(exist_ok=True)
     stem = re.sub(r"[^\w\-]", "_", input_path.stem)

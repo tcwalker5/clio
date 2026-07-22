@@ -57,6 +57,37 @@ async def bradford_preview(
                   error=error, live=False, filename=dest.name)
 
 
+@router.post("/resolve-exception", response_class=HTMLResponse)
+async def bradford_resolve_exception(
+    request: Request,
+    token: str = Form(...),
+    name: str = Form(...),
+    matter_id: int = Form(...),
+    note: str = Form(""),
+    _: None = Depends(require_auth),
+):
+    """Persists one name -> matter_id override (data/bradford_manual_matter_map.csv,
+    survives future imports) and re-runs the dry-run preview in place, so a
+    resolved exception disappears from the exceptions table and shows up as a
+    matched entry instead — same token, same "Confirm & Post" step at the end."""
+    from web.app import render
+
+    entry = PREVIEWS.get(token)
+    result = None
+    error = None
+    if not entry:
+        error = "This preview has expired — please upload the file again."
+    else:
+        bradford_invoice.save_persisted_override(name, matter_id, note)
+        try:
+            result = bradford_invoice.run_pipeline(entry["input_path"], dry_run=True)
+        except (FileNotFoundError, RuntimeError) as e:
+            error = str(e)
+
+    return render(request, "bradford.html", result=result, token=token if entry else None,
+                  error=error, live=False, filename=entry["input_path"].name if entry else "")
+
+
 @router.post("/confirm", response_class=HTMLResponse)
 async def bradford_confirm(
     request: Request,

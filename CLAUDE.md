@@ -345,10 +345,30 @@ uv run src/bradford_invoice.py --input "data/Invoice-*.pdf"
   `MANUAL_MATTER_MAP` under yet another misspelling, "BULTMIERE" — the contractor
   isn't consistent invoice to invoice). This is a suggestion only, never
   auto-applied — still fails loud per this project's philosophy; a misrouted
-  billing entry is a real problem, so a human copies the suggested ID into
-  `MANUAL_MATTER_MAP` themselves rather than the script guessing for them.
+  billing entry is a real problem, so a human confirms it explicitly.
 - **Ambiguous** — multiple open matters share the same last name; add to MANUAL_MATTER_MAP
 - **Closed matter** — client matter closed in Clio; redirect to active matter via MANUAL_MATTER_MAP
+
+## Resolving exceptions from the dashboard
+`/bradford`'s exceptions table has, per row: a one-click **"Use suggested match"**
+button (only shown when `suggested_matter_id` is populated) and a free-text matter-ID
+field for anything else (wrong suggestion, ambiguous case, no suggestion at all).
+Either one POSTs to `/bradford/resolve-exception`, which appends to
+`data/bradford_manual_matter_map.csv` (`name,matter_id,note,added_at` — created with
+a header on first write, BOM only on that first write since re-opening in append
+mode with `utf-8-sig` would otherwise inject a fresh BOM into the middle of the file
+on every save) and re-runs the dry-run preview in place, so the resolved entry moves
+from the exceptions table into the matched-entries table immediately, same token,
+same "Confirm & Post" button at the end — no separate "final import" button needed,
+since Confirm & Post already is that step once exceptions are cleared.
+
+**Why a data file instead of editing `MANUAL_MATTER_MAP` directly:** the code
+constant is for deliberate, reviewed, permanent overrides (committed to git); the
+dashboard flow is a paralegal resolving something mid-import without touching Python
+source. `effective_manual_matter_map()` merges both at run time (loaded fresh every
+`run_pipeline()` call), code constant winning on conflict. Persisted overrides apply
+to *future* invoice imports too, not just the one being resolved — same
+`load_persisted_matter_map()` call whether triggered from the CLI or the dashboard.
 
 ---
 
