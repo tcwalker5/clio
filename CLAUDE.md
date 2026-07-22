@@ -772,11 +772,21 @@ that don't apply to clean API data) before falling through to
 `output/ringcentral_conflicts_{date}.csv` for manual review. In practice this chain
 resolved all 15 real conflicts found on this account's first run down to 0.
 
-**Change detection:** RingCentral's import always replaces the whole directory, so
-re-uploading an unchanged file is pure noise. Each run computes a hash of the built
-directory and stores it in `ringcentral_sync_runs` (in the shared
-`data/clio_dashboard.db`) alongside the previous run's hash — `changed` is true only
-when something actually differs (contact added/removed, phone changed, etc.).
+**Change detection:** RingCentral's import isn't a literal wipe-and-recreate — it
+reconciles by matching key (the `External ID` column, set to the Clio contact ID)
+and only touches what actually differs: new rows get added, rows with no match in
+the upload get deleted, and byte-identical matches are left alone. **Confirmed live**
+(first real upload, 2026-07-22): RingCentral reported `321 new`, `26 unchanged`,
+`275 deleted` — `26 + 321 = 347` (the exact row count of the uploaded CSV), and
+`26 + 275 = 301` (the directory's prior size, mostly leftover entries from the old
+`rolodex` pipeline manually run in the past, which used this same
+Clio-contact-ID-as-External-ID convention — that's why 26 matched exactly). Net
+effect is still a full replace in terms of end state — the directory always ends up
+equal to the uploaded CSV — so re-uploading an unchanged file is still pure noise.
+Each run computes a hash of the built directory and stores it in
+`ringcentral_sync_runs` (in the shared `data/clio_dashboard.db`) alongside the
+previous run's hash — `changed` is true only when something actually differs
+(contact added/removed, phone changed, etc.).
 
 **CLI behavior:** `uv run src/ringcentral_directory.py` builds the CSV, and — only
 when `changed` is true — opens the RingCentral import page in the default browser
