@@ -432,6 +432,22 @@ def index_pam_rate_by_matter_id(matters_raw: list[dict], pam_user_id: int) -> di
     return rates
 
 
+def fetch_pam_standard_rate(session: requests.Session, pam_user_id: int) -> float | None:
+    """Pam's standard/default hourly rate (Clio User.rate) — confirmed live
+    2026-07-23 against real data (Ted $150, Dalinah $200, Sandy $300, Pam $450,
+    all matching known figures from the firm's rate history). Used as the
+    fallback when a matter has no matter-level custom_rate override for her —
+    the firm is moving to a standard-rate system rather than maintaining
+    custom per-matter rates going forward, so this is the expected default now,
+    not just a display curiosity for the "rate unknown" cases."""
+    resp = session.get(f"{BASE_URL}/api/v4/users/{pam_user_id}.json", params={"fields": "id,rate"})
+    if resp.status_code != 200:
+        logging.warning("Could not fetch Pam's standard rate: %s %s", resp.status_code, resp.text[:200])
+        return None
+    rate = resp.json().get("data", {}).get("rate")
+    return float(rate) if rate is not None else None
+
+
 # ---------------------------------------------------------------------------
 # Build Clio API payloads
 # ---------------------------------------------------------------------------
@@ -442,6 +458,7 @@ def build_payloads(
     pam_user_id: int,
     manual_map: dict[str, int] | None = None,
     pam_rates: dict[int, float] | None = None,
+    pam_standard_rate: float | None = None,
 ) -> tuple[list[dict], list[dict]]:
     manual_map = MANUAL_MATTER_MAP if manual_map is None else manual_map
     pam_rates = pam_rates or {}
@@ -505,10 +522,18 @@ def build_payloads(
 
         # display_rate/posted_by are dashboard-only — never sent to Clio (see
         # post_entry, which POSTs payload["data"] alone, not this whole dict).
-        # For attorney entries this is Pam's actual matter-defined rate fetched
-        # via custom_rate (None if that matter has no rate on file for her);
-        # for paralegal entries it's just the same flat $150 already in "price".
-        display_rate = e.paralegal_rate if e.paralegal_rate is not None else pam_rates.get(matter_id)
+        # For attorney entries: matter-level custom_rate if that matter has one
+        # on file for Pam, else her standard rate (User.rate) — the firm is
+        # moving toward relying on the standard rate rather than maintaining
+        # per-matter overrides, so this is the real expected value now, not a
+        # fallback for missing data. Explicit "is not None" check because a
+        # genuine $0 custom rate (e.g. pro bono) must not be replaced by the
+        # standard rate. Paralegal entries just reuse the flat $150 in "price".
+        if e.paralegal_rate is not None:
+            display_rate = e.paralegal_rate
+        else:
+            matter_rate = pam_rates.get(matter_id)
+            display_rate = matter_rate if matter_rate is not None else pam_standard_rate
 
         payloads.append({"data": data, "display_rate": display_rate, "posted_by": PAM_INITIALS})
 
@@ -612,8 +637,9 @@ def run_pipeline(
     matters_raw = fetch_open_matters(session, fields=MATTERS_FIELDS_WITH_RATES)
     matters = index_by_last_name(matters_raw)
     pam_rates = index_pam_rate_by_matter_id(matters_raw, PAM_USER_ID)
+    pam_standard_rate = fetch_pam_standard_rate(session, PAM_USER_ID)
     payloads, exceptions = build_payloads(
-        all_entries, matters, PAM_USER_ID, effective_manual_matter_map(), pam_rates
+        all_entries, matters, PAM_USER_ID, effective_manual_matter_map(), pam_rates, pam_standard_rate
     )
 
     output_dir.mkdir(exist_ok=True)

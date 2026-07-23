@@ -318,11 +318,17 @@ check for that shape specifically. A shallow field selector (`custom_rate{type,r
 already returns each rate entry fully expanded (`rate`, `user{id,name}`) — a deeper
 selector like `rates{rate,user}` is rejected as invalid, don't try to nest further.
 Not every matter has a rate on file for Pam specifically (real example: `FULMER`,
-`LASHGARI`, `SWEET` on this account have rates for other staff but not her) — the
-dashboard shows "rate unknown" rather than guessing when that happens. `payload["data"]`
-is the only thing ever POSTed to Clio (`post_entry` sends `{"data": payload["data"]}`
-explicitly) — `display_rate`/`posted_by` are sibling keys on the payload dict, present
-in the local JSON output for audit purposes but never part of the API call.
+`LASHGARI`, `SWEET` on this account had rates for other staff but not her) — for those,
+`fetch_pam_standard_rate()` falls back to her standard rate (Clio's `User.rate` field,
+confirmed live 2026-07-23 against known figures — Ted $150, Dalinah $200, Sandy $300,
+Pam $450, all matching the firm's existing rate history). The firm is moving toward a
+standard-rate system rather than maintaining custom per-matter rates going forward, so
+this fallback is the expected common case now, not just a display curiosity for edge
+cases — "rate unknown" only shows if even the standard-rate fetch itself fails.
+`payload["data"]` is the only thing ever POSTed to Clio (`post_entry` sends
+`{"data": payload["data"]}` explicitly) — `display_rate`/`posted_by` are sibling keys
+on the payload dict, present in the local JSON output for audit purposes but never
+part of the API call.
 
 **Hours rounding:** Pre-rounded to nearest 0.1h using half-up rounding before sending
 to Clio (matches Clio's own billing increment; avoids post-upload surprises).
