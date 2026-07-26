@@ -61,12 +61,14 @@ clio/
 │   ├── clio_auth.py              # OAuth token management (shared)
 │   ├── matter_matching.py        # Shared name -> Clio matter ID lookup (all subprojects)
 │   ├── clio_users.py             # Clio staff directory (/users.json), cached to SQLite
-│   ├── printer_expenses.py       # Subproject 1
-│   ├── bradford_invoice.py       # Subproject 2
-│   ├── court_calendar/           # Subproject 4 — court calendar sync
+│   ├── printer_expenses.py       # Printer Expenses
+│   ├── bradford_invoice.py       # Bradford Invoice Import
+│   ├── legs_expenses.py          # Legs Expenses (OCR'd statement PDF -> ExpenseEntry)
+│   ├── court_calendar/           # Court Calendar Sync
 │   │   ├── normalizer.py         #   court-text parsing, dept/purpose normalization
 │   │   ├── clio_calendar.py      #   /calendar_entries.json client
 │   │   ├── matcher.py            #   matter-ID-first + text-fallback diff
+│   │   ├── matter_fields.py      #   live Responsible/Originating Attorney, Court Case #
 │   │   ├── store.py              #   SQLite persistence for parsed court events
 │   │   └── client_list.py        #   client court-date report (HTML + Word)
 │   └── web/                      # Dashboard — FastAPI app wrapping all subprojects
@@ -84,8 +86,9 @@ clio/
 ```
 
 Each subproject script has its own `main()` and can be run directly via `uv run src/<script>.py`.
-The web dashboard (`src/web/app.py`) wraps subprojects 1, 2, and 4 with a browser UI — see
-"Web Dashboard" below. It does not replace the CLI entry points, which still work standalone.
+The web dashboard (`src/web/app.py`) wraps Printer Expenses, Bradford Invoice Import, Legs
+Expenses, and Court Calendar Sync with a browser UI — see "Web Dashboard" below. It does not
+replace the CLI entry points, which still work standalone.
 
 ---
 
@@ -160,7 +163,7 @@ Read/Write toggleable per app):
 **This app currently has:** Matters, Activities (per the `matters activities` scope
 that already works). **Confirmed missing:** Court Rules — `GET /court_rules/*`
 returns `403 Forbidden` until it's checked in the Portal for this app (not currently
-needed — see Subproject 6, cancelled).
+needed — see Court Rules Automation, cancelled).
 
 ### Pagination gotcha
 `meta.paging.next` in a Clio API list response is a **full URL** (query params already
@@ -193,12 +196,12 @@ and `clio_users.py` both follow `next` directly for this reason.
 **App:** `src/web/app.py` (FastAPI + Jinja2 + vanilla JS — no Node/npm toolchain)
 
 **Purpose:** Browser UI for the whole repo — a home page linking to drag-and-drop versions
-of Subprojects 1 and 2, plus the Court Calendar Sync (Subproject 4). Wraps each script's
-existing `run_pipeline()` function; does not duplicate matching/posting logic.
+of Printer Expenses and Bradford Invoice Import, plus Court Calendar Sync. Wraps each
+script's existing `run_pipeline()` function; does not duplicate matching/posting logic.
 
 **Run:**
 ```powershell
-uv run uvicorn web.app:app --app-dir src --host 0.0.0.0 --port 8420
+uv run uvicorn web.app:app --app-dir src --host 0.0.0.0 --port 8421
 # or just double-click start-dashboard.bat (syncs deps, then starts)
 ```
 `--app-dir src` puts `src/` on `sys.path`, matching how the standalone scripts resolve
@@ -212,7 +215,7 @@ login system.
 **Storage:** SQLite at `data/clio_dashboard.db` (gitignored) — court events, purpose
 mappings, staff cache. No external database service.
 
-**Drag-and-drop apps (Bradford Invoice, Printer Expenses):** upload a file -> dry-run
+**Drag-and-drop apps (Bradford Invoice, Printer Expenses, Legs Expenses):** upload a file -> dry-run
 preview (payloads + exceptions, same categories as the CLI) -> "Confirm & Post" button ->
 live run. Mirrors the CLI's `--dry-run` workflow; the confirm step is the only path that
 posts to Clio.
@@ -230,7 +233,7 @@ CLIO_DASHBOARD_PASSPHRASE   # shared login passphrase
 
 ---
 
-# Subproject 1 — Printer Expenses
+# Printer Expenses
 
 **Script:** `src/printer_expenses.py`
 
@@ -238,7 +241,8 @@ CLIO_DASHBOARD_PASSPHRASE   # shared login passphrase
 
 **Input:** `data/print_copy_summary_by_account.csv` (Papercut export)
 
-**Matter lookup:** `data/clio-matters.csv` (export from Clio; refresh as needed)
+**Matter lookup:** live Clio API (`matter_matching.fetch_open_matters()` +
+`index_by_display_name()`) at run time — no matters export file to keep current.
 
 **Rate:** $0.10 per page (firm policy, hardcoded as `PRICE_PER_PAGE`)
 
@@ -256,32 +260,31 @@ When a name doesn't auto-match (different spelling, joint client, etc.), add it 
 `MANUAL_MATTER_MAP` at the top of the script:
 ```python
 MANUAL_MATTER_MAP: dict[str, int] = {
-    "COLTON": 1234567890,  # Clio matter ID from clio-matters.csv
+    "COLTON": 1234567890,  # Clio matter ID — look up display_number in Clio
 }
 ```
 
 ## Workflow
 ```powershell
 # 1. Drop new Papercut export into data/
-# 2. Refresh matter list if needed (export from Clio → data/clio-matters.csv)
 
-# 3. Dry run — check output/exceptions_YYYY-MM.csv for unmatched names
+# 2. Dry run — check output/exceptions_YYYY-MM.csv for unmatched names
 uv run src/printer_expenses.py --dry-run
 
-# 4. Fix exceptions: add matter IDs to MANUAL_MATTER_MAP, re-run dry-run
+# 3. Fix exceptions: add matter IDs to MANUAL_MATTER_MAP, re-run dry-run
 
-# 5. Live run
+# 4. Live run
 uv run src/printer_expenses.py
 ```
 
 ## Exception types
-- **No matching open matter** — client name not found in clio-matters.csv
+- **No matching open matter** — client name not found among live open Clio matters
 - **Ambiguous** — multiple open matters for same display name; add to MANUAL_MATTER_MAP
 - **Joint client** — name contains " & "; split across matters manually
 
 ---
 
-# Subproject 2 — Bradford Invoice Import
+# Bradford Invoice Import
 
 **Script:** `src/bradford_invoice.py`
 
@@ -398,7 +401,151 @@ to *future* invoice imports too, not just the one being resolved — same
 
 ---
 
-# Subproject 3 — PaperCut Shared Account Sync
+# Legs Expenses
+
+**Script:** `src/legs_expenses.py`
+
+**Purpose:** Parse Legs Legal Support, Inc.'s monthly statement PDF and post pass-through
+costs (process serving, filing, delivery, copies, deposition officer fees) to Clio as
+ExpenseEntry activities, billed **at cost** (no markup).
+
+**Input:** `data/*.pdf` (any filename — the monthly Legs statement, e.g. `June 2026.pdf`)
+
+**Vendor:** Legs Legal Support, Inc. — process serving / courier / court filing.
+
+**This PDF has zero embedded text** — confirmed via `pdfplumber`, 0 characters extracted
+per page. It's a scanned/faxed document, one full-page image per page, unlike Bradford's
+PDF which has a real text layer. Everything goes through local **Tesseract OCR**
+(`pytesseract`), not `pdfplumber.extract_text()`. Requires Tesseract installed as a
+system binary (not just a Python package) — `winget install --id UB-Mannheim.TesseractOCR
+-e` on Windows. `ensure_tesseract()` fails loud with the install command at startup if
+it's missing, and falls back to checking `C:\Program Files\Tesseract-OCR\tesseract.exe`
+directly if it's not on PATH (common gotcha — the Windows installer doesn't always add it).
+
+**Two page types, classified by content, not a hardcoded page-count split or the
+"Statement"/"Invoice" heading word** (that heading word was found to drop out of OCR
+entirely on some pages that otherwise have perfectly good content — a segmentation
+issue, not a content one). A page is a **Statement** page if it contains at least one
+recognizable `INV #L###### . Amount $X.XX` row; otherwise it's an **Invoice** page if it
+has any real content at all:
+- **Statement pages** (first few): every invoice number + amount for the month, no
+  client names. **This is the authoritative dollar-amount source** — tested and found
+  the per-page `Total` field is *not* reliably OCR'able (its position moves with how
+  many line items precede it, and it came out garbled or missing entirely on multiple
+  real pages), while the Statement's table OCR'd cleanly and completely on every row.
+- **Invoice pages** (the rest): one per invoice, one client per page. Multiple service
+  line items (`FILE/CONFORM RUSH`, `DELIVERY`, `PHOTOCOPYING/SCANNING`, `FEE ADVANCE`,
+  `PROCESS SERVING/RUSH/SPECIAL`, `DEPOSITION OFFICER FEE`, ...), used only for the
+  client identifier and a human-readable note — not machine-parsed field-by-field.
+
+**Invoice number extraction — a targeted header crop, not full-page OCR:** full-page OCR
+only recovered the "Invoice #" field on ~60% of real sample pages; cropping just that
+fixed-position header box (`HEADER_CROP_FRACTIONS`) and re-OCRing with `--psm 6`
+recovered it on 100% of the same pages. The `#L` prefix before an invoice number
+frequently misreads as `41` or `1` (`L606098` → `41606098`) but the trailing 6 digits
+themselves come through clean every time, so invoice numbers are normalized to "last 6
+digits of whatever digit run was found," never matched as an exact `L######` string.
+
+**Client identifier:** the last non-blank, non-boilerplate, name-shaped line on an
+invoice page — either a bare last name (`TANGUAY`) or a case caption (`ROGERS V
+KRINSKY`). Empirically the identifier's position even on pages where the numeric table
+got scrambled elsewhere in the OCR output. Court hearing purpose codes (`RFO`, `FRC`, …
+reused from `court_calendar.normalizer.PURPOSE_CODES`) are explicitly excluded, since
+one can appear as its own trailing line *after* the real identifier (real example: a
+`CROSSON V SAMUELS` invoice with `RFO` on the line below it).
+
+**Matching a case caption or joint identifier — try every candidate, four tiers each:**
+a caption doesn't reliably say which side is our client (real example: `CROSSON V
+SAMUELS` is filed in Clio as `SAMUELS`, not the first-listed party — mediation/divorce
+matters can be opened under either name). For each candidate name, in order:
+1. `MANUAL_MATTER_MAP` / persisted override
+2. Exact last-name match
+3. Compound-surname substring match (e.g. `FOOKS-WEBB` on the invoice vs. `WEBB` in
+   Clio) — reuses `court_calendar.normalizer.party_names_match()`, the same approach
+   already established there, rather than a new one
+4. **Opposing Party field match** — some invoices (process serving, deposition officer
+   fees) only ever name the *opposing* party, never our own client at all (real
+   example: matter `VERSTRAETE, MARY PAULA` has Opposing Party `GARRON, MARK` on file;
+   a real invoice's only identifier was the bare word `GARRON`, no caption, no other
+   text linking it back to Verstraete). `index_opposing_party_by_last_name()` pulls
+   this live via `custom_field_values{field_name,value}` (`MATTERS_FIELDS_WITH_OP`) —
+   the same nested-selector gotcha as Court Calendar Sync's Court Case Number, not a
+   plain field on the base Matter resource.
+
+Only if none of the four tiers resolve does it become an exception.
+
+**Firm overhead (excluded from client billing, not billed to any client):**
+- The monthly retainer line item — detected by the word `RETAINER` in the page body.
+- `FIRM_OVERHEAD_IDENTIFIERS` (currently `{"COLLIER"}`) — client identifiers that are
+  never a real client, because Legs falls back to the firm's own attorney name when an
+  invoice has no distinct client attached (real example: a `FILE IN RECORDERS OFFICE`
+  invoice with no case caption came through as a bare `COLLIER`). Add more identifiers
+  here as they're confirmed, rather than re-investigating the same one every month.
+
+Both categories show in the dry-run preview's own "Firm overhead" table — an explicit,
+named exclusion, not a silent drop and not a generic exception needing resolution.
+
+**Reconciliation check:** since the Statement independently lists every invoice's
+amount, every parsed invoice (matched, exception, or firm-overhead) is checked against
+it by invoice number and by total. A mismatch — a missed page, a misread amount —
+surfaces as a loud warning in both the log and the dashboard (a red banner) rather than
+silently under- or over-billing a client. This is a stronger check than Bradford gets,
+because Legs' own statement happens to give an independent total to check against.
+
+**Page thumbnails:** each invoice page also gets a small JPEG (100dpi, ~64KB,
+`save_page_thumbnail()`) saved to `output/{stem}_thumbnails/page_N.jpg`, served via the
+auth-gated `GET /legs/thumbnail/{stem}/{page}` route and shown as a clickable column in
+every dashboard table (Exceptions, Firm overhead, Matched) — click to open full-size.
+Given OCR is a real, expected error source here (unlike Bradford's clean text
+extraction), this lets staff visually spot-check a row against the actual scan before
+confirming.
+
+**Billing rule:** `price = <Legs' invoice total from the Statement>`, `quantity = 1` —
+at cost, no markup (firm decision). `payload["data"]` is the only thing ever POSTed to
+Clio (`post_entry` sends `{"data": payload["data"]}` explicitly) — `page` is a sibling
+key on the payload dict, present for the dashboard's thumbnail links but never part of
+the API call.
+
+**Outputs:**
+- `output/{stem}_payloads.json` — API payloads (always written)
+- `output/{stem}_exceptions.csv` — unmatched client identifiers (if any)
+- `output/{stem}_thumbnails/page_N.jpg` — per-invoice-page thumbnails
+- `logs/legs_expenses_YYYYMMDD.log`
+
+## Manual overrides
+Same two-tier pattern as Bradford: a `MANUAL_MATTER_MAP` constant at the top of the
+script for deliberate, reviewed, permanent overrides, plus
+`data/legs_manual_matter_map.csv` for dashboard-resolved overrides
+(`effective_manual_matter_map()`, code constant wins on conflict). Persisted overrides
+apply to *future* statements too — resolving "KARANJIA" once means it auto-resolves
+every month after, not just the statement being resolved.
+
+## Workflow
+```powershell
+# 1. Save the Legs statement PDF to data/
+
+# 2. Dry run — check log for exceptions
+uv run src/legs_expenses.py --input "data/June 2026.pdf" --dry-run
+
+# 3. Fix exceptions: add matter IDs to MANUAL_MATTER_MAP, re-run dry-run
+
+# 4. Live run
+uv run src/legs_expenses.py --input "data/June 2026.pdf"
+```
+
+## Resolving exceptions from the dashboard
+`/legs`'s exceptions table works like Bradford's (suggested-match button + manual
+resolve, same `/legs/resolve-exception` -> persisted-override -> re-run-dry-run flow),
+but the manual-entry field is a **type-to-filter matter-name search**
+(`matter_search.js` + a `tojson` Jinja2 filter registered app-wide in `web/app.py`,
+reusable by any future page) instead of a raw Matter ID field — staff know client names,
+not Clio's internal IDs. The full open-matters list (`RunResult.all_matters`, ~240
+entries) is embedded once per page load; filtering is client-side, no per-keystroke
+network call.
+
+---
+
+# PaperCut Shared Account Sync
 
 **Script:** (planned) `src/generate_papercut_accounts.py`
 
@@ -436,7 +583,7 @@ Sync runs Hourly or Overnight (nightly ~12:55am).
 
 ---
 
-# Subproject 4 — Court Calendar Sync
+# Court Calendar Sync
 
 **Modules:** `src/court_calendar/` (used through the web dashboard, `/calendar`)
 
@@ -449,7 +596,7 @@ Outlook via Microsoft Graph. Read-only: shows what's out of sync, never writes t
 
 **Matching strategy — matter-ID-first, text-fallback:**
 1. Each court event's party name resolves to a Clio matter ID via `matter_matching.py`
-   (same lookup Subprojects 1/2 use).
+   (same lookup Printer Expenses/Bradford Invoice Import use).
 2. If resolved, look for a Clio calendar entry already linked to that matter
    (`calendar_entries.json?matter_id=...`) on the same date. Compare time/dept/purpose
    (parsed from the entry's `summary`/`description`) to flag drift.
@@ -476,16 +623,37 @@ philosophy rather than adding a settings page for something that changes rarely)
 **Client court-date report:** `/calendar/client-list` (HTML preview) and
 `/calendar/client-list/download` (Word doc) — one section per client with their upcoming
 court dates plus **Responsible Attorney**, **Originating Attorney**, and **Responsible
-Staff**, pulled from `data/clio-matters.csv` (those fields aren't exposed by the Clio API
-itself, only the CSV export — keep it refreshed per Subproject 1's workflow).
+Staff**, fetched live from Clio (`court_calendar/matter_fields.py`).
 
 **Explicitly out of scope:** the Timeslips "Billing Readiness" A/R matching feature from
 `calendar-check` was dropped — Clio's own trust accounting replaces it; there's no A/R
 CSV import or `client_case_mappings`-style conflict resolution here.
 
+**Comparison reason flags:** every non-matched row in `/calendar`'s comparison table gets
+a specific `reason` (ported from `calendar-check`'s `findMismatchReason()`): "No matter in
+Clio", "Ambiguous matter", "No calendar event", "Wrong date", or a comma-joined "Time/Dept/
+Purpose mismatch" — never a blank "Missing" badge with no explanation. Full detail is a
+hover tooltip on that cell (`matcher.py`'s `changes` list, one sentence per reason).
+
+**Matter owner column, and the CSV-export myth:** `matter_fields.py` fetches
+**Responsible Attorney/Staff, Originating Attorney, and Court Case Number live** from
+Clio — a prior version of this doc claimed these weren't exposed by the API and were
+CSV-export-only (`data/clio-matters.csv`); that was wrong, just undiscovered. They're
+not plain fields on the base Matter resource (a flat `fields=` list returns nothing for
+them, same gotcha as Bradford's `custom_rate`) — Responsible/Originating Attorney and
+Responsible Staff are nested User relationships (`responsible_attorney{name}` etc.),
+and Court Case Number is a Matter custom field (`custom_field_values{field_name,value}`).
+Confirmed live 2026-07-24 against a real matter, matching the Clio UI exactly, at a time
+when `data/clio-matters.csv` had already drifted stale (last exported weeks earlier) and
+was showing wrong values for that same matter. This means `/calendar` no longer touches
+`data/clio-matters.csv` at all — no export step for any staff member to know how to run.
+The **Owner** column in the comparison table (`matcher.py`'s `matter_owner_initials`) is
+Responsible Staff if set, else Responsible Attorney, since Responsible Staff is left
+blank on plenty of matters in practice.
+
 ---
 
-# Subproject 5 — Outlook Calendar Migration
+# Outlook Calendar Migration
 
 **Modules:** `src/outlook_auth.py`, `src/outlook_calendar/`, `src/outlook_migration.py`
 
@@ -525,8 +693,9 @@ Scope is `Calendars.Read` only — nothing here writes back to Outlook.
   unambiguous forms above are recognized. Hearings are tried first; calls are a
   fallback only when no hearing-style match is found.
 - Both paths resolve to a Clio matter via `matter_matching.index_by_last_name()` — the
-  same shared lookup Subprojects 1/2/4 use. Unlike the court calendar sync, there's no
-  case number here to disambiguate a client with two open matters — those go straight
+  same shared lookup Printer Expenses/Bradford Invoice Import/Court Calendar Sync use.
+  Unlike the court calendar sync, there's no case number here to disambiguate a client
+  with two open matters — those go straight
   to the exceptions file.
 - **Known limitation:** the underlying substring party-matching (shared with the rest
   of the project) can mismatch when one client's exact last name is a literal substring
@@ -752,7 +921,7 @@ each by `outlook_recurring_availability.py` instead.
 
 ---
 
-# Subproject 6 — Court Rules Automation (cancelled)
+# Court Rules Automation (cancelled)
 
 Was planned: auto-apply Clio Court Rules to matched court events (RFO, Trial, etc.) so
 the deadline chain generates without a paralegal doing it by hand per matter. Blocked
@@ -761,7 +930,7 @@ Developer Portal) and never unblocked. **Cancelled** — no longer planned.
 
 ---
 
-# Subproject 7 — RingCentral Directory Sync
+# RingCentral Directory Sync
 
 **Script:** `src/ringcentral_directory.py`, dashboard page at `/ringcentral`
 (`src/web/routes_ringcentral.py`)
