@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block title %}Legs Expenses{% endblock %}
+{% block content %}
+<h1>Legs Expenses</h1>
+<p class="subtitle">Drag in the monthly Legs Legal Support statement PDF to preview and post expense entries.</p>
+
+<form id="upload-form" method="post" action="/legs/preview" enctype="multipart/form-data">
+  <div class="dropzone" id="dropzone">
+    <p><strong>Drag the Legs statement PDF here</strong>, or click to browse.</p>
+    <input type="file" id="file-input" name="file" accept=".pdf">
+  </div>
+</form>
+
+{% if error %}
+<div class="panel"><p class="error-text">{{ error }}</p></div>
+{% endif %}
+
+{% if result %}
+<div class="panel">
+  {% if live %}
+  <h2>Posted to Clio</h2>
+  <div class="summary-bar">
+    <div class="summary-stat"><strong>{{ result.posted }}</strong>posted</div>
+    <div class="summary-stat"><strong>{{ result.failed }}</strong>failed</div>
+  </div>
+  {% else %}
+  <h2>Dry-run preview — {{ filename }}</h2>
+  <div class="summary-bar">
+    <div class="summary-stat"><strong>{{ result.total_entries }}</strong>invoices parsed</div>
+    <div class="summary-stat"><strong>{{ result.payloads|length }}</strong>matched</div>
+    <div class="summary-stat"><strong>{{ result.exceptions|length }}</strong>exceptions</div>
+    <div class="summary-stat"><strong>{{ result.firm_overhead|length }}</strong>firm overhead</div>
+  </div>
+  {% endif %}
+
+  {% if not result.reconciliation_ok %}
+  <p class="error-text">Reconciliation mismatch — the statement's totals don't line up with what was parsed off the invoice pages. Review before posting: {{ result.reconciliation_note }}</p>
+  {% else %}
+  <p class="subtitle">Reconciliation OK — {{ result.reconciliation_note }}</p>
+  {% endif %}
+
+  {% if result.exceptions %}
+  <h3>Exceptions <span class="badge warn">needs manual resolution</span></h3>
+  <table>
+    <thead><tr><th>Page</th><th>Name</th><th>Invoice #</th><th>Amount</th><th>Reason</th><th>Suggested match</th><th>Resolve</th></tr></thead>
+    <tbody>
+      {% for e in result.exceptions %}
+      <tr>
+        <td><a href="/legs/thumbnail/{{ result.stem }}/{{ e.page }}" target="_blank"><img src="/legs/thumbnail/{{ result.stem }}/{{ e.page }}" loading="lazy" alt="Page {{ e.page }}" title="Page {{ e.page }} — click to open full size" style="width:70px;height:auto;border:1px solid var(--border);border-radius:4px;"></a></td>
+        <td>{{ e.name }}</td><td>L{{ e.invoice_number }}</td>
+        <td>${{ "%.2f"|format(e.amount) if e.amount else "" }}</td><td>{{ e.reason }}</td>
+        <td>
+          {% if e.suggested_match %}
+            {{ e.suggested_match }}{% if e.suggested_matter_id %} (matter {{ e.suggested_matter_id }}){% else %} (ambiguous){% endif %}
+          {% endif %}
+        </td>
+        <td>
+          {% if token %}
+          <div style="display:flex; align-items:center; gap:1.25rem; flex-wrap:wrap;">
+          {% if e.suggested_matter_id %}
+          <form method="post" action="/legs/resolve-exception" style="display:flex; flex-shrink:0;">
+            <input type="hidden" name="token" value="{{ token }}">
+            <input type="hidden" name="name" value="{{ e.name }}">
+            <input type="hidden" name="matter_id" value="{{ e.suggested_matter_id }}">
+            <input type="hidden" name="note" value="dashboard: used suggested match">
+            <button type="submit">Use suggested match</button>
+          </form>
+          {% endif %}
+          <form method="post" action="/legs/resolve-exception" style="display:flex; align-items:center; gap:0.4rem; flex-shrink:0;">
+            <input type="hidden" name="token" value="{{ token }}">
+            <input type="hidden" name="name" value="{{ e.name }}">
+            <input type="hidden" name="matter_id" class="matter-search-id" required>
+            <div class="matter-search">
+              <input type="text" class="matter-search-input" placeholder="Search matter name…" autocomplete="off">
+              <div class="matter-search-results"></div>
+            </div>
+            <button type="submit">Save</button>
+          </form>
+          </div>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if result.firm_overhead %}
+  <h3>Firm overhead <span class="badge">excluded — not billed to any client</span></h3>
+  <table>
+    <thead><tr><th>Page</th><th>Invoice #</th><th>Amount</th><th>Note</th></tr></thead>
+    <tbody>
+      {% for o in result.firm_overhead %}
+      <tr>
+        <td><a href="/legs/thumbnail/{{ result.stem }}/{{ o.page }}" target="_blank"><img src="/legs/thumbnail/{{ result.stem }}/{{ o.page }}" loading="lazy" alt="Page {{ o.page }}" title="Page {{ o.page }} — click to open full size" style="width:70px;height:auto;border:1px solid var(--border);border-radius:4px;"></a></td>
+        <td>L{{ o.invoice_number }}</td><td>${{ "%.2f"|format(o.amount) if o.amount else "" }}</td><td>{{ o.note }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if result.payloads %}
+  <h3>{{ "Posted entries" if live else "Matched entries" }}</h3>
+  <table>
+    <thead><tr><th>Page</th><th>Client</th><th>Date</th><th>Amount</th><th>Note</th></tr></thead>
+    <tbody>
+      {% for p in result.payloads %}
+      {% set d = p.data %}
+      <tr>
+        <td><a href="/legs/thumbnail/{{ result.stem }}/{{ p.page }}" target="_blank"><img src="/legs/thumbnail/{{ result.stem }}/{{ p.page }}" loading="lazy" alt="Page {{ p.page }}" title="Page {{ p.page }} — click to open full size" style="width:70px;height:auto;border:1px solid var(--border);border-radius:4px;"></a></td>
+        <td>{{ result.matter_names.get(d.matter.id, d.matter.id) }}</td>
+        <td>{{ d.date }}</td>
+        <td>${{ "%.2f"|format(d.price) }}</td>
+        <td>{{ d.note }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if not live and token and result.payloads %}
+  <form method="post" action="/legs/confirm" style="margin-top:1rem;">
+    <input type="hidden" name="token" value="{{ token }}">
+    <button type="submit">Confirm &amp; Post {{ result.payloads|length }} Entries to Clio</button>
+  </form>
+  {% endif %}
+</div>
+{% endif %}
+
+<script src="/static/dropzone.js"></script>
+<script>initDropzone('dropzone', 'file-input', 'upload-form');</script>
+{% if result and result.exceptions and token %}
+<script src="/static/matter_search.js"></script>
+<script>initMatterSearch({{ result.all_matters | tojson | safe }});</script>
+{% endif %}
+{% endblock %}

@@ -2,12 +2,13 @@
 app.py — Clio dashboard FastAPI application.
 
 Run:
-  uv run uvicorn web.app:app --app-dir src --host 0.0.0.0 --port 8420
+  uv run uvicorn web.app:app --app-dir src --host 0.0.0.0 --port 8421
 
 (--app-dir src puts src/ on sys.path, matching how the standalone scripts in
 this repo resolve flat imports like `import matter_matching`.)
 """
 
+import json
 import os
 import secrets
 from pathlib import Path
@@ -36,6 +37,7 @@ app.mount("/static", StaticFiles(directory=WEB_DIR / "static"), name="static")
 
 templates = Jinja2Templates(directory=WEB_DIR / "templates")
 templates.env.filters["judge_last_name"] = judge_last_name
+templates.env.filters["tojson"] = json.dumps
 
 
 @app.exception_handler(AuthRequired)
@@ -84,10 +86,12 @@ async def dashboard_home(request: Request, _: None = Depends(require_auth)):
 
 from web.routes_bradford import router as bradford_router  # noqa: E402
 from web.routes_calendar import router as calendar_router  # noqa: E402
+from web.routes_legs import router as legs_router  # noqa: E402
 from web.routes_printer import router as printer_router  # noqa: E402
 from web.routes_ringcentral import router as ringcentral_router  # noqa: E402
 
 app.include_router(bradford_router)
 app.include_router(calendar_router)
+app.include_router(legs_router)
 app.include_router(printer_router)
 app.include_router(ringcentral_router)

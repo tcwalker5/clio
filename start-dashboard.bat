@@ -7,8 +7,8 @@ echo Syncing dependencies...
 call uv sync
 
 REM Start the dashboard, listening on the LAN (not just localhost)
-echo Starting Clio Dashboard on http://0.0.0.0:8420 ...
-call uv run uvicorn web.app:app --app-dir src --host 0.0.0.0 --port 8420
+echo Starting Clio Dashboard on http://0.0.0.0:8421 ...
+call uv run uvicorn web.app:app --app-dir src --host 0.0.0.0 --port 8421
 
 REM Keep window open if it crashes immediately
 pause
