@@ -21,7 +21,11 @@ from court_calendar.clio_calendar import fetch_calendar_entries
 from court_calendar.clio_matter_update import update_matter_case_number
 from court_calendar.court_fetch import fetch_court_calendar_text
 from court_calendar.matcher import compare_events
-from court_calendar.matters_csv import index_case_numbers_by_matter_id, load_open_matter_rows
+from court_calendar.matter_fields import (
+    MATTER_SYNC_FIELDS,
+    index_case_numbers_by_matter_id,
+    index_matter_owner_by_matter_id,
+)
 from court_calendar.normalizer import parse_court_calendar_line
 from court_calendar.store import fetch_date_range, fetch_upcoming_events, get_purpose_mappings, upsert_court_events
 from matter_matching import fetch_open_matters, index_by_last_name_all
@@ -63,7 +67,6 @@ def _render_calendar_page(request: Request, **overrides):
     context = {
         "events": fetch_upcoming_events(),
         "results": None,
-        "orphaned": None,
         "error": None,
         "calendar_text": "",
         "fetch_stats": None,
@@ -120,17 +123,18 @@ async def calendar_compare(request: Request, _: None = Depends(require_auth)):
     court_events = [ce for ce in court_events if ce]
 
     session = _session()
-    matters_by_name = index_by_last_name_all(fetch_open_matters(session))
-    case_numbers_by_matter = index_case_numbers_by_matter_id(load_open_matter_rows())
+    matters = fetch_open_matters(session, fields=MATTER_SYNC_FIELDS)
+    matters_by_name = index_by_last_name_all(matters)
+    case_numbers_by_matter = index_case_numbers_by_matter_id(matters)
+    matter_owner_by_matter = index_matter_owner_by_matter_id(matters)
     purpose_mappings = get_purpose_mappings()
     clio_entries = fetch_calendar_entries(from_date, to_date, session)
     staff_directory = get_staff_directory()
 
-    results, orphaned = compare_events(court_events, clio_entries, matters_by_name, purpose_mappings,
-                                        staff_directory, case_numbers_by_matter)
+    results = compare_events(court_events, clio_entries, matters_by_name, purpose_mappings,
+                              staff_directory, case_numbers_by_matter, matter_owner_by_matter)
 
-    return _render_calendar_page(request, results=results, orphaned=orphaned,
-                                  from_date=from_date, to_date=to_date)
+    return _render_calendar_page(request, results=results, from_date=from_date, to_date=to_date)
 
 
 @router.post("/update-case-number")
@@ -148,13 +152,13 @@ async def update_case_number(
 
 @router.get("/client-list", response_class=HTMLResponse)
 async def client_list_preview(_: None = Depends(require_auth)):
-    clients = build_client_list()
+    clients = build_client_list(_session())
     return HTMLResponse(render_html(clients))
 
 
 @router.get("/client-list/download")
 async def client_list_download(_: None = Depends(require_auth)):
-    clients = build_client_list()
+    clients = build_client_list(_session())
     buf = render_docx(clients)
     filename = f"client-court-dates-{date.today().isoformat()}.docx"
     return StreamingResponse(

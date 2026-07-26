@@ -67,7 +67,7 @@
 </div>
 
 {% if results is not none %}
-<div class="panel">
+<div class="panel" id="results">
   <h2>3. Comparison — {{ from_date }} to {{ to_date }}</h2>
   {% set matched = results|selectattr("status", "equalto", "matched")|list %}
   {% set to_update = results|selectattr("status", "equalto", "to_update")|list %}
@@ -76,20 +76,30 @@
     <div class="summary-stat"><strong>{{ matched|length }}</strong>in sync</div>
     <div class="summary-stat"><strong>{{ to_update|length }}</strong>need changes</div>
     <div class="summary-stat"><strong>{{ to_create|length }}</strong>missing from Clio</div>
-    <div class="summary-stat"><strong>{{ orphaned|length }}</strong>in Clio, not on court calendar</div>
   </div>
+
+  <label style="display:flex;align-items:center;gap:0.4rem;margin-bottom:0.75rem;font-size:0.9rem;">
+    <input type="checkbox" id="exceptions-only" checked onchange="filterResults()">
+    Show only rows needing attention ({{ (to_update|length) + (to_create|length) }}) — hide the {{ matched|length }} already in sync
+  </label>
 
   <div style="overflow-x:auto;">
   <table class="nowrap">
-    <thead><tr><th>Status</th><th>Date</th><th>Time</th><th>Party</th><th>Dept</th><th>Purpose</th><th>Case #</th><th>Matched via</th><th>Attorney</th><th>Staff</th></tr></thead>
+    <thead><tr><th>Status</th><th>Reason</th><th>Date</th><th>Time</th><th>Party</th><th>Dept</th><th>Purpose</th><th>Case #</th>
+      <th title="Who owns this matter in Clio (Responsible Staff, or Responsible Attorney if Staff isn't set) — route missing/wrong rows to them">Owner</th>
+      <th>Matched via</th>
+      <th title="Attorney currently listed on the matched Clio calendar entry itself — blank when there's no entry yet (e.g. Missing rows)">On entry: Attorney</th>
+      <th title="Staff currently listed on the matched Clio calendar entry itself — blank when there's no entry yet (e.g. Missing rows)">On entry: Staff</th>
+    </tr></thead>
     <tbody>
       {% for r in results %}
-      <tr>
+      <tr data-status="{{ r.status }}">
         <td>
           {% if r.status == "matched" %}<span class="badge ok">In sync</span>
           {% elif r.status == "to_update" %}<span class="badge warn">Needs update</span>
           {% else %}<span class="badge err">Missing</span>{% endif %}
         </td>
+        <td {% if r.changes %}title="{{ r.changes|join(' | ') }}"{% endif %}>{{ r.reason or "—" }}</td>
         <td>{{ r.court_event.date }}</td>
         <td>{{ r.court_event.start_time }}</td>
         <td>{{ r.court_event.party }}</td>
@@ -115,6 +125,7 @@
           {% endif %}
           </div>
         </td>
+        <td>{{ r.matter_owner_initials or "—" }}</td>
         <td>{{ r.match_method }}</td>
         <td>{{ r.assigned_attorney_initials|join(", ") }}</td>
         <td>{{ r.assigned_staff_initials|join(", ") }}</td>
@@ -123,18 +134,6 @@
     </tbody>
   </table>
   </div>
-
-  {% if orphaned %}
-  <h3>In Clio, not on court calendar <span class="badge warn">review</span></h3>
-  <table>
-    <thead><tr><th>Date</th><th>Matter</th><th>Summary</th></tr></thead>
-    <tbody>
-      {% for o in orphaned %}
-      <tr><td>{{ o.start_at.strftime("%Y-%m-%d %H:%M") }}</td><td>{{ o.matter_display_number or "—" }}</td><td>{{ o.summary }}</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% endif %}
 </div>
 <script>
 function markCaseNumberResolved(cell, btn) {
@@ -175,6 +174,16 @@ async function updateCaseNumber(btn) {
     btn.disabled = false;
   }
 }
+
+function filterResults() {
+  const onlyExceptions = document.getElementById("exceptions-only").checked;
+  document.querySelectorAll("#results tbody tr[data-status]").forEach((row) => {
+    row.style.display = (onlyExceptions && row.dataset.status === "matched") ? "none" : "";
+  });
+}
+
+filterResults();
+document.getElementById("results").scrollIntoView({ behavior: "smooth", block: "start" });
 </script>
 {% endif %}
 {% endblock %}

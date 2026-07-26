@@ -3,22 +3,24 @@ client_list.py — Client court-date report: one section per client, listing
 their upcoming court dates plus Responsible/Originating Attorney and
 Responsible Staff. Ported from calendar-check's clientListGenerator.js.
 
-Responsible/Originating Attorney and Responsible Staff aren't exposed on the
-Clio API's Matter object — they only come through the matters CSV export
-(data/clio-matters.csv, same file printer_expenses.py/bradford_invoice.py's
-matter lookup already relies on being kept current).
+Responsible/Originating Attorney and Responsible Staff used to be pulled
+from the matters CSV export, on the (wrong) assumption they weren't exposed
+on the Clio API's Matter object — see matter_fields.py for why that's not
+true and how they're fetched live instead.
 """
 
 from dataclasses import dataclass, field
 from datetime import datetime
 from io import BytesIO
 
+import requests
 from docx import Document
 from docx.shared import Pt
 
-from court_calendar.matters_csv import load_open_matter_rows
+from court_calendar.matter_fields import MATTER_SYNC_FIELDS, index_report_fields_by_last_name
 from court_calendar.normalizer import normalize_party_name, party_names_match
 from court_calendar.store import fetch_upcoming_events
+from matter_matching import fetch_open_matters
 
 
 @dataclass
@@ -28,18 +30,6 @@ class ClientEntry:
     originating_attorney: str
     responsible_staff: str
     dates: list[dict] = field(default_factory=list)
-
-
-def _load_matter_rows() -> dict[str, dict]:
-    """LAST NAME -> matters.csv row, open matters only. First match wins on ambiguity."""
-    index: dict[str, dict] = {}
-    for row in load_open_matter_rows():
-        display = (row.get("Display Number") or "").strip()
-        if not display:
-            continue
-        last = display.split(",")[0].strip().upper()
-        index.setdefault(last, row)
-    return index
 
 
 def _match_client_row(party: str, matter_rows: dict[str, dict]) -> dict | None:
@@ -52,8 +42,9 @@ def _match_client_row(party: str, matter_rows: dict[str, dict]) -> dict | None:
     return None
 
 
-def build_client_list() -> list[ClientEntry]:
-    matter_rows = _load_matter_rows()
+def build_client_list(session: requests.Session) -> list[ClientEntry]:
+    matters = fetch_open_matters(session, fields=MATTER_SYNC_FIELDS)
+    matter_rows = index_report_fields_by_last_name(matters)
     events = fetch_upcoming_events()
 
     clients: dict[str, ClientEntry] = {}
@@ -62,13 +53,13 @@ def build_client_list() -> list[ClientEntry]:
         if not row:
             continue
 
-        display_name = (row.get("Display Number") or e["party"]).strip()
+        display_name = (row.get("display_number") or e["party"]).strip()
         if display_name not in clients:
             clients[display_name] = ClientEntry(
                 display_name=display_name,
-                responsible_attorney=(row.get("Responsible Attorney") or "").strip(),
-                originating_attorney=(row.get("Originating Attorney") or "").strip(),
-                responsible_staff=(row.get("Responsible Staff") or "").strip(),
+                responsible_attorney=row.get("responsible_attorney") or "",
+                originating_attorney=row.get("originating_attorney") or "",
+                responsible_staff=row.get("responsible_staff") or "",
             )
 
         dt = datetime.fromisoformat(e["datetime"])
