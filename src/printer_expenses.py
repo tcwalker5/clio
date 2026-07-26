@@ -51,7 +51,7 @@ MANUAL_MATTER_MAP: dict[str, int] = {
     "ONEIL, SUSAN": 1787247618,       # Clio: O'NEIL, SUSAN
     "MCCLUSKEY, MIKE": 1786836843,    # Clio: MCCLUSKEY, MICHAEL
     "VERSTRAETE, PAULA": 1786847043,  # Clio: VERSTRAETE, MARY PAULA
-    # Newer matters not yet in clio-matters.csv export
+    # Newer matters — printer account name didn't match Clio's display_number format
     "ALMEDA, TERESA": 1787471028,
     "KABBAN, LEYLA": 1789701108,
     # No first name on printer account — Colton, Ann disso matter

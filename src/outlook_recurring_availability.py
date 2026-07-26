@@ -4,7 +4,7 @@ recurring Outlook series (dog pickup, workouts, Rotary, tax reminders,
 birthdays — things that aren't client-related but do occupy real time on
 her calendar) into Clio as true recurring CalendarEntry records via the API.
 
-Why the API, not the CSV import the rest of Subproject 5 uses: Clio's CSV
+Why the API, not the CSV import the rest of Outlook Calendar Migration uses: Clio's CSV
 "Calendar events" import template has no recurrence column at all —
 recurrence only exists on the live API's `recurrence_rule` field (confirmed
 against real data, see outlook_calendar/recurrence.py's docstring). That

@@ -1,7 +1,7 @@
 """
 outlook_auth.py — Microsoft Graph OAuth token manager for the Outlook
-calendar migration (subproject 5). Mirrors clio_auth.py's structure exactly,
-targeting Microsoft's v2.0 endpoints instead of Clio's.
+Calendar Migration. Mirrors clio_auth.py's structure exactly, targeting
+Microsoft's v2.0 endpoints instead of Clio's.
 
 Reuses calendar-check's existing Azure app registration and its already
 -registered redirect URI (http://localhost:3020/api/auth/callback) — no new

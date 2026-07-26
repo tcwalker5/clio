@@ -393,8 +393,8 @@ def parse_paralegal_pages(pdf: pdfplumber.PDF) -> list[InvoiceEntry]:
 # separately "BULTIMIER" for the same BULTEMEIER client on different invoices.
 # Per this project's philosophy, an unmatched name still fails loud rather
 # than auto-posting to a guess — but attaching the closest real open-matter
-# name to the exceptions file turns "search clio-matters.csv by hand" into a
-# copy-paste into MANUAL_MATTER_MAP, which is where the actual decision stays.
+# name to the exceptions file turns "search Clio by hand" into a copy-paste
+# into MANUAL_MATTER_MAP, which is where the actual decision stays.
 # ---------------------------------------------------------------------------
 
 SUGGESTION_CUTOFF = 0.6  # difflib similarity ratio; below this, no suggestion offered

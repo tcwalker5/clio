@@ -22,15 +22,16 @@ CALENDAR_ENTRIES_ENDPOINT = f"{BASE_URL}/api/v4/calendar_entries.json"
 RETRY_DELAYS = [5, 15, 30]  # seconds, matches clio_calendar.py's pattern on 429
 
 # Heidi's Clio *Calendar* id for calendar_owner — NOT her USER_ID_HEIDI env
-# var. Those are different Clio resources (see CLAUDE.md's Subproject 4
-# notes: calendar_owner/attendees are Calendar/Attendee records, no shared ID
-# with /users.json). Found by inspecting an existing Heidi-owned calendar
-# entry's calendar_owner.id.
+# var. Those are different Clio resources (see CLAUDE.md's Court Calendar
+# Sync notes: calendar_owner/attendees are Calendar/Attendee records, no
+# shared ID with /users.json). Found by inspecting an existing Heidi-owned
+# calendar entry's calendar_owner.id.
 HEIDI_CALENDAR_ID = 8860113
 
-# calendar_entry_event_type id for "Heidi" (see CLAUDE.md, Subproject 5) —
-# set directly at creation here instead of the CSV-import path's separate
-# outlook_migration_tag.py follow-up step, since these write via the API.
+# calendar_entry_event_type id for "Heidi" (see CLAUDE.md, Outlook Calendar
+# Migration) — set directly at creation here instead of the CSV-import
+# path's separate outlook_migration_tag.py follow-up step, since these
+# write via the API.
 HEIDI_EVENT_TYPE_ID = 591618
 
 
