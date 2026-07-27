@@ -85,6 +85,11 @@ clio/
 └── CLAUDE.md
 ```
 
+**Known gap (2026-07-27, deferred, not yet fixed):** `data/` holds client PDFs, CSVs with
+PII, and the dashboard's SQLite DB, but has no `.gitignore` entry — it's only ever stayed
+out of git by nobody running `git add -A`/`git add .` on it. Add an explicit `data/`
+ignore rule so that's not just a matter of discipline.
+
 Each subproject script has its own `main()` and can be run directly via `uv run src/<script>.py`.
 The web dashboard (`src/web/app.py`) wraps Printer Expenses, Bradford Invoice Import, Legs
 Expenses, and Court Calendar Sync with a browser UI — see "Web Dashboard" below. It does not
@@ -580,6 +585,40 @@ no more manual overrides needed.
 **PaperCut sync docs:** Accounts > Shared Account Sync > Text file source.
 File location must be accessible from the PaperCut server (mapped drive or UNC path).
 Sync runs Hourly or Overnight (nightly ~12:55am).
+
+---
+
+# Future Direction — Unified Clio Integration Service (planned, not started)
+
+Idea from 2026-07-27: rather than keep adding one-off scripts for each new
+Clio-adjacent integration, consolidate the Clio-facing sync/automation pieces into one
+maintainable **Clio Integration Service** instead of several disconnected scripts —
+one platform to maintain, not many one-offs, matching the direction the firm's
+automation efforts have generally been heading.
+
+**Candidate scope:**
+- PaperCut account synchronization (the still-planned PaperCut Shared Account Sync above)
+- RingCentral contact synchronization (already built as RingCentral Directory Sync —
+  folding it in means one service owns all "keep an external system in sync with live
+  Clio matter/contact data" logic instead of a separate standalone script)
+- Matter-based print cost exports (already built as Printer Expenses)
+- Future automations building on the same live matter data — e.g. automatically
+  closing a matter's PaperCut shared account when the matter itself closes in Clio,
+  rather than leaving stale PaperCut accounts around indefinitely
+
+**Why a single service:** these all share the same underlying need — live Clio matter
+data, watching for matter/status changes, and pushing to or pulling from one external
+system — so shared scheduling and sync-state infrastructure (instead of N separate
+scheduled tasks each re-implementing their own "did anything change since last run"
+logic, the way `ringcentral_sync_runs` currently does just for RingCentral) is more
+maintainable as the number of integrations grows.
+
+**Not decided yet:** whether this becomes a new top-level module wrapping the existing
+scripts' logic, a rewrite, or a scheduler that just orchestrates the existing CLI entry
+points unchanged — revisit when this is actually picked up. Bradford Invoice Import,
+Legs Expenses, and Court Calendar Sync are deliberately **not** in scope here — they're
+document-import/comparison tools, not "keep an external system synced with Clio"
+integrations, so they don't share the same underlying problem this service would solve.
 
 ---
 
