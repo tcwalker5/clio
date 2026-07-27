@@ -39,6 +39,14 @@ templates = Jinja2Templates(directory=WEB_DIR / "templates")
 templates.env.filters["judge_last_name"] = judge_last_name
 templates.env.filters["tojson"] = json.dumps
 
+# Cache-busting query param for static assets (?v=<mtime>) — browsers were
+# found to keep serving a stale cached style.css after an edit even on a
+# plain reload, with no obvious visual sign anything was wrong (a CSS rule
+# just silently didn't apply). Computed once at process startup, which is
+# already the point any static asset edit takes effect (see CLAUDE.md's
+# "Dashboard Restart Gotcha").
+STATIC_VERSION = int((WEB_DIR / "static" / "style.css").stat().st_mtime)
+
 
 @app.exception_handler(AuthRequired)
 async def auth_required_handler(request: Request, exc: AuthRequired):
@@ -47,6 +55,7 @@ async def auth_required_handler(request: Request, exc: AuthRequired):
 
 def render(request: Request, template: str, **context):
     context.setdefault("authenticated", is_authenticated(request))
+    context.setdefault("static_version", STATIC_VERSION)
     return templates.TemplateResponse(request, template, context)
 
 

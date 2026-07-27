@@ -143,6 +143,22 @@ form.stacked input[type="text"], form.stacked input[type="password"] {
 .login-wrap { max-width: 360px; margin: 4rem auto; }
 .error-text { color: var(--err); font-size: 0.85rem; margin-top: -0.5rem; margin-bottom: 1rem; }
 
+/* margin-bottom moved from the input onto the wrapper, so the wrapper's
+   height exactly matches the input's border box — otherwise the input's
+   own margin-bottom (from the shared form.stacked rule) inflates the
+   wrapper's height and "top: 50%" on the icon centers on that taller box
+   instead of the visible input, pushing the icon down. */
+.password-field { position: relative; margin-bottom: 1rem; }
+form.stacked .password-field input[type="text"],
+form.stacked .password-field input[type="password"] { padding-right: 2.6rem; margin-bottom: 0; }
+.password-toggle {
+    position: absolute; right: 0.6rem; top: 50%; transform: translateY(-50%);
+    display: flex; align-items: center; padding: 0.2rem; cursor: pointer;
+    color: var(--text-muted); border-radius: 4px;
+}
+.password-toggle:hover { color: var(--text); }
+.password-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
 .matter-search { position: relative; }
 .matter-search-input {
     width: 12rem; padding: 0.35rem 0.5rem; border: 1px solid var(--border);
