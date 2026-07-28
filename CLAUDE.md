@@ -588,37 +588,81 @@ Sync runs Hourly or Overnight (nightly ~12:55am).
 
 ---
 
-# Future Direction — Unified Clio Integration Service (planned, not started)
+# CAP — Collier Automation Platform (planned, not started)
 
-Idea from 2026-07-27: rather than keep adding one-off scripts for each new
-Clio-adjacent integration, consolidate the Clio-facing sync/automation pieces into one
-maintainable **Clio Integration Service** instead of several disconnected scripts —
-one platform to maintain, not many one-offs, matching the direction the firm's
-automation efforts have generally been heading.
+Idea from 2026-07-27, expanded 2026-07-28: rather than keep adding one-off scripts for
+each new Clio-adjacent integration, consolidate them into one maintainable platform —
+**CAP (Collier Automation Platform)**, chosen over narrower names like "Clio Automation
+Service" because the intent is for this to eventually be the integration layer for the
+whole practice, not just a Clio-facing tool. One platform to maintain, not many one-offs.
 
-**Candidate scope:**
+**Architecture direction:** a Windows Service + Scheduler, with each integration as a
+plug-in module rather than its own standalone script:
+```
+                Clio
+                  │
+        ┌─────────┼─────────┐
+        │         │         │
+    Contacts   Matters   Activities
+        │         │         │
+        ▼         ▼         ▼
+              CAP (Windows Service + Scheduler)
+ ┌────────┬──────────┬─────────┬──────────┬───────────┐
+ │PaperCut│RingCentral│Outlook │Accounting│Reporting  │
+ └────────┴──────────┴─────────┴──────────┴───────────┘
+```
+Every module talks to Clio through **one internal API client**, not directly — a future
+Clio API change (or a repeat of this repo's own custom-field/nested-selector gotchas)
+gets fixed in one place instead of N scripts each needing the same fix separately.
+
+**Modules to fold in (already built or already planned):**
 - PaperCut account synchronization (the still-planned PaperCut Shared Account Sync above)
-- RingCentral contact synchronization (already built as RingCentral Directory Sync —
-  folding it in means one service owns all "keep an external system in sync with live
-  Clio matter/contact data" logic instead of a separate standalone script)
+- RingCentral contact synchronization (already built as RingCentral Directory Sync)
 - Matter-based print cost exports (already built as Printer Expenses)
-- Future automations building on the same live matter data — e.g. automatically
-  closing a matter's PaperCut shared account when the matter itself closes in Clio,
-  rather than leaving stale PaperCut accounts around indefinitely
+- Court Calendar Sync, upgraded from an on-demand dashboard action to a scheduled
+  morning run with an emailed report (optionally auto-fixing what it can)
 
-**Why a single service:** these all share the same underlying need — live Clio matter
-data, watching for matter/status changes, and pushing to or pulling from one external
-system — so shared scheduling and sync-state infrastructure (instead of N separate
-scheduled tasks each re-implementing their own "did anything change since last run"
-logic, the way `ringcentral_sync_runs` currently does just for RingCentral) is more
-maintainable as the number of integrations grows.
+**Explicitly not needed:** pushing Clio contacts out to individual staff phones
+(iPhone/Android). RingCentral already resolves caller name via CallerID off the
+existing Directory Sync — a separate device-level contact push would be solving an
+already-solved problem.
+
+**Candidate modules — captured for future evaluation, none of this is scoped or
+committed work yet:**
+- **Matter close cleanup** — nightly job to close/archive PaperCut accounts, document
+  folders, and shared drives for matters that just closed in Clio, instead of leaving
+  stale access around indefinitely
+- **Automatic print-cost disbursements** — Printer Expenses today is a monthly manual
+  drag-and-drop import; this would post the Clio ExpenseEntry automatically as PaperCut
+  records usage, no monthly file needed
+- **Billing intelligence** — nightly cross-check of calendar entries, phone calls, and
+  emails against entered time, flagging likely missed billable events (directly
+  supports the firm's stated collections priority)
+- **A/R automation** — aging invoice reminders escalating from client email/text ->
+  attorney notification at 60 days -> collections queue at 90
+- **Conflict-check assist** — on new-contact creation, search existing clients, related
+  contacts, and opposing parties for a possible conflict
+- **Document intelligence** — auto-route new documents to the right matter subfolder
+  by type (motions, declarations, financials, etc.)
+- **Office dashboard** — a shared-screen view of daily firm-wide stats: open matters,
+  today's hearings, new consultations, outstanding A/R, pages printed, hours entered
+  vs. missing
+- **Employee productivity summaries** — daily per-attorney/staff rollup of billable vs.
+  admin time, emails, calls, documents, appointments, estimated utilization
+- **Reception call-lookup** — on an inbound RingCentral call, look up the caller in
+  Clio and surface matter, attorney, balance due, and next hearing to reception before
+  they answer (distinct from CallerID name display, which is already solved)
+- **Matter timeline** — unify calls, emails, documents, billing entries, hearings, and
+  notes for a matter into one searchable timeline
+- **AI matter assistant** — auto-generated per-matter summary: last hearing, upcoming
+  deadlines, outstanding discovery, balance due, last client contact
 
 **Not decided yet:** whether this becomes a new top-level module wrapping the existing
 scripts' logic, a rewrite, or a scheduler that just orchestrates the existing CLI entry
-points unchanged — revisit when this is actually picked up. Bradford Invoice Import,
-Legs Expenses, and Court Calendar Sync are deliberately **not** in scope here — they're
-document-import/comparison tools, not "keep an external system synced with Clio"
-integrations, so they don't share the same underlying problem this service would solve.
+points unchanged — revisit when this is actually picked up. Bradford Invoice Import and
+Legs Expenses stay as their own document-import tools rather than CAP modules — they
+parse a contractor's PDF invoice, which isn't the "keep an external system synced with
+Clio" pattern the rest of this platform is built around.
 
 ---
 
