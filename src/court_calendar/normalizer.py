@@ -32,7 +32,7 @@ PURPOSE_PHRASES = [
 # specific codes (MSC-R, MSC-FAM) must precede their shorter prefix (MSC).
 PURPOSE_CODES = [
     "FRC", "RFO", "MSC-R", "MSC-FAM", "MSC", "CSC", "TRIAL", "SRH", "DCSS", "FSD", "EPH",
-    "TRC", "TSC", "OSC", "REV", "CMC", "HOSC", "MED", "FCSS", "CCRC", "CCON",
+    "TRC", "TSC", "OSC", "REV", "REVIEW", "CMC", "HOSC", "MED", "FCSS", "CCRC", "CCON",
     "PTR", "HRG", "S/C", "DVRO", "DV", "CONT", "CTN", "MIN", "RRC", "DR", "JUDG", "TRO",
 ]
 
@@ -72,9 +72,20 @@ def normalize_dept(dept: str | None) -> str:
 
 def normalize_purpose(raw: str, mappings: dict[str, str]) -> str:
     """
-    raw_pattern -> canonical_code lookup, mirroring normalizer.js normalizePurpose():
-    exact match, then prefix match (truncated court-text forms), then reverse-prefix
-    match, then fall back to the raw text if it's already a known code, else itself.
+    raw_pattern -> canonical_code lookup: exact match, then prefix match
+    (truncated court-text forms), then "already a known canonical code" as-is,
+    then reverse-prefix match, then fall back to the raw text itself.
+
+    The known-code check runs before the reverse-prefix match — not after, as
+    in calendar-check's original normalizePurpose() this was ported from —
+    because a short, complete, already-canonical input can be a strict prefix
+    of an unrelated longer pattern and get misclassified. Real bug found:
+    normalize_purpose("MSC", mappings) was returning "MSC-FAM" instead of
+    "MSC", because "MSC-FAM" is itself a stored raw_pattern (mapping to
+    itself) that happens to start with "MSC" — the reverse-match step
+    treated a complete code as if it were a truncated form of a different
+    one. This ordering bug was inherited from the original JS, not
+    introduced by this port.
     `mappings` is {raw_pattern: canonical_code}, e.g. from purpose_mappings table.
     """
     if not raw:
@@ -86,11 +97,11 @@ def normalize_purpose(raw: str, mappings: dict[str, str]) -> str:
     for pattern, code in mappings.items():
         if upper.startswith(pattern):
             return code
+    if upper in mappings.values():
+        return upper
     for pattern, code in mappings.items():
         if pattern.startswith(upper):
             return code
-    if upper in mappings.values():
-        return upper
     return raw.strip()
 
 
