@@ -9,7 +9,7 @@
 {% endif %}
 
 {% if imported_count is defined %}
-<div class="panel"><p>Parsed and stored {{ imported_count }} court event(s).</p></div>
+<div class="panel"><p>Saved {{ imported_count }} court date(s) — results below.</p></div>
 {% endif %}
 
 {% if fetch_stats %}
@@ -21,10 +21,10 @@
 {% endif %}
 
 <div class="panel">
-  <h2>1. Get the court calendar text</h2>
-  <p class="subtitle">Fetch directly from the SD Superior Court website, or paste a copied results page below.</p>
+  <h2>1. Get the court calendar</h2>
+  <p class="subtitle">Pick an attorney and check the court calendar against Clio.</p>
 
-  <form method="post" action="/calendar/fetch" class="stacked" style="margin-bottom:1.5rem;">
+  <form method="post" action="/calendar/fetch" class="stacked" style="margin-bottom:1rem;">
     <label for="attorney">Attorney</label>
     <div style="display:flex;gap:0.5rem;align-items:flex-start;">
       <select name="attorney" id="attorney" style="flex:1;padding:0.55rem 0.7rem;border:1px solid var(--border);border-radius:8px;">
@@ -32,43 +32,24 @@
         <option value="{{ name }}" {% if name == selected_attorney %}selected{% endif %}>{{ name }}</option>
         {% endfor %}
       </select>
-      <button type="submit">Fetch Calendar</button>
+      <button type="submit">Check Calendar</button>
     </div>
   </form>
 
-  <form method="post" action="/calendar/import" class="stacked">
-    <textarea name="calendar_text" rows="10" style="width:100%;font-family:monospace;font-size:0.85rem;" required>{{ calendar_text }}</textarea>
-    <div style="margin-top:0.75rem;"><button type="submit">Parse &amp; Store</button></div>
-  </form>
-</div>
-
-<div class="panel">
-  <h2>2. Stored upcoming events ({{ events|length }})</h2>
-  {% if events %}
-  <form method="post" action="/calendar/compare" style="display:inline-block;margin-right:0.5rem;">
-    <button type="submit">Compare with Clio Calendar</button>
-  </form>
   <a class="btn secondary" href="/calendar/client-list" target="_blank">Client Court-Date List</a>
-  <table>
-    <thead><tr><th>Date</th><th>Time</th><th>Dept</th><th>Party</th><th>P/R</th><th>Purpose</th><th>Case #</th><th>Judge</th></tr></thead>
-    <tbody>
-      {% for e in events %}
-      <tr>
-        <td>{{ e.date }}</td><td>{{ e.start_time }}</td><td>{{ e.dept }}</td>
-        <td>{{ e.party }}</td><td>{{ e.party_role or "" }}</td>
-        <td>{{ e.purpose }}</td><td>{{ e.case_number }}</td><td>{{ e.judge|judge_last_name }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% else %}
-  <p class="subtitle">No upcoming events stored yet — paste calendar text above.</p>
-  {% endif %}
+
+  <details style="margin-top:1rem;">
+    <summary style="cursor:pointer;color:var(--text-muted);font-size:0.9rem;">Or paste calendar text by hand</summary>
+    <form method="post" action="/calendar/import" class="stacked" style="margin-top:0.75rem;">
+      <textarea name="calendar_text" rows="10" style="width:100%;font-family:monospace;font-size:0.85rem;" required>{{ calendar_text }}</textarea>
+      <div style="margin-top:0.75rem;"><button type="submit">Compare with Clio</button></div>
+    </form>
+  </details>
 </div>
 
 {% if results is not none %}
 <div class="panel" id="results">
-  <h2>3. Comparison — {{ from_date }} to {{ to_date }}</h2>
+  <h2>2. Events to Review — {{ from_date }} to {{ to_date }}</h2>
   {% set matched = results|selectattr("status", "equalto", "matched")|list %}
   {% set to_update = results|selectattr("status", "equalto", "to_update")|list %}
   {% set to_create = results|selectattr("status", "equalto", "to_create")|list %}
@@ -78,22 +59,34 @@
     <div class="summary-stat"><strong>{{ to_create|length }}</strong>missing from Clio</div>
   </div>
 
-  <label style="display:flex;align-items:center;gap:0.4rem;margin-bottom:0.75rem;font-size:0.9rem;">
-    <input type="checkbox" id="exceptions-only" checked onchange="filterResults()">
-    Show only rows needing attention ({{ (to_update|length) + (to_create|length) }}) — hide the {{ matched|length }} already in sync
-  </label>
+  {% set owners = results|map(attribute="matter_owner_initials")|reject("equalto", "")|unique|sort|list %}
+  <div style="display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap;margin-bottom:0.75rem;">
+    <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.9rem;">
+      <input type="checkbox" id="exceptions-only" onchange="filterResults()">
+      Show only rows needing attention ({{ (to_update|length) + (to_create|length) }}) — hide the {{ matched|length }} already in sync
+    </label>
+    {% if owners %}
+    <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.9rem;">
+      Owner:
+      <select id="owner-filter" onchange="filterResults()" style="padding:0.3rem 0.5rem;border:1px solid var(--border);border-radius:6px;">
+        <option value="">All ({{ results|length }})</option>
+        {% for o in owners %}
+        <option value="{{ o }}">{{ o }} ({{ results|selectattr("matter_owner_initials", "equalto", o)|list|length }})</option>
+        {% endfor %}
+      </select>
+    </label>
+    {% endif %}
+  </div>
 
   <div style="overflow-x:auto;">
   <table class="nowrap">
     <thead><tr><th>Status</th><th>Reason</th><th>Date</th><th>Time</th><th>Party</th><th>Dept</th><th>Purpose</th><th>Case #</th>
       <th title="Who owns this matter in Clio (Responsible Staff, or Responsible Attorney if Staff isn't set) — route missing/wrong rows to them">Owner</th>
       <th>Matched via</th>
-      <th title="Attorney currently listed on the matched Clio calendar entry itself — blank when there's no entry yet (e.g. Missing rows)">On entry: Attorney</th>
-      <th title="Staff currently listed on the matched Clio calendar entry itself — blank when there's no entry yet (e.g. Missing rows)">On entry: Staff</th>
     </tr></thead>
     <tbody>
       {% for r in results %}
-      <tr data-status="{{ r.status }}">
+      <tr data-status="{{ r.status }}" data-owner="{{ r.matter_owner_initials }}">
         <td>
           {% if r.status == "matched" %}<span class="badge ok">In sync</span>
           {% elif r.status == "to_update" %}<span class="badge warn">Needs update</span>
@@ -127,8 +120,6 @@
         </td>
         <td>{{ r.matter_owner_initials or "—" }}</td>
         <td>{{ r.match_method }}</td>
-        <td>{{ r.assigned_attorney_initials|join(", ") }}</td>
-        <td>{{ r.assigned_staff_initials|join(", ") }}</td>
       </tr>
       {% endfor %}
     </tbody>
@@ -177,13 +168,38 @@ async function updateCaseNumber(btn) {
 
 function filterResults() {
   const onlyExceptions = document.getElementById("exceptions-only").checked;
+  const ownerFilterEl = document.getElementById("owner-filter");
+  const owner = ownerFilterEl ? ownerFilterEl.value : "";
   document.querySelectorAll("#results tbody tr[data-status]").forEach((row) => {
-    row.style.display = (onlyExceptions && row.dataset.status === "matched") ? "none" : "";
+    const hiddenByStatus = onlyExceptions && row.dataset.status === "matched";
+    const hiddenByOwner = owner && row.dataset.owner !== owner;
+    row.style.display = (hiddenByStatus || hiddenByOwner) ? "none" : "";
   });
 }
 
 filterResults();
 document.getElementById("results").scrollIntoView({ behavior: "smooth", block: "start" });
 </script>
+{% endif %}
+
+{% if events %}
+<div class="panel">
+  <h2>3. All Events ({{ events|length }})</h2>
+  <p class="subtitle">Plain list of everything on the court calendar — select and copy into an email or document if needed. <strong>Accurate as of {{ today }}.</strong></p>
+  <div style="overflow-x:auto;">
+  <table>
+    <thead><tr><th>Date</th><th>Time</th><th>Dept</th><th>Party</th><th>P/R</th><th>Purpose</th><th>Case #</th><th>Judge</th></tr></thead>
+    <tbody>
+      {% for e in events %}
+      <tr>
+        <td>{{ e.date }}</td><td>{{ e.start_time }}</td><td>{{ e.dept }}</td>
+        <td>{{ e.party }}</td><td>{{ e.party_role or "" }}</td>
+        <td>{{ e.purpose }}</td><td>{{ e.case_number }}</td><td>{{ e.judge|judge_last_name }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
 {% endif %}
 {% endblock %}
