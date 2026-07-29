@@ -482,6 +482,8 @@ class RunResult:
 
 
 def run_pipeline(output_dir: Path = Path("output"), data_dir: Path = Path("data")) -> RunResult:
+    setup_logging(Path("logs"))
+
     if not ACCESS_TOKEN:
         raise RuntimeError("CLIO_ACCESS_TOKEN not set in .env")
 
@@ -551,8 +553,6 @@ def main() -> None:
     parser.add_argument("--no-open", action="store_true",
                          help="Build the directory CSV but never open the RingCentral import page")
     args = parser.parse_args()
-
-    setup_logging(Path("logs"))
 
     try:
         result = run_pipeline()
