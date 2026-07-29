@@ -3,13 +3,28 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{% block title %}Clio Dashboard{% endblock %} — Collier Law</title>
+<meta name="theme-color" content="#12161d">
+<title>{% block title %}Dashboard{% endblock %} · CAP</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2312161d'/%3E%3Ccircle cx='16' cy='48' r='6' fill='%23e0a458'/%3E%3Ccircle cx='48' cy='16' r='6' fill='%23e0a458'/%3E%3Cpath d='M16 42 V30 H48 V22' stroke='%23e0a458' stroke-width='5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/style.css?v={{ static_version }}">
 </head>
 <body>
 {% if authenticated %}
 <header class="topbar">
-  <a class="brand" href="/">Clio Dashboard</a>
+  <a class="brand" href="/">
+    <svg class="brand-mark" width="26" height="26" viewBox="0 0 64 64" fill="none" aria-hidden="true">
+      <circle cx="16" cy="48" r="6" fill="currentColor"></circle>
+      <circle cx="48" cy="16" r="6" fill="currentColor"></circle>
+      <path d="M16 42 V30 H48 V22" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"></path>
+    </svg>
+    <span class="brand-text">
+      <span class="brand-name">CAP</span>
+      <span class="brand-tag">Collier Automation Platform</span>
+    </span>
+  </a>
   <nav>
     <a href="/calendar">Court Calendar</a>
     <a href="/bradford">Bradford Invoice</a>

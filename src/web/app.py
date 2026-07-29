@@ -29,7 +29,7 @@ from web.auth import PASSPHRASE, AuthRequired, is_authenticated, require_auth  #
 
 WEB_DIR = Path(__file__).resolve().parent
 
-app = FastAPI(title="Clio Dashboard")
+app = FastAPI(title="Collier Automation Platform")
 
 SECRET_KEY = os.getenv("CLIO_DASHBOARD_SECRET") or secrets.token_urlsafe(32)
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="lax")

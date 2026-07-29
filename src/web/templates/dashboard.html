@@ -1,29 +1,58 @@
 {% extends "base.html" %}
 {% block title %}Dashboard{% endblock %}
 {% block content %}
-<h1>Clio Dashboard</h1>
-<p class="subtitle">Custom Clio tools for Collier Law</p>
+<section class="hero">
+  <p class="eyebrow">Collier Law — Internal</p>
+  <h1>Collier Automation Platform</h1>
+  <p class="lede">Every Clio-adjacent automation this firm runs, wired into one place — invoices,
+    expenses, calendars, and directories, each its own channel in and out of Clio.</p>
+</section>
 
-<div class="card-grid">
-  <a class="card" href="/bradford">
+<div class="channel-grid">
+  <a class="channel" href="/bradford">
+    <div class="channel-head">
+      <span class="channel-code">BRD</span>
+      <span class="channel-mode">posts to clio</span>
+    </div>
     <h3>Bradford Invoice Import</h3>
     <p>Drag in the PL Bradford Law invoice PDF, preview matched time entries, then post to Clio.</p>
+    <p class="channel-flow">PDF <span class="channel-arrow">&rarr;</span> Clio</p>
   </a>
-  <a class="card" href="/printer">
+  <a class="channel" href="/printer">
+    <div class="channel-head">
+      <span class="channel-code">PRN</span>
+      <span class="channel-mode">posts to clio</span>
+    </div>
     <h3>Printer Expenses</h3>
     <p>Drag in the monthly Papercut CSV, preview matched expense entries, then post to Clio.</p>
+    <p class="channel-flow">Papercut <span class="channel-arrow">&rarr;</span> Clio</p>
   </a>
-  <a class="card" href="/legs">
+  <a class="channel" href="/legs">
+    <div class="channel-head">
+      <span class="channel-code">LEG</span>
+      <span class="channel-mode">posts to clio</span>
+    </div>
     <h3>Legs Expenses</h3>
     <p>Drag in the monthly Legs Legal Support statement PDF, preview matched expense entries, then post to Clio.</p>
+    <p class="channel-flow">PDF <span class="channel-arrow">&rarr;</span> Clio</p>
   </a>
-  <a class="card" href="/calendar">
+  <a class="channel" href="/calendar">
+    <div class="channel-head">
+      <span class="channel-code">CAL</span>
+      <span class="channel-mode readonly">read-only compare</span>
+    </div>
     <h3>Court Calendar Sync</h3>
     <p>Compare the SD Superior Court calendar against Clio calendar entries.</p>
+    <p class="channel-flow">Court site <span class="channel-arrow">&harr;</span> Clio</p>
   </a>
-  <a class="card" href="/ringcentral">
+  <a class="channel" href="/ringcentral">
+    <div class="channel-head">
+      <span class="channel-code">RC</span>
+      <span class="channel-mode">exports csv</span>
+    </div>
     <h3>RingCentral Directory</h3>
     <p>Sync the RingCentral company phone directory with Clio clients and OC/OP contacts.</p>
+    <p class="channel-flow">Clio <span class="channel-arrow">&rarr;</span> RingCentral</p>
   </a>
 </div>
 {% endblock %}
