@@ -111,9 +111,16 @@ FIRM_OVERHEAD_CLIENT_IDS: dict[int, str] = {
     2392038723: "ADMIN NON-BILLABLE",
 }
 
-TRUST_MINIMUM = 2500.00  # firm policy: target cushion (trust - WIP) per matter
-ACTION_GATE = 2000.00  # a request is only generated once cushion drops below this
+TRUST_MINIMUM = 2500.00  # firm policy: target trust balance a request tops up to
+ACTION_GATE = 2000.00  # a request is only generated once trust balance drops below this
 TRUST_REQUEST_DUE_DAYS = 14  # no firm convention yet — adjustable, not a hard policy
+
+# Clio Payments' card processing surcharge — informational only, shown next
+# to a bulk selection so staff can see the firm's fee exposure before
+# sending (trust deposits can't legally pass this fee to the client the way
+# a bill payment can, so the firm absorbs it if a client pays a trust
+# request by card). Not applied to any request amount or stored anywhere.
+CARD_FEE_RATE = 0.0295
 
 TRUST_REQUESTS_ENDPOINT = f"{BASE_URL}/api/v4/trust_requests.json"
 

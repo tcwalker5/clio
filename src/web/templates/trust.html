@@ -34,7 +34,8 @@
       <tr>
         <td>
           {% if c.state == "candidate" %}
-          <input type="checkbox" name="matter_ids" value="{{ c.matter_id }}" form="bulk-send-form">
+          <input type="checkbox" name="matter_ids" value="{{ c.matter_id }}" form="bulk-send-form"
+                 data-amount="{{ c.requested_amount }}" onchange="updateSelectionSummary()">
           {% endif %}
         </td>
         <td>
@@ -85,7 +86,13 @@
   </table>
   </div>
 
-  <form id="bulk-send-form" method="post" action="/trust/send-selected" style="margin-top:1rem;"
+  <div class="summary-bar" style="margin-top:1rem;">
+    <div class="summary-stat"><strong id="selected-count">0</strong>selected</div>
+    <div class="summary-stat"><strong id="selected-total">$0.00</strong>total requested</div>
+    <div class="summary-stat"><strong id="selected-fee">$0.00</strong>card fee risk ({{ "%.2f"|format(card_fee_rate * 100) }}%) if all paid by card</div>
+  </div>
+
+  <form id="bulk-send-form" method="post" action="/trust/send-selected" style="margin-top:0.75rem;"
         onsubmit="return confirm('Send trust requests for every checked matter? This creates real drafts in Clio.');">
     <button type="submit">Send Selected</button>
   </form>
@@ -94,8 +101,22 @@
   {% endif %}
 </div>
 <script>
+const CARD_FEE_RATE = {{ card_fee_rate }};
+
 function toggleAll(master) {
   document.querySelectorAll('input[name="matter_ids"]').forEach((cb) => { cb.checked = master.checked; });
+  updateSelectionSummary();
+}
+
+function updateSelectionSummary() {
+  const checked = document.querySelectorAll('input[name="matter_ids"]:checked');
+  let total = 0;
+  checked.forEach((cb) => { total += parseFloat(cb.dataset.amount || "0"); });
+  const fee = total * CARD_FEE_RATE;
+  const fmt = (n) => "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  document.getElementById("selected-count").textContent = checked.length;
+  document.getElementById("selected-total").textContent = fmt(total);
+  document.getElementById("selected-fee").textContent = fmt(fee);
 }
 
 function sortTable(tableId, colIndex, type, headerEl) {

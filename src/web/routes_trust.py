@@ -69,6 +69,7 @@ def _load_home(request: Request, **overrides):
         total_owed=total_owed,
         trust_minimum=trust_monitor.TRUST_MINIMUM,
         action_gate=trust_monitor.ACTION_GATE,
+        card_fee_rate=trust_monitor.CARD_FEE_RATE,
         candidates=candidates_sorted,
         to_send_count=to_send_count,
     )
