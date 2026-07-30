@@ -1144,6 +1144,87 @@ toggleable per the "App permissions" table above.
 
 ---
 
+# Trust Monitor & Replenishment Requests
+
+**Modules:** `src/trust_monitor.py`, dashboard page at `/trust`
+(`src/web/routes_trust.py`, `src/web/templates/trust.html`)
+
+**Purpose:** Two independent things on one page.
+
+1. **WIP-vs-trust monitor** (informational) — flags open matters where the
+   "cushion" (trust balance minus WIP) has dropped below $2,500, an early
+   warning that unbilled work is outpacing trust before it's even billed.
+2. **Trust replenishment request review** (the actual point of the tool) —
+   lets billing staff bulk-review and send trust top-up requests to Clio as
+   unapproved drafts (`approved: false`), with per-matter pause and target
+   override, so nothing goes out without a human clicking Send.
+
+**WIP is not `BillableMatter.unbilled_amount` alone.** That field only
+counts activity never added to *any* bill — it silently excludes activity
+already sitting on a draft or awaiting-approval bill. Confirmed live
+(matter WELLS, ANDREW): the field showed $150 vs. his real $11,275.82 WIP.
+Correct WIP = `unbilled_amount` + the total of that matter's bills in state
+`draft`/`awaiting_approval`. "Outstanding" (already invoiced, unpaid) is a
+separate figure — sum of `Bill.balance` for bills in state
+`awaiting_payment` — shown for context only, never part of either the
+monitor's cushion or a trust request.
+
+**Trust balance comes from `Matter.account_balances`** (`type == "Trust"`),
+not `BillableMatter.amount_in_trust` — the latter only returns a record for
+matters with nonzero *never-billed* activity, too narrow to use as the
+matter universe (confirmed live: 60 of 186 real matters with pending bill
+activity were entirely absent from it). `account_balances` needs the
+**Accounting** permission checked in the Developer Portal (came back
+`{"redacted": true}` before that, same signature as Bradford's `custom_rate`
+gotcha) plus the full `clio_auth.py` browser re-auth, not `--refresh`.
+
+**Requested amount is deliberately trust-balance-only, not WIP-based** —
+this took two wrong turns to land on (see project memory
+`project_trust_monitoring.md` if working on this again). The rule: a matter
+becomes a request candidate once its raw trust balance drops below
+`ACTION_GATE` ($2,000, fixed); the requested amount tops it back up to
+`TRUST_MINIMUM` ($2,500 default, overridable per matter), rounded up to the
+next $100. WIP is intentionally excluded from this calculation — billing
+stays 100% manual (Clio's own UI, monthly on the 1st + occasional ad hoc,
+with trust-application-on-approval and duplicate-billing prevention already
+built into that process) rather than this tool trying to pre-fund unbilled
+work via a trust request ahead of billing. **Outstanding balances are never
+folded into a trust request either** — trust deposits can't legally absorb
+card processing fees (would effectively skim client trust funds), but a
+direct bill payment can pass the surcharge to the client, so collecting an
+overdue bill needs its own separate flow (not built) rather than being
+mixed into a trust top-up.
+
+**Request lifecycle**, backed by two tables in `data/clio_dashboard.db`
+(`trust_matter_settings`: per-matter target override + pause, persists
+indefinitely until unpaused or the matter closes; `trust_requests`:
+lifecycle log, since Clio's API has no GET/list endpoint for TrustRequest at
+all — this table is the *only* record of what's already been requested). A
+candidate with no pending request is new; one with a pending request whose
+recorded trust balance still matches current trust is "already requested"
+(client hasn't paid yet); a real difference marks the old request stale and
+generates a fresh one.
+
+**Not yet live-tested:** no Send has ever actually fired against production
+Clio. The behavioral assumption that `approved: false` parks a TrustRequest
+for internal review without notifying the client has never been confirmed —
+do the first real send with a human watching Clio's UI before relying on it.
+
+**Deferred, not built:** email notification for the WIP early-warning (no
+email infrastructure exists anywhere in this repo yet — dashboard-only for
+now). Interim/automated bill creation was considered and explicitly
+rejected — billing stays manual.
+
+## Workflow
+```powershell
+# Read-only report (writes output/trust_monitor_YYYY-MM-DD.csv + a log)
+uv run src/trust_monitor.py
+```
+The request-review workflow (pause, target override, send) is dashboard-only
+via `/trust` — no CLI equivalent, since it's inherently interactive.
+
+---
+
 # Related Projects (legacy — do not duplicate)
 
 | Project | Path | Status |

@@ -258,6 +258,9 @@ th {
     font-family: var(--font-mono);
 }
 thead th { border-bottom: 2px solid var(--accent); }
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover { color: var(--text); }
+.sort-icon { display: inline-block; color: var(--text-muted); font-size: 0.75em; margin-left: 0.15rem; }
 
 .badge { display: inline-block; padding: 0.15rem 0.55rem; border-radius: 999px; font-size: 0.78rem; font-weight: 600; }
 .badge.ok { background: var(--ok-bg); color: var(--ok); }
@@ -284,6 +287,7 @@ form.stacked input[type="text"], form.stacked input[type="password"] {
 .login-wrap h1 { font-size: 1.4rem; }
 .login-wrap .panel { text-align: left; }
 .error-text { color: var(--err); font-size: 0.85rem; margin-top: -0.5rem; margin-bottom: 1rem; }
+.notice-text { color: var(--ok); font-size: 0.85rem; }
 
 /* margin-bottom moved from the input onto the wrapper, so the wrapper's
    height exactly matches the input's border box — otherwise the input's

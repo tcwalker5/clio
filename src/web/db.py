@@ -125,6 +125,41 @@ CREATE TABLE IF NOT EXISTS ringcentral_sync_runs (
     conflicts_path TEXT,
     snapshot_hash TEXT NOT NULL
 );
+
+-- Per-matter persisted overrides for trust replenishment requests: a target
+-- amount above the firm's $2,500 default (attorney anticipating upcoming
+-- work), and/or a pause (case winding down) that sticks across every future
+-- run until explicitly unpaused or the matter closes.
+CREATE TABLE IF NOT EXISTS trust_matter_settings (
+    matter_id INTEGER PRIMARY KEY,
+    target_amount REAL,
+    paused INTEGER NOT NULL DEFAULT 0,
+    note TEXT,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Lifecycle log of trust replenishment requests. Clio's API has no way to
+-- list TrustRequest records back (POST-only), so this is the only record of
+-- what's already been requested. Deliberately keyed on raw trust balance,
+-- not the WIP-aware "cushion" (trust - WIP) used by the separate monitor
+-- report — requests only ever top up trust itself (2026-07-30: billing
+-- stays manual/Clio-UI, this tool doesn't pre-fund WIP via trust requests).
+-- status: 'pending' (sent, awaiting client payment), 'stale' (superseded by
+-- a new request because trust moved since), 'resolved' (trust recovered to
+-- target, no longer needed).
+CREATE TABLE IF NOT EXISTS trust_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    matter_id INTEGER NOT NULL,
+    target_amount REAL NOT NULL,
+    trust_at_request REAL NOT NULL,
+    requested_amount REAL NOT NULL,
+    clio_trust_request_id INTEGER,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    resolved_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_trust_requests_matter_status ON trust_requests(matter_id, status);
 """
 
 

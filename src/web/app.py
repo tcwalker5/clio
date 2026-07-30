@@ -38,6 +38,7 @@ app.mount("/static", StaticFiles(directory=WEB_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=WEB_DIR / "templates")
 templates.env.filters["judge_last_name"] = judge_last_name
 templates.env.filters["tojson"] = json.dumps
+templates.env.filters["money"] = lambda value, decimals=2: f"{value:,.{decimals}f}"
 
 # Cache-busting query param for static assets (?v=<mtime>) — browsers were
 # found to keep serving a stale cached style.css after an edit even on a
@@ -98,9 +99,11 @@ from web.routes_calendar import router as calendar_router  # noqa: E402
 from web.routes_legs import router as legs_router  # noqa: E402
 from web.routes_printer import router as printer_router  # noqa: E402
 from web.routes_ringcentral import router as ringcentral_router  # noqa: E402
+from web.routes_trust import router as trust_router  # noqa: E402
 
 app.include_router(bradford_router)
 app.include_router(calendar_router)
 app.include_router(legs_router)
 app.include_router(printer_router)
 app.include_router(ringcentral_router)
+app.include_router(trust_router)
