@@ -200,9 +200,19 @@ and `clio_users.py` both follow `next` directly for this reason.
 
 **App:** `src/web/app.py` (FastAPI + Jinja2 + vanilla JS — no Node/npm toolchain)
 
-**Purpose:** Browser UI for the whole repo — a home page linking to drag-and-drop versions
-of Printer Expenses and Bradford Invoice Import, plus Court Calendar Sync. Wraps each
-script's existing `run_pipeline()` function; does not duplicate matching/posting logic.
+**Branding:** rebranded 2026-07-29 from "Clio Dashboard" to **Collier Automation
+Platform (CAP)** — dark ink/brass visual identity, channel-grid home page (each
+subproject shown as a "channel" with its data flow, e.g. `PDF -> Clio`). This is
+step one of the bigger "CAP" vision described later in this doc (see "CAP — Collier
+Automation Platform") — this dashboard *is* the platform, not a separate thing that
+happens to share its name; what that section still describes as unbuilt is the
+automated Windows Service + Scheduler layer on top of it.
+
+**Purpose:** Browser UI for the whole repo — a home page linking to drag-and-drop
+versions of Printer Expenses, Bradford Invoice Import, and Legs Expenses, plus Court
+Calendar Sync, RingCentral Directory Sync, and Trust Monitor & Replenishment
+Requests. Wraps each script's existing `run_pipeline()` function; does not duplicate
+matching/posting logic.
 
 **Run:**
 ```powershell
@@ -217,8 +227,11 @@ login — the Clio side already uses one shared app registration. Session is a s
 (`CLIO_DASHBOARD_SECRET`). This is LAN-only gatekeeping, not intended as a public-internet
 login system.
 
-**Storage:** SQLite at `data/clio_dashboard.db` (gitignored) — court events, purpose
-mappings, staff cache. No external database service.
+**Storage:** SQLite at `data/clio_dashboard.db` — court events, purpose mappings,
+staff cache, RingCentral sync run history, trust request settings/lifecycle. No
+external database service. **Not actually gitignored yet** — see the `data/`
+"Known gap" note under Project Structure; this file now also holds trust-request
+history, which raises the stakes on finally closing that gap.
 
 **Drag-and-drop apps (Bradford Invoice, Printer Expenses, Legs Expenses):** upload a file -> dry-run
 preview (payloads + exceptions, same categories as the CLI) -> "Confirm & Post" button ->
@@ -588,7 +601,15 @@ Sync runs Hourly or Overnight (nightly ~12:55am).
 
 ---
 
-# CAP — Collier Automation Platform (planned, not started)
+# CAP — Collier Automation Platform (dashboard is step one; Service + Scheduler not started)
+
+**Resolved 2026-07-30:** the web dashboard (`src/web/`, rebranded 2026-07-29 — see "Web
+Dashboard" above) is **step one of this vision, not a separate thing.** It already
+delivers the core goal below — one branded UI wrapping every subproject's
+`run_pipeline()`, instead of scattered one-off scripts — for on-demand/manual use. What's
+still not built is the automated half described in this section: a Windows Service +
+Scheduler layer for unattended/scheduled runs (e.g. Court Calendar Sync's still-planned
+morning run) that don't require a human to open the dashboard.
 
 Idea from 2026-07-27, expanded 2026-07-28: rather than keep adding one-off scripts for
 each new Clio-adjacent integration, consolidate them into one maintainable platform —
@@ -596,8 +617,10 @@ each new Clio-adjacent integration, consolidate them into one maintainable platf
 Service" because the intent is for this to eventually be the integration layer for the
 whole practice, not just a Clio-facing tool. One platform to maintain, not many one-offs.
 
-**Architecture direction:** a Windows Service + Scheduler, with each integration as a
-plug-in module rather than its own standalone script:
+**Architecture direction for the remaining (unattended/scheduled) piece:** a Windows
+Service + Scheduler, with each integration as a plug-in module rather than its own
+standalone script — sitting alongside the dashboard (not replacing it) for the runs
+that shouldn't need a human at the keyboard:
 ```
                 Clio
                   │
@@ -615,12 +638,19 @@ Every module talks to Clio through **one internal API client**, not directly —
 Clio API change (or a repeat of this repo's own custom-field/nested-selector gotchas)
 gets fixed in one place instead of N scripts each needing the same fix separately.
 
-**Modules to fold in (already built or already planned):**
-- PaperCut account synchronization (the still-planned PaperCut Shared Account Sync above)
-- RingCentral contact synchronization (already built as RingCentral Directory Sync)
-- Matter-based print cost exports (already built as Printer Expenses)
-- Court Calendar Sync, upgraded from an on-demand dashboard action to a scheduled
-  morning run with an emailed report (optionally auto-fixing what it can)
+**Modules to fold in — status as of 2026-07-30:**
+- PaperCut account synchronization — still just an idea, not started (see PaperCut
+  Shared Account Sync above)
+- RingCentral contact synchronization — built, has a dashboard page (`/ringcentral`)
+  *and* its own standalone daily Windows Scheduled Task (`sync-ringcentral.bat`), so
+  it already achieves "unattended scheduled run" per-subproject, just not through a
+  unified CAP service — worth noting as a pattern (one `.bat` + `schtasks` per
+  subproject) that could cover a lot of this section without a full service ever
+  getting built
+- Matter-based print cost exports — built as Printer Expenses, dashboard page only,
+  no scheduling yet
+- Court Calendar Sync — dashboard page only (on-demand); the scheduled-morning-run-
+  with-emailed-report upgrade is still not built
 
 **Explicitly not needed:** pushing Clio contacts out to individual staff phones
 (iPhone/Android). RingCentral already resolves caller name via CallerID off the
@@ -1204,6 +1234,15 @@ candidate with no pending request is new; one with a pending request whose
 recorded trust balance still matches current trust is "already requested"
 (client hasn't paid yet); a real difference marks the old request stale and
 generates a fresh one.
+
+**Credit card fee exposure:** the review table shows a live-updating summary
+(count, total requested, estimated card processing fee risk at 2.95% —
+`trust_monitor.CARD_FEE_RATE`) for whatever rows are currently checked —
+purely informational, recalculated client-side, not applied to any request
+or persisted anywhere. Exists because trust deposits can't legally pass the
+card surcharge to the client the way a direct bill payment can, so the firm
+absorbs it if a client pays a trust request by card — worth seeing before a
+large batch send, not after.
 
 **Not yet live-tested:** no Send has ever actually fired against production
 Clio. The behavioral assumption that `approved: false` parks a TrustRequest
