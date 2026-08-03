@@ -12,6 +12,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, HTMLResponse
 
 import legs_expenses
@@ -87,7 +88,7 @@ async def legs_preview(
     token = None
     try:
         _write_upload(dest, content)
-        result = legs_expenses.run_pipeline(dest, dry_run=True)
+        result = await run_in_threadpool(legs_expenses.run_pipeline, dest, dry_run=True)
         token = uuid.uuid4().hex
         PREVIEWS[token] = {"input_path": dest}
     except (FileNotFoundError, RuntimeError) as e:
@@ -123,7 +124,7 @@ async def legs_resolve_exception(
     else:
         legs_expenses.save_persisted_override(name, matter_id, note)
         try:
-            result = legs_expenses.run_pipeline(entry["input_path"], dry_run=True)
+            result = await run_in_threadpool(legs_expenses.run_pipeline, entry["input_path"], dry_run=True)
         except (FileNotFoundError, RuntimeError) as e:
             error = str(e)
 
@@ -146,7 +147,7 @@ async def legs_confirm(
         error = "This preview has expired — please upload the file again."
     else:
         try:
-            result = legs_expenses.run_pipeline(entry["input_path"], dry_run=False)
+            result = await run_in_threadpool(legs_expenses.run_pipeline, entry["input_path"], dry_run=False)
         except (FileNotFoundError, RuntimeError) as e:
             error = str(e)
 

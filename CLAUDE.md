@@ -40,13 +40,35 @@ USER_ID_DAHANN
 
 CLIO_DASHBOARD_SECRET       # web dashboard session signing key
 CLIO_DASHBOARD_PASSPHRASE  # web dashboard shared login passphrase
+
+# Outlook Calendar Migration only — see that section below
+MICROSOFT_CLIENT_ID
+MICROSOFT_CLIENT_SECRET
+MICROSOFT_TENANT_ID
+MICROSOFT_REDIRECT_URI              # http://localhost:3020/api/auth/callback (calendar-check's registered URI)
+MICROSOFT_ACCESS_TOKEN
+MICROSOFT_REFRESH_TOKEN
+MICROSOFT_CALENDAR_OWNER_EMAIL      # whose Outlook calendar to read (Heidi)
 ```
 
+**Corrected 2026-08-01 — this block was out of date on two counts:**
+1. It was missing the entire `MICROSOFT_*` group (added above) that
+   `outlook_auth.py`/`outlook_calendar/graph_client.py` actually require — anyone
+   setting up Outlook Calendar Migration from a plain `.env.example` copy would have
+   had no idea these were needed.
+2. Of the `USER_ID_*` vars, **only `USER_ID_PAM` is actually read by any script today**
+   (`bradford_invoice.py`'s `PAM_USER_ID`) — a prior version of this note claimed "two
+   scripts" used one of these each, but a code check found just the one. The other five
+   (`USER_ID_HEIDI`/`SANDY`/`DALINAH`/`TED`/`DAHANN`) aren't read anywhere in `src/` —
+   `clio_users.py`'s own docstring says it was written specifically to replace
+   hardcoded per-user env vars like these. They're kept in `.env`/`.env.example` as
+   vestigial, not active config; harmless to leave, safe to prune if this file is ever
+   cleaned up.
+
 Staff shown in the dashboard (court calendar attorney/staff assignment, matter lookups)
-come live from Clio's `/users.json` via `src/clio_users.py`, not just the `USER_ID_*` env
-vars above — those stay for the two scripts that post activities under a specific user
-(Bradford invoice's `PAM_USER_ID`). The live directory is what stays current as staff
-change, e.g. paralegals added after this file was last edited.
+come live from Clio's `/users.json` via `src/clio_users.py`, not from any `USER_ID_*` env
+var. The live directory is what stays current as staff change, e.g. paralegals added
+after this file was last edited.
 
 ---
 
@@ -66,29 +88,42 @@ clio/
 │   ├── legs_expenses.py          # Legs Expenses (OCR'd statement PDF -> ExpenseEntry)
 │   ├── court_calendar/           # Court Calendar Sync
 │   │   ├── normalizer.py         #   court-text parsing, dept/purpose normalization
+│   │   ├── court_fetch.py        #   one-click scrape of the SD Superior Court site
 │   │   ├── clio_calendar.py      #   /calendar_entries.json client
 │   │   ├── matcher.py            #   matter-ID-first + text-fallback diff
 │   │   ├── matter_fields.py      #   live Responsible/Originating Attorney, Court Case #
+│   │   ├── clio_matter_update.py #   the one write path — pushes Court Case Number to Clio
 │   │   ├── store.py              #   SQLite persistence for parsed court events
 │   │   └── client_list.py        #   client court-date report (HTML + Word)
 │   └── web/                      # Dashboard — FastAPI app wrapping all subprojects
-│       ├── app.py                #   routes, auth, dashboard home
+│       ├── app.py                #   routes, dashboard home
+│       ├── auth.py               #   shared-passphrase login, signed session cookie
 │       ├── db.py                 #   SQLite schema (data/clio_dashboard.db)
-│       ├── routes_*.py           #   one router per app (bradford/printer/calendar)
+│       ├── preview_store.py      #   in-memory dry-run-preview -> confirm-and-post handoff
+│       ├── routes_*.py           #   one router per app (bradford/printer/calendar/legs/
+│       │                         #   ringcentral/trust)
 │       ├── templates/            #   Jinja2 templates
 │       └── static/                #   CSS + drag-and-drop JS
 ├── start-dashboard.bat            # Launches the dashboard (uv sync + uvicorn)
 ├── start-dashboard-silent.vbs     # Same, without a visible console window
+├── CAP Dashboard.url              # Desktop shortcut to http://cap.lan:8421/, for staff
 ├── .env                # Credentials (gitignored)
 ├── .env.example
+├── .gitignore
 ├── pyproject.toml
 └── CLAUDE.md
 ```
 
-**Known gap (2026-07-27, deferred, not yet fixed):** `data/` holds client PDFs, CSVs with
-PII, and the dashboard's SQLite DB, but has no `.gitignore` entry — it's only ever stayed
-out of git by nobody running `git add -A`/`git add .` on it. Add an explicit `data/`
-ignore rule so that's not just a matter of discipline.
+**Known gap, corrected 2026-08-01:** the prior version of this note claimed `data/` had
+*no* `.gitignore` entry at all and stayed out of git purely by nobody running
+`git add -A`/`git add .` — that was wrong (or has since been fixed elsewhere and not
+updated here). A root `.gitignore` already exists and covers `*.csv`, `*.pdf`, `*.txt`,
+`*.db` — which catches every file actually in `data/` today except one stray
+screenshot (`.png`). The real residual gap is narrower: any file dropped into `data/`
+with an extension not on that list (a screenshot, a `.docx`, anything) would still slip
+through `git add -A` uncaught. An explicit blanket `data/` ignore rule (with narrow
+`!data/.gitkeep`-style exceptions if anything in there ever needs to be tracked) would
+close that gap for good instead of relying on the extension list staying exhaustive.
 
 Each subproject script has its own `main()` and can be run directly via `uv run src/<script>.py`.
 The web dashboard (`src/web/app.py`) wraps Printer Expenses, Bradford Invoice Import, Legs
@@ -165,10 +200,14 @@ Read/Write toggleable per app):
 | Personal injury | Medical Records Details, Medical Records, Medical Bills, Damages, Liens |
 | Clio payments | Create payment links, access resulting payment details |
 
-**This app currently has:** Matters, Activities (per the `matters activities` scope
-that already works). **Confirmed missing:** Court Rules — `GET /court_rules/*`
-returns `403 Forbidden` until it's checked in the Portal for this app (not currently
-needed — see Court Rules Automation, cancelled).
+**This app currently has:** Matters, Activities (the original `matters activities`
+scope), plus **Billing (Read)** — granted 2026-07-22 for Bradford's live matter-rate
+display, see Bradford Invoice Import below — and **Accounting** — granted 2026-07-30
+for Trust Monitor's `account_balances` fetch, see Trust Monitor & Replenishment
+Requests below. (A prior version of this note listed only Matters/Activities and
+wasn't updated as those two were added.) **Confirmed missing:** Court Rules —
+`GET /court_rules/*` returns `403 Forbidden` until it's checked in the Portal for this
+app (not currently needed — see Court Rules Automation, cancelled).
 
 ### Pagination gotcha
 `meta.paging.next` in a Clio API list response is a **full URL** (query params already
@@ -222,6 +261,30 @@ uv run uvicorn web.app:app --app-dir src --host 0.0.0.0 --port 8421
 `--app-dir src` puts `src/` on `sys.path`, matching how the standalone scripts resolve
 flat imports (`import matter_matching`, etc.) — same convention, one process.
 
+**Concurrency:** `start-dashboard.bat` launches uvicorn with no `--workers` — one process,
+one event loop, serving every LAN user. Fixed 2026-08-03: the drag-and-drop
+preview/confirm routes (Legs, Printer, Bradford) and the live-pipeline routes (Trust,
+RingCentral) originally called their subproject's `run_pipeline()` directly inside an
+`async def` handler — a fully synchronous, blocking call (Legs' page-by-page Tesseract
+OCR and everyone else's live `requests`-based Clio fetches aren't asyncio-aware) sitting
+on the one event loop thread. Confirmed live: with Legs OCR running, a *second browser
+tab* loading an unrelated page (e.g. `/calendar`) hung until the OCR finished — one
+person's upload froze the dashboard for the whole office, not just their own request.
+Every such call is now wrapped in `fastapi.concurrency.run_in_threadpool(...)` so it
+runs on a worker thread instead of the event loop. `routes_trust.py`'s `_load_home` had
+to become `async def` for this, since it's the shared re-render path after every
+mutating action. Deliberately NOT wrapped: `routes_trust.py`'s `_send_one()` (the
+Clio-POST that actually creates a TrustRequest) — it shares a `sqlite3.Connection`
+created on the request thread, and `web/db.py`'s `get_connection()` doesn't set
+`check_same_thread=False`, so handing that connection to a threadpool worker would raise
+`ProgrammingError` rather than fix anything. Its blocking window is small (a handful of
+selected matters per send, not a few-hundred-matter fetch) so it was left as future work
+rather than papered over. Adding uvicorn `--workers` instead of threadpooling was
+considered and rejected — the dashboard's dry-run-preview -> confirm handoff
+(`preview_store.PREVIEWS`) is an in-memory dict, not shared across separate worker
+processes, so multiple workers would break "Confirm & Post" whenever the confirm
+request landed on a different worker than the preview did.
+
 **Auth:** Single shared passphrase (`CLIO_DASHBOARD_PASSPHRASE` in `.env`), not per-staff
 login — the Clio side already uses one shared app registration. Session is a signed cookie
 (`CLIO_DASHBOARD_SECRET`). This is LAN-only gatekeeping, not intended as a public-internet
@@ -242,6 +305,13 @@ posts to Clio.
 machine running the dashboard and on any device that needs to reach it — no port
 forwarding or public-facing server required. The dashboard itself only ever binds to the
 LAN/Tailscale interface, never a public one.
+
+**On-LAN access:** `CAP Dashboard.url` (repo root, added 2026-07-28) is an internet
+shortcut pointed at `http://cap.lan:8421/` — meant to be copied to individual staff
+desktops or emailed as an attachment so non-technical staff double-click instead of
+typing an IP and port. `cap.lan` is a local DNS/hosts-file name resolved on the office
+LAN (not something this repo configures or documents further — it's network-side setup,
+same category as the Windows Scheduled Task registration for RingCentral sync).
 
 **New `.env` keys:**
 ```
@@ -679,9 +749,38 @@ committed work yet:**
   vs. missing
 - **Employee productivity summaries** — daily per-attorney/staff rollup of billable vs.
   admin time, emails, calls, documents, appointments, estimated utilization
-- **Reception call-lookup** — on an inbound RingCentral call, look up the caller in
-  Clio and surface matter, attorney, balance due, and next hearing to reception before
-  they answer (distinct from CallerID name display, which is already solved)
+- **Reception call-lookup / screen pop** — on an inbound RingCentral call, look up the
+  caller in Clio and surface matter info (client: balance due, trust, WIP, next court
+  date; opposing counsel/party: which matter they're opposing) to reception before they
+  answer (distinct from CallerID name display, which is already solved). Feasibility
+  discussed 2026-08-01, not scoped or started — see below.
+
+  **Trigger:** RingCentral's directory *export* is push-only (see RingCentral Directory
+  Sync above), but that's a different API surface than call events — RingCentral's
+  Notification/Subscription API supports real-time webhooks on Telephony Session events
+  (ringing, with caller ANI), which is what a screen pop would listen on. Not yet
+  verified against this account's RingCentral plan/app permissions — first thing to
+  confirm before building.
+
+  **Lookup:** needs its own phone→matter reverse index built straight from Clio contact
+  data, *not* reused from `ringcentral_directory.py`'s output CSV — that output collapses
+  contacts sharing a phone number into one merged directory row (see "Phone dedup" under
+  RingCentral Directory Sync), which loses the individual matter link a screen pop needs.
+
+  **Matter data:** trust/WIP math already exists in `trust_monitor.py` (WIP =
+  `unbilled_amount` + draft/awaiting_approval bill totals, not `unbilled_amount` alone —
+  see Trust Monitor & Replenishment Requests); next court date is a
+  `calendar_entries.json?matter_id=...` query, same as Court Calendar Sync uses.
+
+  **Main open risk — latency, not data availability:** a phone rings for maybe 15-20
+  seconds. Live-summing WIP across bill states on every ring is cutting that close.
+  Leaning toward a cached snapshot table (refreshed every few minutes, keyed by phone
+  number, same shape as `trust_requests`) that the screen pop reads instantly, rather
+  than hitting Clio live per call — revisit this tradeoff when actually scoping it.
+
+  **Also undecided:** how the pop is actually displayed at reception's desk (always-on-
+  top window vs. a dashboard browser tab pushed to via WebSocket/SSE — the dashboard is
+  currently request/response only, no server push exists yet).
 - **Matter timeline** — unify calls, emails, documents, billing entries, hearings, and
   notes for a matter into one searchable timeline
 - **AI matter assistant** — auto-generated per-matter summary: last hearing, upcoming
@@ -702,10 +801,26 @@ Clio" pattern the rest of this platform is built around.
 
 **Purpose:** Verify every SD Superior Court hearing has a matching Clio calendar entry —
 a Python/Clio port of the standalone `calendar-check` project, which compared against
-Outlook via Microsoft Graph. Read-only: shows what's out of sync, never writes to Clio.
+Outlook via Microsoft Graph. Comparison itself is read-only; **corrected 2026-08-01** —
+a prior version of this doc claimed the whole subproject never writes to Clio, but
+there is now one explicit, single-matter write path (Court Case Number, see below),
+added along with case-number reconciliation and never updated here at the time.
 
-**Input:** Pasted SD Superior Court calendar search results (same fixed-width text
-`calendar-check` scraped) — paste into the textarea on `/calendar`.
+**Input — two ways to get court text in, both feed the same comparison:**
+1. **One-click fetch** (`court_calendar/court_fetch.py`, ported from `calendar-check`'s
+   `backend/src/routes/fetch.js` + its `isTargetAttorney()` filter) — the normal path
+   now. Pick a staff name from the `/calendar` dropdown; `POST /calendar/fetch` scrapes
+   the SD Superior Court's public calendar search directly (no login needed — same
+   "public site, unauthenticated" pattern as nothing else in this repo touches, unlike
+   every other subproject which only ever talks to Clio/RingCentral/Outlook APIs) and
+   filters server-side to that attorney via `is_target_attorney()` — an AND-logic word
+   match on a normalized name, so "HEIDI COLLIER" matches "HEIDI D. COLLIER, ESQ" but a
+   bare "COLLIER" alone does not.
+2. **Manual paste** (`POST /calendar/import`, the original fixed-width-text textarea) —
+   still there as a fallback for whenever the live scrape fails or a different search is
+   needed.
+
+Both call the same `upsert_court_events()` + comparison run.
 
 **Matching strategy — matter-ID-first, text-fallback:**
 1. Each court event's party name resolves to a Clio matter ID via `matter_matching.py`
@@ -732,6 +847,14 @@ reference against `/users.json`; the name Clio reports is used as-is.
 from `calendar-check`'s original mapping list. Edit via SQLite directly if a new hearing
 type needs a code (no UI yet — matches this repo's "explicit mappings, edited directly"
 philosophy rather than adding a settings page for something that changes rarely).
+
+**The one write path — Court Case Number:** `POST /calendar/update-case-number`
+(`court_calendar/clio_matter_update.py`'s `update_matter_case_number()`) PATCHes a
+single matter's "Court Case Number" custom field, triggered by an explicit per-row
+button click in the comparison table — never automatic, never bulk. Everything else in
+`court_calendar/` only ever reads Clio. The custom field's numeric id is looked up once
+via `/custom_fields.json?parent_type=Matter&query=Court+Case+Number` and cached
+in-process (`_find_case_number_field_id()`) rather than re-fetched every call.
 
 **Client court-date report:** `/calendar/client-list` (HTML preview) and
 `/calendar/client-list/download` (Word doc) — one section per client with their upcoming

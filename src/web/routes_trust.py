@@ -22,6 +22,7 @@ from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Form, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, HTMLResponse
 
 import trust_monitor
@@ -39,12 +40,12 @@ def _render(request: Request, **overrides):
     return render(request, "trust.html", **context)
 
 
-def _load_home(request: Request, **overrides):
+async def _load_home(request: Request, **overrides):
     """Runs the full live pipeline + candidate evaluation and renders the
     page. Used for the plain GET and after every mutating action, so the
     table shown always reflects what's actually true right now."""
     try:
-        statuses = trust_monitor.run_pipeline()
+        statuses = await run_in_threadpool(trust_monitor.run_pipeline)
     except RuntimeError as e:
         return _render(request, error=str(e))
 
@@ -79,7 +80,7 @@ def _load_home(request: Request, **overrides):
 
 @router.get("", response_class=HTMLResponse)
 async def trust_home(request: Request, _: None = Depends(require_auth)):
-    return _load_home(request)
+    return await _load_home(request)
 
 
 @router.get("/download")
@@ -105,14 +106,14 @@ async def trust_set_target(
     try:
         amount = float(raw) if raw else None
     except ValueError:
-        return _load_home(request, error=f"'{target_amount}' isn't a valid dollar amount — target not saved.")
+        return await _load_home(request, error=f"'{target_amount}' isn't a valid dollar amount — target not saved.")
 
     conn = get_connection()
     try:
         trust_monitor.set_matter_target(conn, matter_id, amount, note)
     finally:
         conn.close()
-    return _load_home(request)
+    return await _load_home(request)
 
 
 @router.post("/pause", response_class=HTMLResponse)
@@ -122,7 +123,7 @@ async def trust_pause(request: Request, matter_id: int = Form(...), _: None = De
         trust_monitor.set_matter_paused(conn, matter_id, True)
     finally:
         conn.close()
-    return _load_home(request)
+    return await _load_home(request)
 
 
 @router.post("/unpause", response_class=HTMLResponse)
@@ -132,7 +133,7 @@ async def trust_unpause(request: Request, matter_id: int = Form(...), _: None = 
         trust_monitor.set_matter_paused(conn, matter_id, False)
     finally:
         conn.close()
-    return _load_home(request)
+    return await _load_home(request)
 
 
 def _send_one(conn, session, candidate) -> tuple[bool, str]:
@@ -152,7 +153,7 @@ def _send_one(conn, session, candidate) -> tuple[bool, str]:
 @router.post("/send-request", response_class=HTMLResponse)
 async def trust_send_request(request: Request, matter_id: int = Form(...), _: None = Depends(require_auth)):
     try:
-        statuses = trust_monitor.run_pipeline()
+        statuses = await run_in_threadpool(trust_monitor.run_pipeline)
     except RuntimeError as e:
         return _render(request, error=str(e))
 
@@ -175,7 +176,7 @@ async def trust_send_request(request: Request, matter_id: int = Form(...), _: No
     finally:
         conn.close()
 
-    return _load_home(request, error=error, notice=notice)
+    return await _load_home(request, error=error, notice=notice)
 
 
 @router.post("/send-selected", response_class=HTMLResponse)
@@ -187,7 +188,7 @@ async def trust_send_selected(request: Request, _: None = Depends(require_auth))
         return _load_home(request, error="No matters selected.")
 
     try:
-        statuses = trust_monitor.run_pipeline()
+        statuses = await run_in_threadpool(trust_monitor.run_pipeline)
     except RuntimeError as e:
         return _render(request, error=str(e))
 
@@ -212,4 +213,4 @@ async def trust_send_selected(request: Request, _: None = Depends(require_auth))
 
     notice = f"Sent {sent} trust request(s)." if sent else None
     error = ("Failed: " + "; ".join(failed)) if failed else None
-    return _load_home(request, notice=notice, error=error)
+    return await _load_home(request, notice=notice, error=error)

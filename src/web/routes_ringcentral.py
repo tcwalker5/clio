@@ -14,6 +14,7 @@ keyboard to click.
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, HTMLResponse
 
 import ringcentral_directory
@@ -61,7 +62,7 @@ async def ringcentral_sync(request: Request, _: None = Depends(require_auth)):
     error = None
     conflicts = None
     try:
-        result = ringcentral_directory.run_pipeline()
+        result = await run_in_threadpool(ringcentral_directory.run_pipeline)
         conflicts = result.conflicts
     except RuntimeError as e:
         error = str(e)

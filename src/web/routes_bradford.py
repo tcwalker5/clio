@@ -9,6 +9,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse
 
 import bradford_invoice
@@ -47,7 +48,7 @@ async def bradford_preview(
     error = None
     token = None
     try:
-        result = bradford_invoice.run_pipeline(dest, dry_run=True)
+        result = await run_in_threadpool(bradford_invoice.run_pipeline, dest, dry_run=True)
         token = uuid.uuid4().hex
         PREVIEWS[token] = {"input_path": dest}
     except (FileNotFoundError, RuntimeError) as e:
@@ -80,7 +81,7 @@ async def bradford_resolve_exception(
     else:
         bradford_invoice.save_persisted_override(name, matter_id, note)
         try:
-            result = bradford_invoice.run_pipeline(entry["input_path"], dry_run=True)
+            result = await run_in_threadpool(bradford_invoice.run_pipeline, entry["input_path"], dry_run=True)
         except (FileNotFoundError, RuntimeError) as e:
             error = str(e)
 
@@ -103,7 +104,7 @@ async def bradford_confirm(
         error = "This preview has expired — please upload the file again."
     else:
         try:
-            result = bradford_invoice.run_pipeline(entry["input_path"], dry_run=False)
+            result = await run_in_threadpool(bradford_invoice.run_pipeline, entry["input_path"], dry_run=False)
         except (FileNotFoundError, RuntimeError) as e:
             error = str(e)
 
