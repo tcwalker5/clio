@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}Collections{% endblock %}
+{% block content %}
+<h1>Collections</h1>
+<p class="subtitle">Bills already sent to clients that haven't been paid yet — money earned for work already done, entirely separate from the <a href="/trust">Trust Monitor</a>'s retainer tracking (that's money held for future, unearned work). Visibility only for now — no payment-request action is wired up yet.</p>
+
+{% if error %}
+<div class="panel"><p class="error-text">{{ error }}</p></div>
+{% endif %}
+
+{% if bills is not none %}
+<div class="panel" id="results">
+  <div class="summary-bar">
+    <div class="summary-stat"><strong>{{ bills|length }}</strong>unpaid bill(s)</div>
+    <div class="summary-stat"><strong>{{ overdue_count }}</strong>past due</div>
+    <div class="summary-stat"><strong>${{ total_balance|money }}</strong>total balance</div>
+  </div>
+
+  <div style="display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap;margin-bottom:0.75rem;">
+    <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.9rem;">
+      <input type="checkbox" id="overdue-only" onchange="filterResults()">
+      Show only past-due bills ({{ overdue_count }})
+    </label>
+    <a class="btn secondary" href="/collections/download">Download CSV</a>
+  </div>
+
+  {% if bills %}
+  <div style="overflow-x:auto;">
+  <table class="nowrap" id="collections-table">
+    <thead><tr>
+      <th>Status</th>
+      <th class="sortable" onclick="sortTable('collections-table', 1, 'text', this)">Matter <span class="sort-icon">&#8645;</span></th>
+      <th>Client</th><th>Bill #</th><th>Issued</th><th>Due</th>
+      <th class="sortable" onclick="sortTable('collections-table', 6, 'number', this)">Days Overdue <span class="sort-icon">&#8645;</span></th>
+      <th class="sortable" onclick="sortTable('collections-table', 7, 'number', this)">Balance <span class="sort-icon">&#8645;</span></th>
+    </tr></thead>
+    <tbody>
+      {% for b in bills %}
+      <tr data-overdue="{{ 'yes' if b.overdue else 'no' }}">
+        <td>{% if b.overdue %}<span class="badge err">{{ b.days_overdue }}d past due</span>{% else %}<span class="badge ok">Current</span>{% endif %}</td>
+        <td data-sort="{{ b.display_number }}">{{ b.display_number }}</td>
+        <td>{{ b.client_name }}</td>
+        <td>{{ b.number }}</td>
+        <td>{{ b.issued_at }}</td>
+        <td>{{ b.due_at or "—" }}</td>
+        <td data-sort="{{ b.days_overdue }}">{{ b.days_overdue }}</td>
+        <td data-sort="{{ b.balance }}">${{ b.balance|money }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="subtitle">Nothing unpaid right now.</p>
+  {% endif %}
+</div>
+<script>
+function filterResults() {
+  const onlyOverdue = document.getElementById("overdue-only").checked;
+  document.querySelectorAll("#results tbody tr[data-overdue]").forEach((row) => {
+    row.style.display = (onlyOverdue && row.dataset.overdue === "no") ? "none" : "";
+  });
+}
+filterResults();
+
+function sortTable(tableId, colIndex, type, headerEl) {
+  const table = document.getElementById(tableId);
+  const tbody = table.querySelector('tbody');
+  const rows = Array.from(tbody.querySelectorAll('tr'));
+  const ascending = headerEl.dataset.dir !== 'asc';
+
+  rows.sort((a, b) => {
+    const av = a.children[colIndex].dataset.sort;
+    const bv = b.children[colIndex].dataset.sort;
+    const cmp = type === 'number' ? (parseFloat(av) - parseFloat(bv)) : av.localeCompare(bv);
+    return ascending ? cmp : -cmp;
+  });
+  rows.forEach((row) => tbody.appendChild(row));
+
+  table.querySelectorAll('th.sortable').forEach((th) => {
+    th.dataset.dir = '';
+    th.querySelector('.sort-icon').innerHTML = '&#8645;';
+  });
+  headerEl.dataset.dir = ascending ? 'asc' : 'desc';
+  headerEl.querySelector('.sort-icon').innerHTML = ascending ? '&#9650;' : '&#9660;';
+}
+</script>
+{% endif %}
+{% endblock %}

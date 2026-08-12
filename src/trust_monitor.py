@@ -51,7 +51,13 @@ awaiting-approval bill (which was $11,125.82 of his real $11,275.82 WIP —
 the tool was showing $150). True WIP here = unbilled_amount + the total of
 that matter's bills in state draft/awaiting_approval. "Outstanding" (already
 invoiced, unpaid) is a separate figure = the balance of bills in state
-awaiting_payment — shown for context, not part of the cushion trigger.
+awaiting_payment — kept only to decide whether a genuinely dormant matter
+(zero trust, zero WIP, zero outstanding) can be skipped entirely; it is NOT
+displayed on /trust anymore. Split out 2026-08-11 (Ted) into its own page,
+/collections (collections_monitor.py) — a retainer shortfall and an overdue
+bill are different problems with different remedies (a TrustRequest can't
+legally carry the client's card fee; a direct bill payment can), and showing
+both on one table made them look related when they never were.
 
 Trust balance comes from Matter.account_balances (type "Trust"), not
 BillableMatter.amount_in_trust — confirmed live that BillableMatter only
@@ -148,7 +154,7 @@ class TrustStatus:
     client_name: str
     unbilled_amount: float  # WIP: never-billed + on a draft/awaiting-approval bill
     amount_in_trust: float
-    outstanding: float  # already invoiced, unpaid (awaiting_payment bills) — context only
+    outstanding: float  # already invoiced, unpaid (awaiting_payment bills) — used only for the dormant-matter skip check below, not displayed (see /collections)
 
     @property
     def cushion(self) -> float:
@@ -334,11 +340,11 @@ def record_trust_request(
     return cur.lastrowid
 
 
-def _round_up_to_100(amount: float) -> float:
-    """Requested amounts are rounded up to the next $100 — a clean number is
+def _round_up_to_10(amount: float) -> float:
+    """Requested amounts are rounded up to the next $10 — a clean number is
     easier for a client to write a check for than $2,537.26, and rounding up
     (never down) never leaves the matter still under target."""
-    return math.ceil(round(amount, 2) / 100.0) * 100.0
+    return math.ceil(round(amount, 2) / 10.0) * 10.0
 
 
 def evaluate_request_candidates(conn, statuses: list[TrustStatus]) -> list[TrustRequestCandidate]:
@@ -392,7 +398,7 @@ def evaluate_request_candidates(conn, statuses: list[TrustStatus]) -> list[Trust
             matter_id=s.matter_id, display_number=s.display_number,
             client_id=s.client_id, client_name=s.client_name,
             trust_balance=trust, target_amount=target,
-            requested_amount=_round_up_to_100(target - trust),
+            requested_amount=_round_up_to_10(target - trust),
             state="candidate",
         ))
 
@@ -407,7 +413,14 @@ def create_trust_request(session: requests.Session, client_id: int, matter_id: i
     should be automatically approved"). NOT YET LIVE-TESTED as of writing —
     the first real call should happen with a human watching Clio's UI to
     confirm that assumption before this is used for anything but a single
-    supervised test."""
+    supervised test.
+
+    Per-matter trust_amount is sent as an int, not a float — Clio's own
+    OpenAPI spec (clio-rate-import/data/openapi.json, POST /trust_requests.json)
+    types the top-level data.trust_amount as number/double but the nested
+    data.matter[].trust_amount as integer/int32. Amounts here are always
+    whole tens already (_round_up_to_10), so this loses no precision;
+    it just avoids handing Clio "2600.0" where it declared an integer field."""
     today = datetime.today().date()
     due = today + timedelta(days=TRUST_REQUEST_DUE_DAYS)
     amount = round(amount, 2)
@@ -419,10 +432,12 @@ def create_trust_request(session: requests.Session, client_id: int, matter_id: i
             "due_date": due.isoformat(),
             "approved": False,
             "trust_amount": amount,
-            "matter": [{"id": matter_id, "trust_amount": amount}],
+            "matter": [{"id": matter_id, "trust_amount": int(amount)}],
         }
     }
+    logging.info("POST %s matter=%s payload=%s", TRUST_REQUESTS_ENDPOINT, matter_id, payload)
     resp = session.post(TRUST_REQUESTS_ENDPOINT, json=payload)
+    logging.info("Response for matter %s: %s %s", matter_id, resp.status_code, resp.text[:500])
     if resp.status_code != 201:
         raise RuntimeError(f"Failed to create trust request for matter {matter_id}: {resp.status_code} {resp.text[:300]}")
     return resp.json()["data"]["id"]

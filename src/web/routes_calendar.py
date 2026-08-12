@@ -9,6 +9,14 @@ textarea — editing alone doesn't refresh the comparison, submitting does).
 The comparison itself is read-only (matches calendar-check's "shows what
 would change" behavior); the one write path is /update-case-number, fired
 only by an explicit button click on a mismatched or missing case-number row.
+
+Deliberately unauthenticated (no require_auth) — every route in this file,
+including the client-list report and the Court Case Number write, is
+reachable without the dashboard passphrase, unlike every other subproject's
+routes. Decision 2026-08-04: the court calendar should be usable by anyone
+on the LAN/Tailscale without a login; the passphrase still gates every other
+subproject (Bradford, Printer, Legs, RingCentral, Trust) and, once entered
+via /login, unlocks those in the same session.
 """
 
 import os
@@ -16,7 +24,7 @@ import uuid
 from datetime import date
 
 import requests
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 
 from clio_users import get_staff_directory
@@ -33,7 +41,6 @@ from court_calendar.matter_fields import (
 from court_calendar.normalizer import parse_court_calendar_line
 from court_calendar.store import fetch_date_range, fetch_upcoming_events, get_purpose_mappings, upsert_court_events
 from matter_matching import fetch_open_matters, index_by_last_name_all
-from web.auth import require_auth
 from web.preview_store import PREVIEWS
 
 router = APIRouter(prefix="/calendar", tags=["calendar"])
@@ -106,13 +113,13 @@ def _flash(context: dict) -> str:
 
 
 @router.get("", response_class=HTMLResponse)
-async def calendar_home(request: Request, token: str | None = None, _: None = Depends(require_auth)):
+async def calendar_home(request: Request, token: str | None = None):
     flashed = PREVIEWS.pop(token, {}) if token else {}
     return _render_calendar_page(request, **flashed)
 
 
 @router.post("/fetch")
-async def calendar_fetch(attorney: str = Form(...), _: None = Depends(require_auth)):
+async def calendar_fetch(attorney: str = Form(...)):
     error = None
     calendar_text = ""
     fetch_stats = None
@@ -171,7 +178,7 @@ def _run_comparison() -> dict:
 
 
 @router.post("/import")
-async def calendar_import(calendar_text: str = Form(...), _: None = Depends(require_auth)):
+async def calendar_import(calendar_text: str = Form(...)):
     parsed = [parse_court_calendar_line(line) for line in calendar_text.splitlines()]
     parsed = [ce for ce in parsed if ce]
     upsert_court_events(parsed)
@@ -181,7 +188,7 @@ async def calendar_import(calendar_text: str = Form(...), _: None = Depends(requ
 
 
 @router.post("/compare")
-async def calendar_compare(_: None = Depends(require_auth)):
+async def calendar_compare():
     token = _flash(_run_comparison())
     return RedirectResponse(url=f"/calendar?token={token}", status_code=303)
 
@@ -190,7 +197,6 @@ async def calendar_compare(_: None = Depends(require_auth)):
 async def update_case_number(
     matter_id: int = Form(...),
     case_number: str = Form(...),
-    _: None = Depends(require_auth),
 ):
     try:
         update_matter_case_number(_session(), matter_id, case_number)
@@ -200,13 +206,13 @@ async def update_case_number(
 
 
 @router.get("/client-list", response_class=HTMLResponse)
-async def client_list_preview(_: None = Depends(require_auth)):
+async def client_list_preview():
     clients = build_client_list(_session())
     return HTMLResponse(render_html(clients))
 
 
 @router.get("/client-list/download")
-async def client_list_download(_: None = Depends(require_auth)):
+async def client_list_download():
     clients = build_client_list(_session())
     buf = render_docx(clients)
     filename = f"client-court-dates-{date.today().isoformat()}.docx"

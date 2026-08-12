@@ -267,6 +267,8 @@ th.sortable:hover { color: var(--text); }
 .badge.warn { background: var(--warn-bg); color: var(--warn); }
 .badge.err { background: var(--err-bg); color: var(--err); }
 
+th.formula-op, td.formula-op { text-align: center; color: var(--text-muted); padding-left: 0.3rem; padding-right: 0.3rem; }
+
 .summary-bar { display: flex; gap: 1.5rem; margin: 1rem 0; flex-wrap: wrap; }
 .summary-stat { font-size: 0.85rem; color: var(--text-muted); }
 .summary-stat strong {

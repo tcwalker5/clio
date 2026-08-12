@@ -86,6 +86,8 @@ clio/
 │   ├── printer_expenses.py       # Printer Expenses
 │   ├── bradford_invoice.py       # Bradford Invoice Import
 │   ├── legs_expenses.py          # Legs Expenses (OCR'd statement PDF -> ExpenseEntry)
+│   ├── trust_monitor.py          # Trust Monitor & Replenishment Requests
+│   ├── collections_monitor.py    # Collections — unpaid, already-issued bills (read-only)
 │   ├── court_calendar/           # Court Calendar Sync
 │   │   ├── normalizer.py         #   court-text parsing, dept/purpose normalization
 │   │   ├── court_fetch.py        #   one-click scrape of the SD Superior Court site
@@ -101,7 +103,7 @@ clio/
 │       ├── db.py                 #   SQLite schema (data/clio_dashboard.db)
 │       ├── preview_store.py      #   in-memory dry-run-preview -> confirm-and-post handoff
 │       ├── routes_*.py           #   one router per app (bradford/printer/calendar/legs/
-│       │                         #   ringcentral/trust)
+│       │                         #   ringcentral/trust/collections)
 │       ├── templates/            #   Jinja2 templates
 │       └── static/                #   CSS + drag-and-drop JS
 ├── start-dashboard.bat            # Launches the dashboard (uv sync + uvicorn)
@@ -114,16 +116,12 @@ clio/
 └── CLAUDE.md
 ```
 
-**Known gap, corrected 2026-08-01:** the prior version of this note claimed `data/` had
-*no* `.gitignore` entry at all and stayed out of git purely by nobody running
-`git add -A`/`git add .` — that was wrong (or has since been fixed elsewhere and not
-updated here). A root `.gitignore` already exists and covers `*.csv`, `*.pdf`, `*.txt`,
-`*.db` — which catches every file actually in `data/` today except one stray
-screenshot (`.png`). The real residual gap is narrower: any file dropped into `data/`
-with an extension not on that list (a screenshot, a `.docx`, anything) would still slip
-through `git add -A` uncaught. An explicit blanket `data/` ignore rule (with narrow
-`!data/.gitkeep`-style exceptions if anything in there ever needs to be tracked) would
-close that gap for good instead of relying on the extension list staying exhaustive.
+**Gap closed 2026-08-12:** `data/` used to be covered only by extension-specific
+`.gitignore` rules (`*.csv`, `*.pdf`, `*.txt`, `*.db`), which missed anything with a
+different extension dropped in there — confirmed for real during a commit that found a
+`.JPG` and two `.png` screenshots sitting alongside real client billing PDFs/CSVs/the
+dashboard DB, none of them csv/pdf/txt/db. `.gitignore` now has a blanket `data/` entry
+instead, so nothing in this directory can be added by accident regardless of extension.
 
 Each subproject script has its own `main()` and can be run directly via `uv run src/<script>.py`.
 The web dashboard (`src/web/app.py`) wraps Printer Expenses, Bradford Invoice Import, Legs
@@ -288,13 +286,21 @@ request landed on a different worker than the preview did.
 **Auth:** Single shared passphrase (`CLIO_DASHBOARD_PASSPHRASE` in `.env`), not per-staff
 login — the Clio side already uses one shared app registration. Session is a signed cookie
 (`CLIO_DASHBOARD_SECRET`). This is LAN-only gatekeeping, not intended as a public-internet
-login system.
+login system. Auth is applied per-route (`Depends(require_auth)` in each `routes_*.py`),
+not as blanket middleware — **2026-08-04: every route under `/calendar` (Court Calendar
+Sync — see that section — including its client-list report and the Court Case Number
+write) deliberately has no `require_auth` at all**, by explicit decision, so the court
+calendar is usable by anyone on the LAN/Tailscale without logging in. Every other
+subproject (Bradford, Printer, Legs, RingCentral, Trust) still requires the passphrase;
+logging in via `/login` sets one session cookie for the whole app, so entering the
+passphrase from anywhere unlocks those too in the same session. `base.html`'s topbar
+reflects this: authenticated sessions get the full nav, unauthenticated visitors (outside
+`/login`) get a minimal one with just "Court Calendar" and "Log in".
 
 **Storage:** SQLite at `data/clio_dashboard.db` — court events, purpose mappings,
 staff cache, RingCentral sync run history, trust request settings/lifecycle. No
-external database service. **Not actually gitignored yet** — see the `data/`
-"Known gap" note under Project Structure; this file now also holds trust-request
-history, which raises the stakes on finally closing that gap.
+external database service. Gitignored via the blanket `data/` rule — see the
+"Gap closed" note under Project Structure.
 
 **Drag-and-drop apps (Bradford Invoice, Printer Expenses, Legs Expenses):** upload a file -> dry-run
 preview (payloads + exceptions, same categories as the CLI) -> "Confirm & Post" button ->
@@ -805,6 +811,14 @@ Outlook via Microsoft Graph. Comparison itself is read-only; **corrected 2026-08
 a prior version of this doc claimed the whole subproject never writes to Clio, but
 there is now one explicit, single-matter write path (Court Case Number, see below),
 added along with case-number reconciliation and never updated here at the time.
+
+**Auth — deliberately open, unlike every other subproject (2026-08-04):** every route
+under `/calendar` in `routes_calendar.py`, including the client court-date list/report
+and the Court Case Number write, has no `require_auth` dependency — no dashboard
+passphrase needed. This was an explicit decision so the court calendar can be used by
+anyone on the LAN/Tailscale, while the dashboard passphrase still gates every other
+subproject (Bradford, Printer, Legs, RingCentral, Trust); logging in still unlocks those
+in the same browser session (see "Auth" under Web Dashboard above).
 
 **Input — two ways to get court text in, both feed the same comparison:**
 1. **One-click fetch** (`court_calendar/court_fetch.py`, ported from `calendar-check`'s
@@ -1317,10 +1331,16 @@ counts activity never added to *any* bill — it silently excludes activity
 already sitting on a draft or awaiting-approval bill. Confirmed live
 (matter WELLS, ANDREW): the field showed $150 vs. his real $11,275.82 WIP.
 Correct WIP = `unbilled_amount` + the total of that matter's bills in state
-`draft`/`awaiting_approval`. "Outstanding" (already invoiced, unpaid) is a
-separate figure — sum of `Bill.balance` for bills in state
-`awaiting_payment` — shown for context only, never part of either the
-monitor's cushion or a trust request.
+`draft`/`awaiting_approval`. An "outstanding" figure (already invoiced,
+unpaid — sum of `Bill.balance` for bills in state `awaiting_payment`) is
+still fetched internally, but only to decide whether a matter with zero
+trust/WIP/outstanding activity can be skipped entirely — **it is no longer
+displayed on this page.** It used to sit in a column next to the cushion
+math (labeled "Outstanding"), which read as if it were part of the same
+calculation when it never was. Split out 2026-08-11 into its own page — see
+"Collections" below — since a retainer shortfall and an overdue bill are
+different problems with different remedies (a TrustRequest can't legally
+carry the client's card processing fee; a direct bill payment can).
 
 **Trust balance comes from `Matter.account_balances`** (`type == "Trust"`),
 not `BillableMatter.amount_in_trust` — the latter only returns a record for
@@ -1337,7 +1357,7 @@ this took two wrong turns to land on (see project memory
 becomes a request candidate once its raw trust balance drops below
 `ACTION_GATE` ($2,000, fixed); the requested amount tops it back up to
 `TRUST_MINIMUM` ($2,500 default, overridable per matter), rounded up to the
-next $100. WIP is intentionally excluded from this calculation — billing
+next $10. WIP is intentionally excluded from this calculation — billing
 stays 100% manual (Clio's own UI, monthly on the 1st + occasional ad hoc,
 with trust-application-on-approval and duplicate-billing prevention already
 built into that process) rather than this tool trying to pre-fund unbilled
@@ -1367,10 +1387,57 @@ card surcharge to the client the way a direct bill payment can, so the firm
 absorbs it if a client pays a trust request by card — worth seeing before a
 large batch send, not after.
 
-**Not yet live-tested:** no Send has ever actually fired against production
-Clio. The behavioral assumption that `approved: false` parks a TrustRequest
-for internal review without notifying the client has never been confirmed —
-do the first real send with a human watching Clio's UI before relying on it.
+**Live sending is BLOCKED and on hold as of 2026-08-12 — every real attempt
+so far has failed with a 400.** `approved: false` draft-not-notify behavior
+is therefore still entirely unconfirmed; no TrustRequest has ever
+successfully reached Clio through this code.
+
+**First attempt (2026-08-04)**, OCHOA, EVA (matter 1786839078): root cause
+found — `create_trust_request()` sent every amount as a Python float
+everywhere, but Clio's own OpenAPI spec (`/trust_requests.json` POST) types
+the **nested** `data.matter[].trust_amount` as `integer`/int32 while the
+**top-level** `data.trust_amount` is `number`/double — the code was handing
+Clio `2600.0` where it declared an integer field. Fixed by casting only the
+per-matter amount to `int` (amounts are always whole tens already, via
+`_round_up_to_10`, so no precision is lost). Also fixed in the same pass:
+`create_trust_request()` previously logged nothing at all on the
+request/response, which is why the dashboard error only ever showed `"400"`
+with no body text — it now logs the full payload and Clio's response
+body/status before raising.
+
+**Second attempt (2026-08-12)**, WELLS, ANDREW (matter 1786847613, requested
+$7,560, the int-cast fix from above already in place): still a 400, on every
+retry (five real attempts logged, including after a full OAuth re-auth
+mid-session — see below). This time `resp.text` came back completely empty
+(`Content-Length: 0`), not the `{"error": {...}}` shape Clio normally
+returns — confirmed live that a deliberately malformed payload (missing
+`data` entirely) *does* get a proper JSON error body, so the endpoint can
+render errors; something about a well-formed TrustRequest specifically
+short-circuits before that. A shape-valid payload with a bogus/nonexistent
+`client_id`/`matter.id` produces the exact same empty 400 as the real
+WELLS request, which is why the leading theory is a permission/authorization
+gate firing before Clio even checks whether the referenced records exist —
+not a data problem with this specific matter (independently confirmed live:
+matter Open, `client.id` matches, client is a Person with a valid email).
+
+**Permissions ruled out so far:** Billing was already Read/Write. Accounting
+was Read-only (granted 2026-07-30 for reading `account_balances`) and was
+changed to Read/Write on 2026-08-12, followed by a full `clio_auth.py`
+re-auth (not `--refresh`) — confirmed the token actually rotated
+(`.env` mtime moved to match), and the 400 was unchanged across multiple
+retries afterward. **Payment distributions** (Clio's own description:
+"Payment info on bills, trust payments, credit memos, allocations" — the
+closest textual match to TrustRequest of anything in the permission list)
+had not yet been tried as of when this was put on hold — that's the next
+thing to flip, if picked back up.
+
+**Escalated to Clio API support** (`api@clio.com`) on 2026-08-12 with the
+full diagnostic writeup above, since public Clio docs (docs.developers.clio.com)
+don't document a permission-to-endpoint mapping and the support-article
+pages require a login this project can't get past. **Work is paused pending
+their reply** — don't attempt further live sends without first checking
+whether that reply narrowed things down, to avoid burning more guesses on
+permission checkboxes blind.
 
 **Deferred, not built:** email notification for the WIP early-warning (no
 email infrastructure exists anywhere in this repo yet — dashboard-only for
@@ -1384,6 +1451,44 @@ uv run src/trust_monitor.py
 ```
 The request-review workflow (pause, target override, send) is dashboard-only
 via `/trust` — no CLI equivalent, since it's inherently interactive.
+
+---
+
+# Collections
+
+**Modules:** `src/collections_monitor.py`, dashboard page at `/collections`
+(`src/web/routes_collections.py`, `src/web/templates/collections.html`)
+
+**Purpose:** Answers "who owes money for work already billed?" — the
+counterpart to Trust Monitor's "who's low on retainer for future work?"
+Split into its own page 2026-08-11 (Ted): the two are different problems
+with different remedies. A trust replenishment request tops up money held
+for *future, unearned* work, and can't legally carry the client's card
+processing fee. Collecting an overdue bill is a payment for work *already
+done*, and the firm can pass that surcharge to the client. `/trust` used to
+show both on one table (an "Outstanding" column bolted onto the WIP/cushion
+formula) — that read as if the two numbers were related, when they never
+were.
+
+**Data:** every Clio `Bill` in `state = awaiting_payment`, one row per bill
+(not aggregated per matter — staff following up need to see which specific
+invoice is overdue). `days_overdue` is computed client-side from `due_at`
+vs. today; a bill not yet past its due date shows as "Current," not
+flagged.
+
+**Visibility-only, no send action** — same incremental path Trust Monitor
+itself started on (report first, action later). An actual "request
+payment" action — a payable link the client can pay by card — would need
+the **Clio Payments** permission, not currently granted to this app's
+Developer Portal registration (see the App Permissions table above).
+Nothing here writes to Clio at all.
+
+## Workflow
+```powershell
+# Read-only report (writes output/collections_monitor_YYYY-MM-DD.csv + a log)
+uv run src/collections_monitor.py
+```
+Or just visit `/collections` — same live pipeline, rendered as a table.
 
 ---
 

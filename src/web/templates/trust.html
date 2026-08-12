@@ -2,7 +2,7 @@
 {% block title %}Trust Monitor{% endblock %}
 {% block content %}
 <h1>Trust Monitor</h1>
-<p class="subtitle">Two independent things: trust replenishment requests (below), based purely on each matter's raw trust balance — a request is only generated once trust drops below ${{ action_gate|money(0) }}, topping up to ${{ trust_minimum|money(0) }} — and an early-warning monitor (further down) for matters where unbilled work (WIP) is outpacing trust, before it's even billed. Billing itself stays entirely manual, done through Clio's own UI on the firm's normal cycle.</p>
+<p class="subtitle">Two independent things: trust replenishment requests (below), based purely on each matter's raw trust balance — a request is only generated once trust drops below ${{ action_gate|money(0) }}, topping up to ${{ trust_minimum|money(0) }} — and an early-warning monitor (further down) for matters where unbilled work (WIP) is outpacing trust, before it's even billed. Billing itself stays entirely manual, done through Clio's own UI on the firm's normal cycle. This page is retainer-only — for clients who owe money on bills already sent, see <a href="/collections">Collections</a>.</p>
 
 {% if error %}
 <div class="panel"><p class="error-text">{{ error }}</p></div>
@@ -165,20 +165,24 @@ function sortTable(tableId, colIndex, type, headerEl) {
     <thead><tr>
       <th>Status</th>
       <th class="sortable" onclick="sortTable('monitor-table', 1, 'text', this)">Matter <span class="sort-icon">&#8645;</span></th>
-      <th>WIP</th><th>In Trust</th>
-      <th class="sortable" onclick="sortTable('monitor-table', 4, 'number', this)">Cushion <span class="sort-icon">&#8645;</span></th>
-      <th>Owed</th><th>Outstanding</th>
+      <th>WIP</th><th class="formula-op"></th><th>In Trust</th><th class="formula-op"></th>
+      <th class="sortable" onclick="sortTable('monitor-table', 6, 'number', this)">Cushion <span class="sort-icon">&#8645;</span></th>
+      <th class="formula-op"></th><th>Retainer Needed</th><th class="formula-op"></th><th>Target</th>
     </tr></thead>
     <tbody>
       {% for s in statuses %}
       <tr data-flagged="{{ 'yes' if s.flagged else 'no' }}">
         <td>{% if s.flagged %}<span class="badge err">Below cushion</span>{% else %}<span class="badge ok">OK</span>{% endif %}</td>
         <td data-sort="{{ s.display_number }}">{{ s.display_number }}</td>
-        <td>${{ s.unbilled_amount|money }}</td>
+        <td>{% if s.unbilled_amount > 0 %}$-{{ s.unbilled_amount|money }}{% else %}$0.00{% endif %}</td>
+        <td class="formula-op">+</td>
         <td>${{ s.amount_in_trust|money }}</td>
+        <td class="formula-op">=</td>
         <td data-sort="{{ s.cushion }}">${{ s.cushion|money }}</td>
+        <td class="formula-op">+</td>
         <td>{% if s.flagged %}${{ s.shortfall|money }}{% else %}&mdash;{% endif %}</td>
-        <td>{% if s.outstanding %}${{ s.outstanding|money }}{% else %}&mdash;{% endif %}</td>
+        <td class="formula-op">=</td>
+        <td>{% if s.flagged %}${{ trust_minimum|money(0) }}{% else %}&mdash;{% endif %}</td>
       </tr>
       {% endfor %}
     </tbody>

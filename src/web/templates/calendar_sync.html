@@ -17,6 +17,7 @@
   <p>Fetched {{ fetch_stats.total_events }} total event(s) from the court website —
      {{ fetch_stats.filtered_events }} for {{ selected_attorney }}
      ({{ fetch_stats.excluded_events }} other-attorney events excluded).</p>
+  <button type="button" class="secondary" onclick="viewCourtCalendar()">View Court Calendar</button>
 </div>
 {% endif %}
 
@@ -38,7 +39,7 @@
 
   <a class="btn secondary" href="/calendar/client-list" target="_blank">Client Court-Date List</a>
 
-  <details style="margin-top:1rem;">
+  <details id="raw-text-details" style="margin-top:1rem;">
     <summary style="cursor:pointer;color:var(--text-muted);font-size:0.9rem;">Or paste calendar text by hand</summary>
     <form method="post" action="/calendar/import" class="stacked" style="margin-top:0.75rem;">
       <textarea name="calendar_text" rows="10" style="width:100%;font-family:monospace;font-size:0.85rem;" required>{{ calendar_text }}</textarea>
@@ -46,6 +47,13 @@
     </form>
   </details>
 </div>
+<script>
+function viewCourtCalendar() {
+  const details = document.getElementById("raw-text-details");
+  details.open = true;
+  details.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+</script>
 
 {% if results is not none %}
 <div class="panel" id="results">
