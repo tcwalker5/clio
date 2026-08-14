@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Equalizer — {{ matter_display_number }}{% endblock %}
+{% block content %}
+<h1>Equalizer — {{ matter_display_number }}</h1>
+<p><a href="/equalizer">&larr; All worksheets</a></p>
+
+<div class="panel">
+  <h2>Worksheets for this matter</h2>
+  <table>
+    <thead><tr><th>Parties</th><th>Status</th><th>Updated</th><th></th></tr></thead>
+    <tbody>
+      {% for w in worksheets %}
+      <tr>
+        <td>{{ w.party_a_label }} / {{ w.party_b_label }}</td>
+        <td>
+          {% if w.status == 'finalized' %}
+          <span class="badge ok">Finalized</span>
+          {% else %}
+          <span class="badge warn">Draft</span>
+          {% endif %}
+        </td>
+        <td>{{ w.updated_at }}</td>
+        <td style="display:flex; gap:0.75rem;">
+          <a href="/equalizer/{{ w.id }}">Open</a>
+          {% if w.status == 'draft' %}
+          <form method="post" action="/equalizer/{{ w.id }}/delete" onsubmit="return confirm('Delete this draft worksheet? This cannot be undone.');">
+            <input type="hidden" name="return_to" value="/equalizer/lookup?matter_id={{ matter_id }}&matter_name={{ matter_display_number | urlencode }}">
+            <button type="submit" class="secondary eq-delete-btn">Delete</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="panel">
+  <form method="post" action="/equalizer/new">
+    <input type="hidden" name="matter_id" value="{{ matter_id }}">
+    <button type="submit">Start a New Worksheet</button>
+  </form>
+</div>
+{% endblock %}

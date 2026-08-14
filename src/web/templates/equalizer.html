@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Equalizer{% endblock %}
+{% block content %}
+<h1>Equalizer</h1>
+<p class="subtitle">Split assets and debts between two parties, and calculate the equalization payment needed to balance the division.</p>
+
+{% if error %}
+<div class="panel"><p class="error-text">{{ error }}</p></div>
+{% endif %}
+
+<div class="panel">
+  <h2>Find or start a worksheet</h2>
+  <p class="subtitle">Search for a matter — if it already has a worksheet (draft or finalized), you'll see it; otherwise a new one starts right away.</p>
+  <form method="get" action="/equalizer/lookup" style="display:flex; align-items:flex-end; gap:0.75rem;">
+    <input type="hidden" name="matter_id" class="matter-search-id" required>
+    <div class="matter-search">
+      <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Matter</label>
+      <input type="text" name="matter_name" class="matter-search-input" placeholder="Search matter name…" autocomplete="off" style="width:20rem;">
+      <div class="matter-search-results"></div>
+    </div>
+    <button type="submit">Find / Start Worksheet</button>
+  </form>
+</div>
+
+<div class="panel">
+  <h2>In-progress worksheets</h2>
+  <p class="subtitle">Drafts only — finalized worksheets don't pile up here, search for the matter above to recall one.</p>
+  {% if worksheets %}
+  <table>
+    <thead><tr><th>Matter</th><th>{{ "Parties" }}</th><th>Status</th><th>Updated</th><th></th></tr></thead>
+    <tbody>
+      {% for w in worksheets %}
+      <tr>
+        <td>{{ w.matter_display_number }}</td>
+        <td>{{ w.party_a_label }} / {{ w.party_b_label }}</td>
+        <td><span class="badge warn">Draft</span></td>
+        <td>{{ w.updated_at }}</td>
+        <td style="display:flex; gap:0.75rem;">
+          <a href="/equalizer/{{ w.id }}">Open</a>
+          <form method="post" action="/equalizer/{{ w.id }}/delete" onsubmit="return confirm('Delete this draft worksheet? This cannot be undone.');">
+            <input type="hidden" name="return_to" value="/equalizer">
+            <button type="submit" class="secondary eq-delete-btn">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="subtitle">No drafts in progress.</p>
+  {% endif %}
+</div>
+
+<script src="/static/matter_search.js"></script>
+<script>initMatterSearch({{ all_matters | tojson | safe }});</script>
+{% endblock %}

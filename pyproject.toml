@@ -15,4 +15,5 @@ dependencies = [
     "itsdangerous>=2.2.0",
     "tzdata>=2026.3",
     "pytesseract>=0.3.13",
+    "reportlab>=5.0.0",
 ]

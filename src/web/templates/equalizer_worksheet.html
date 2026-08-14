@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% block title %}Equalizer — {{ worksheet.matter_display_number }}{% endblock %}
+{% block content %}
+<h1>Equalizer — {{ worksheet.matter_display_number }}</h1>
+<p class="subtitle">
+  {{ worksheet.party_a_label }} ({{ worksheet.party_a_role }}) / {{ worksheet.party_b_label }} ({{ worksheet.party_b_role }})
+  {% if worksheet.status == 'finalized' %}<span class="badge ok">Finalized</span>{% else %}<span class="badge warn">Draft</span>{% endif %}
+</p>
+<p><a href="/equalizer">&larr; All worksheets</a></p>
+
+{% if error %}<div class="panel"><p class="error-text">{{ error }}</p></div>{% endif %}
+{% if notice %}<div class="panel"><p class="notice-text">{{ notice }}</p></div>{% endif %}
+
+{% set readonly = worksheet.status == 'finalized' %}
+
+<div class="panel">
+  <div class="eq-toolbar">
+    <button type="button" class="secondary eq-assign-btn" data-side="a" disabled title="Assign full equity to {{ worksheet.party_a_label }}">H</button>
+    <button type="button" class="secondary eq-assign-btn" data-side="b" disabled title="Assign full equity to {{ worksheet.party_b_label }}">W</button>
+    <button type="button" class="secondary eq-assign-btn" data-side="split" disabled title="Split equity 50/50">=</button>
+    <span class="eq-toolbar-sep"></span>
+    <button type="button" class="secondary" id="eq-add-row" {% if readonly %}disabled{% endif %}>+ Add Row</button>
+    <span class="eq-toolbar-sep"></span>
+    <button type="button" class="secondary" id="eq-settings-btn" {% if readonly %}disabled{% endif %}>Settings</button>
+    <button type="button" class="secondary" id="eq-tax-rates-btn" {% if readonly %}disabled{% endif %}>Tax Rates</button>
+    <span class="eq-toolbar-sep"></span>
+    <a class="btn secondary" href="/equalizer/{{ worksheet.id }}/preview.pdf" target="_blank">View / Print PDF</a>
+    {% if not readonly %}
+    <form method="post" action="/equalizer/{{ worksheet.id }}/finalize" style="display:inline;" onsubmit="return confirm('Finalize this worksheet and save the PDF to Clio? This cannot be undone.');">
+      <button type="submit">Finalize &amp; Save to Clio</button>
+    </form>
+    <form method="post" action="/equalizer/{{ worksheet.id }}/delete" style="display:inline;" onsubmit="return confirm('Delete this draft worksheet? This cannot be undone.');">
+      <input type="hidden" name="return_to" value="/equalizer">
+      <button type="submit" class="secondary eq-delete-btn">Delete Worksheet</button>
+    </form>
+    {% endif %}
+  </div>
+
+  <table id="eq-grid">
+    <thead>
+      <tr>
+        <th>#</th><th>Item</th>
+        <th>FMV</th><th>Debt</th><th>Equity</th>
+        <th>{{ worksheet.party_a_label }} (Assigned)</th><th>{{ worksheet.party_b_label }} (Assigned)</th>
+        <th>Tax Basis</th><th>Rate</th><th>G/L</th>
+        <th>{{ worksheet.party_a_label }} (After Tax)</th><th>{{ worksheet.party_b_label }} (After Tax)</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+    <tfoot>
+      <tr>
+        <td></td><td><strong>Totals</strong></td>
+        <td id="eq-total-fmv"></td><td id="eq-total-debt"></td><td id="eq-total-equity"></td>
+        <td id="eq-total-before-a"></td><td id="eq-total-before-b"></td>
+        <td></td><td></td><td></td>
+        <td id="eq-total-after-a"></td><td id="eq-total-after-b"></td>
+        <td></td>
+      </tr>
+    </tfoot>
+  </table>
+
+  <p id="eq-equalization" class="eq-equalization"></p>
+</div>
+
+<div class="eq-modal-backdrop" id="eq-settings-modal">
+  <div class="eq-modal panel">
+    <h2>Settings</h2>
+    <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Naming</label>
+    <select id="eq-naming-mode" style="margin-bottom:1rem;">
+      <option value="husband_wife" {% if worksheet.naming_mode == 'husband_wife' %}selected{% endif %}>Husband / Wife</option>
+      <option value="first_names" {% if worksheet.naming_mode == 'first_names' %}selected{% endif %}>Same-sex — use first names</option>
+    </select>
+
+    <div id="eq-name-fields" style="display:none;">
+      <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Party A first name</label>
+      <input type="text" id="eq-party-a-label" value="{{ worksheet.party_a_label }}" style="width:100%; padding:0.5rem; margin-bottom:0.75rem; border:1px solid var(--border); border-radius:6px;">
+      <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Party B first name</label>
+      <input type="text" id="eq-party-b-label" value="{{ worksheet.party_b_label }}" style="width:100%; padding:0.5rem; margin-bottom:0.75rem; border:1px solid var(--border); border-radius:6px;">
+      <button type="button" class="secondary" id="eq-autofill-names">Autofill from Clio</button>
+    </div>
+
+    <p id="eq-name-warning" class="error-text" style="display:none;">Enter a first name for both parties before saving.</p>
+
+    <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin:1rem 0 0.3rem;">Party A role</label>
+    <input type="text" id="eq-party-a-role" value="{{ worksheet.party_a_role }}" style="width:100%; padding:0.5rem; margin-bottom:0.75rem; border:1px solid var(--border); border-radius:6px;">
+    <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Party B role</label>
+    <input type="text" id="eq-party-b-role" value="{{ worksheet.party_b_role }}" style="width:100%; padding:0.5rem; margin-bottom:1rem; border:1px solid var(--border); border-radius:6px;">
+
+    <div style="display:flex; gap:0.5rem; justify-content:flex-end;">
+      <button type="button" class="secondary eq-modal-cancel">Cancel</button>
+      <button type="button" id="eq-settings-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<div class="eq-modal-backdrop" id="eq-tax-rates-modal">
+  <div class="eq-modal panel">
+    <h2>Tax Rates</h2>
+    <p class="subtitle">Applied per row via the Rate dropdown — Ordinary uses Federal + State combined.</p>
+    <p id="eq-tax-rates-hint" class="notice-text" style="display:none;"></p>
+    <table>
+      <thead><tr><th></th><th class="eq-tr-label-a">{{ worksheet.party_a_label }}</th><th class="eq-tr-label-b">{{ worksheet.party_b_label }}</th></tr></thead>
+      <tbody>
+        <tr><td>Federal</td>
+          <td><input type="number" step="0.001" min="0" max="1" id="eq-fed-rate-a" value="{{ worksheet.fed_rate_a }}" class="eq-rate-input"></td>
+          <td><input type="number" step="0.001" min="0" max="1" id="eq-fed-rate-b" value="{{ worksheet.fed_rate_b }}" class="eq-rate-input"></td>
+        </tr>
+        <tr><td>State</td>
+          <td><input type="number" step="0.001" min="0" max="1" id="eq-state-rate-a" value="{{ worksheet.state_rate_a }}" class="eq-rate-input"></td>
+          <td><input type="number" step="0.001" min="0" max="1" id="eq-state-rate-b" value="{{ worksheet.state_rate_b }}" class="eq-rate-input"></td>
+        </tr>
+        <tr><td>Long-Term Capital Gain</td>
+          <td><input type="number" step="0.001" min="0" max="1" id="eq-lt-rate-a" value="{{ worksheet.lt_rate_a }}" class="eq-rate-input"></td>
+          <td><input type="number" step="0.001" min="0" max="1" id="eq-lt-rate-b" value="{{ worksheet.lt_rate_b }}" class="eq-rate-input"></td>
+        </tr>
+        <tr><td>Short-Term Capital Gain</td>
+          <td><input type="number" step="0.001" min="0" max="1" id="eq-st-rate-a" value="{{ worksheet.st_rate_a }}" class="eq-rate-input"></td>
+          <td><input type="number" step="0.001" min="0" max="1" id="eq-st-rate-b" value="{{ worksheet.st_rate_b }}" class="eq-rate-input"></td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="subtitle">Enter as a decimal — 0.24 for 24%.</p>
+    <div style="display:flex; gap:0.5rem; justify-content:flex-end;">
+      <button type="button" class="secondary eq-modal-cancel">Cancel</button>
+      <button type="button" id="eq-tax-rates-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/equalizer.js"></script>
+<script>
+initEqualizerGrid({
+  worksheetId: {{ worksheet.id }},
+  items: {{ items | tojson | safe }},
+  worksheet: {{ worksheet | tojson | safe }},
+  readonly: {{ "true" if readonly else "false" }},
+});
+</script>
+{% endblock %}

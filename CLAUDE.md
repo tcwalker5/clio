@@ -40,6 +40,9 @@ USER_ID_DAHANN
 
 CLIO_DASHBOARD_SECRET       # web dashboard session signing key
 CLIO_DASHBOARD_PASSPHRASE  # web dashboard shared login passphrase
+CAP_BASE_URL                # optional — LAN URL used in links posted back to Clio (Equalizer's
+                             # matter Note); defaults to http://cap.lan:8421, same host as
+                             # "CAP Dashboard.url"
 
 # Outlook Calendar Migration only — see that section below
 MICROSOFT_CLIENT_ID
@@ -88,6 +91,13 @@ clio/
 │   ├── legs_expenses.py          # Legs Expenses (OCR'd statement PDF -> ExpenseEntry)
 │   ├── trust_monitor.py          # Trust Monitor & Replenishment Requests
 │   ├── collections_monitor.py    # Collections — unpaid, already-issued bills (read-only)
+│   ├── equalizer/                # Equalizer — asset/debt division worksheets
+│   │   ├── calc.py               #   equity, after-tax, 50/50 equalization math
+│   │   ├── store.py              #   SQLite persistence for worksheets/items
+│   │   ├── clio_parties.py       #   default party names from the matter's client + OP contact
+│   │   ├── pdf.py                #   renders a worksheet to PDF (reportlab)
+│   │   ├── clio_documents.py     #   uploads the finalized PDF to the matter's Evidence folder
+│   │   └── clio_notes.py         #   posts a matter Note linking back to the live worksheet
 │   ├── court_calendar/           # Court Calendar Sync
 │   │   ├── normalizer.py         #   court-text parsing, dept/purpose normalization
 │   │   ├── court_fetch.py        #   one-click scrape of the SD Superior Court site
@@ -103,7 +113,7 @@ clio/
 │       ├── db.py                 #   SQLite schema (data/clio_dashboard.db)
 │       ├── preview_store.py      #   in-memory dry-run-preview -> confirm-and-post handoff
 │       ├── routes_*.py           #   one router per app (bradford/printer/calendar/legs/
-│       │                         #   ringcentral/trust/collections)
+│       │                         #   ringcentral/trust/collections/equalizer)
 │       ├── templates/            #   Jinja2 templates
 │       └── static/                #   CSS + drag-and-drop JS
 ├── start-dashboard.bat            # Launches the dashboard (uv sync + uvicorn)
@@ -1489,6 +1499,178 @@ Nothing here writes to Clio at all.
 uv run src/collections_monitor.py
 ```
 Or just visit `/collections` — same live pipeline, rendered as a table.
+
+---
+
+# Equalizer
+
+**Modules:** `src/equalizer/`, dashboard pages at `/equalizer`
+(`src/web/routes_equalizer.py`, `src/web/templates/equalizer.html`,
+`equalizer_matter.html`, `equalizer_worksheet.html`, `src/web/static/equalizer.js`)
+
+**Purpose:** A Python/Clio port of the discontinued "Propertizer" desktop tool
+(2026-08-12, Ted) — a spreadsheet-style worksheet for dividing marital assets
+and debts between two parties, calculating the equalization payment needed
+to balance the division at 50/50 (e.g. one party keeps the house and writes
+the other a check for the difference). Same column layout as the legacy
+tool: Joint (FMV/Debt/Equity), Before-Tax per party, Tax Basis, After-Tax per
+party, G/L — plus row-selection + H/W/`=` toolbar buttons that assign a
+row's equity fully to Party A, fully to Party B, or split 50/50.
+
+**Party naming — Husband/Wife by default, first names for same-sex couples:**
+every worksheet has `naming_mode` (`husband_wife` default, or `first_names`)
+and `party_a_label`/`party_b_label`, edited via the editor's Settings panel.
+Switching to `first_names` mode reveals editable label fields plus an
+"Autofill from Clio" button (`equalizer/clio_parties.py`) that pulls the
+matter's client contact and its Opposing Party relationship contact (same
+OC/OP `/relationships.json` lookup pattern `outlook_calendar/relationships.py`
+established for the Outlook migration, scoped to one matter) — a best-effort
+prefill, never blocking: a contact with no `first_name` on file, or no
+Opposing Party relationship at all, just leaves the field blank for a human
+to type in. `party_a_role`/`party_b_role` (default Petitioner/Respondent) are
+a separate pair of fields from the naming labels — same-sex couples still
+have a Petitioner and Respondent regardless of which naming mode is active.
+**Gotcha fixed 2026-08-13:** switching the mode dropdown to `first_names`
+used to leave the two label fields showing the literal words "Husband" and
+"Wife" (carried straight over from the DB defaults) — indistinguishable
+from an actual name, so a save with the dropdown flipped but the fields
+untouched silently persisted "Husband"/"Wife" as if they were real first
+names. Now, switching mode away from `husband_wife` for the first time
+since the Settings panel opened clears both fields and immediately calls
+the same autofill Clio lookup; Save is also blocked (inline warning, not a
+silent no-op) if either field is empty in `first_names` mode.
+
+**PDF includes tax rates when applicable (added 2026-08-13):** `equalizer/pdf.py`'s
+main table now has a **Rate** column (None/Ordinary/LT Gain/ST Gain) per row,
+matching the on-screen grid — previously only G/L (Y/blank) was shown, not
+which rate a row actually used. A "Tax Rates Applied" section (Federal/State/
+LT/ST as percentages, one column per party) follows the main table, but only
+when at least one row has G/L checked AND a non-`None` rate — a worksheet
+that never uses tax adjustment doesn't carry a rates table nothing on it
+applies to. Live-tested (both branches: with and without an applicable row,
+confirmed via `pdfplumber` text extraction) — the After-Tax math checked out
+by hand too ($800,000 Before-Tax − ($600,000 unrealized gain × 15% LT rate)
+= $710,000).
+
+**Tax rates and the After-Tax formula:** a Tax Rates panel holds four rates
+per party — Federal, State, Long-Term Capital Gain, Short-Term Capital Gain
+(entered as decimals, e.g. `0.24`) — since post-divorce tax brackets can
+differ between the two parties. Each row picks which one applies via a
+**Rate** dropdown (None / Ordinary / LT Gain / ST Gain — Ordinary combines
+Federal + State), independent of the **G/L** checkbox, which gates whether
+any tax adjustment applies to that row at all. Tax Basis is a real dollar
+figure per row (not just the legacy tool's literal "FMV" label) — no Tax
+Basis entered means "sold at FMV, no gain," not zero-by-omission. Checking
+G/L on a row while every configured rate is still `0` (the untouched
+default) auto-opens the Tax Rates panel with a hint naming that row —
+otherwise checking G/L silently does nothing visible, since the formula just
+multiplies by a zero rate. Only fires when rates are genuinely unset; once
+real rates are saved, checking G/L on later rows doesn't re-open the panel.
+Formula
+(`equalizer/calc.py`, confirmed with Ted 2026-08-12):
+```
+unrealized gain = FMV − Tax Basis
+After-Tax = Before-Tax − (gain × party's Before-Tax share of equity × rate)
+```
+The apportionment-by-share (a party only carries the tax hit on the share
+they're actually receiving) is this code's own interpretation of Ted's
+plain-language formula, not something specified at that level of detail —
+worth confirming against a real worksheet before relying on it for an actual
+filing. A manually-typed After-Tax value always overrides the computed
+figure (same "never silently overwrite" rule as everywhere else in this
+project) — clearing the field back to empty reverts to auto-computed.
+
+**Equalization payment is fixed at 50/50 and keyed off Before-Tax totals,
+not After-Tax** — confirmed against the legacy tool's own screenshot: total
+equity $367,922, Husband's Before-Tax total $392,543, and the screenshot's
+own bottom-line "$208,582 to Wife" reconciles exactly as
+`392,543 − (367,922 / 2)`. Every row in that screenshot had G/L unchecked,
+so there's no precedent one way or the other for using After-Tax totals
+instead — revisit if a case ever needs the payment itself computed net of
+tax. Equity itself (`FMV − Debt`) is never stored, only computed at read
+time, so it can't drift from its inputs (same reasoning as Trust Monitor's
+cushion/shortfall properties).
+
+**Persistence — live editing in SQLite, PDF archived to Clio on finalize:**
+`equalizer_worksheets`/`equalizer_items` in `data/clio_dashboard.db` hold the
+working state (matches every other subproject's pattern — fast, resumable,
+no Clio round-trip per cell edit). This is the one page in the dashboard
+that deviates from the usual full-page-reload-per-action shape: item CRUD
+and the H/W/`=` buttons are small JSON endpoints (`equalizer.js` calls them
+directly, autosaving as staff edit) rather than a submit-and-reload form —
+Settings and Tax Rates saves are the exception, since a naming-mode change
+touches column headers, every modal, and the PDF at once; those PATCH then
+reload the page rather than patching each place in JS.
+
+- **Preview** (`GET /equalizer/{id}/preview.pdf`) regenerates the PDF live
+  from current draft data and never touches Clio — same dry-run-preview
+  role Bradford/Legs/Printer's preview step plays, available any time,
+  opens inline for view/print via the browser's own PDF viewer.
+- **Finalize** (`POST /equalizer/{id}/finalize`) is the one action that
+  writes outside `data/clio_dashboard.db`: generates the PDF, uploads it via
+  `equalizer/clio_documents.py` to the matter's existing **Evidence** folder
+  as `equalizer-{date}.pdf`, and marks the worksheet finalized (read-only
+  from then on). The Evidence folder is assumed to already exist on every
+  matter (firm standard folder template, Ted 2026-08-12) — this fails loud
+  rather than creating one in the wrong place if it's missing.
+
+**Recall — matter search, not a flat list of everything ever finalized:**
+with hundreds of clients, a single growing table of every worksheet (draft
+and finalized) would become unusable. `/equalizer`'s own browsable table
+only ever shows `status = 'draft'` worksheets — a short, genuinely
+actionable list of what's still in progress. Finding anything else (a
+finalized worksheet, or checking whether a matter already has one before
+starting a new one) goes through the same matter search box, now pointed at
+`GET /equalizer/lookup` instead of directly creating a worksheet: a matter
+with no worksheets yet goes straight to a fresh one (no extra click for the
+common case); a matter that already has one or more (any status) shows
+`equalizer_matter.html` — that matter's worksheet history plus a "Start a
+New Worksheet" button, so recalling a finished one is a search away rather
+than scrolling a global list, and starting a duplicate isn't silent.
+
+**Matter Note on finalize — links back to the live worksheet, not yet
+live-verified:** alongside the PDF upload, Finalize also posts a Note to the
+Clio matter (`equalizer/clio_notes.py`, `POST /notes.json`, `type: "Matter"`,
+rich-text `detail` with an `<a>` link to `{CAP_BASE_URL}/equalizer/{id}`) so
+staff browsing the matter in Clio can find and reopen the worksheet without
+going through the dashboard at all. `CAP_BASE_URL` (new optional `.env` key,
+defaults to `http://cap.lan:8421` — the same on-LAN hostname `CAP
+Dashboard.url` already points at) exists specifically so this link resolves
+for any staff member, not just whoever's running the server (never
+`localhost`). This is a secondary, best-effort step, not folded into the
+Documents-upload success/failure path — a Note failure downgrades Finalize's
+notice to "...but couldn't post the matter note: {error}" rather than
+failing the whole action, since the PDF landing in Evidence is the artifact
+that actually matters and has already succeeded by that point. Covered by
+the **Matters** permission already granted to this app (no new Developer
+Portal change needed) — but like the Documents upload below, the request
+shape is a first pass off `clio-rate-import`'s spec only, never exercised
+against the real account.
+
+**Document upload — verify live before trusting, not yet done:** the
+create-document → PUT to a presigned `put_url` → PATCH `fully_uploaded`
+flow in `clio_documents.py` was derived from `clio-rate-import`'s
+`openapi.json` as a first-pass read of the resource shapes only, per this
+project's standing correction (`reference_clio_api.md`, 2026-07-22) — that
+spec is never trusted as the final answer for behavior. The **Documents**
+permission (Read/Write) was confirmed already granted to this app's current
+keys (Ted, 2026-08-12), so the call itself is unblocked, but the upload path
+has **not yet been exercised against the real Clio account** — only the
+local SQLite CRUD, calc engine, and PDF rendering were live-tested
+(worksheet create → item edit → H/W/`=` assign → PDF preview, all correct,
+then the disposable test worksheet was deleted). The first real Finalize
+should be watched against Clio's own UI — does the PDF actually land in
+Evidence, under the right name, fully readable — before this runs
+unattended for a real case, same caution Trust Monitor's own first live
+send was supposed to get.
+
+## Workflow
+Dashboard-only, no CLI equivalent (inherently an interactive spreadsheet
+tool) — visit `/equalizer`, search for a matter (this either opens that
+matter's existing worksheet(s) or starts a new one), add rows, assign with
+H/W/`=` or type Before-Tax splits directly, optionally set Tax Rates and
+per-row G/L/Tax Basis, Preview to check the PDF, then Finalize when it's
+ready to save to Clio.
 
 ---
 

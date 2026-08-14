@@ -97,6 +97,7 @@ async def dashboard_home(request: Request, _: None = Depends(require_auth)):
 from web.routes_bradford import router as bradford_router  # noqa: E402
 from web.routes_calendar import router as calendar_router  # noqa: E402
 from web.routes_collections import router as collections_router  # noqa: E402
+from web.routes_equalizer import router as equalizer_router  # noqa: E402
 from web.routes_legs import router as legs_router  # noqa: E402
 from web.routes_printer import router as printer_router  # noqa: E402
 from web.routes_ringcentral import router as ringcentral_router  # noqa: E402
@@ -105,6 +106,7 @@ from web.routes_trust import router as trust_router  # noqa: E402
 app.include_router(bradford_router)
 app.include_router(calendar_router)
 app.include_router(collections_router)
+app.include_router(equalizer_router)
 app.include_router(legs_router)
 app.include_router(printer_router)
 app.include_router(ringcentral_router)

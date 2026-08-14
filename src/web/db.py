@@ -160,6 +160,66 @@ CREATE TABLE IF NOT EXISTS trust_requests (
 );
 
 CREATE INDEX IF NOT EXISTS idx_trust_requests_matter_status ON trust_requests(matter_id, status);
+
+-- One worksheet per asset/debt division exercise, tied to a Clio matter.
+-- naming_mode 'husband_wife' (default) shows fixed H/W labels; 'first_names'
+-- (the same-sex-couple case) shows party_a_label/party_b_label instead,
+-- editable and normally pre-filled from the matter's client + Opposing Party
+-- contact (see equalizer/clio_parties.py). Tax rates are per-worksheet, one
+-- set of four (fed/state/long-term/short-term capital gain) per party — a
+-- row picks which one applies via equalizer_items.rate_type, it does not
+-- carry its own rate.
+CREATE TABLE IF NOT EXISTS equalizer_worksheets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    matter_id INTEGER NOT NULL,
+    matter_display_number TEXT NOT NULL,
+    naming_mode TEXT NOT NULL DEFAULT 'husband_wife',
+    party_a_label TEXT NOT NULL DEFAULT 'Husband',
+    party_b_label TEXT NOT NULL DEFAULT 'Wife',
+    party_a_role TEXT NOT NULL DEFAULT 'Petitioner',
+    party_b_role TEXT NOT NULL DEFAULT 'Respondent',
+    fed_rate_a REAL NOT NULL DEFAULT 0,
+    fed_rate_b REAL NOT NULL DEFAULT 0,
+    state_rate_a REAL NOT NULL DEFAULT 0,
+    state_rate_b REAL NOT NULL DEFAULT 0,
+    lt_rate_a REAL NOT NULL DEFAULT 0,
+    lt_rate_b REAL NOT NULL DEFAULT 0,
+    st_rate_a REAL NOT NULL DEFAULT 0,
+    st_rate_b REAL NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'draft',
+    clio_document_id INTEGER,
+    finalized_at TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_equalizer_worksheets_matter ON equalizer_worksheets(matter_id);
+
+-- Equity (fmv - debt) is deliberately not stored — computed at read time so
+-- it can never drift from its inputs (same reasoning as trust_monitor's
+-- cushion/shortfall properties). after_tax_a/b are nullable: NULL means
+-- "auto-computed from before_tax +/- the unrealized-gain tax hit" (see
+-- equalizer/calc.py); a non-null value is a manual override a paralegal
+-- typed in directly, which always wins.
+CREATE TABLE IF NOT EXISTS equalizer_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    worksheet_id INTEGER NOT NULL REFERENCES equalizer_worksheets(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    fmv REAL NOT NULL DEFAULT 0,
+    debt REAL NOT NULL DEFAULT 0,
+    before_tax_a REAL NOT NULL DEFAULT 0,
+    before_tax_b REAL NOT NULL DEFAULT 0,
+    tax_basis REAL,
+    rate_type TEXT NOT NULL DEFAULT 'none',
+    gain_loss INTEGER NOT NULL DEFAULT 0,
+    after_tax_a REAL,
+    after_tax_b REAL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_equalizer_items_worksheet ON equalizer_items(worksheet_id, position);
 """
 
 
