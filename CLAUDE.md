@@ -143,8 +143,16 @@ replace the CLI entry points, which still work standalone.
 # Clio API
 
 ## Reference
-OpenAPI spec: `C:\Users\TEDMINI\projects\clio-rate-import\data\openapi.json`
-Always derive endpoints, payload shapes, and required fields from this file.
+OpenAPI spec: `reference/openapi.json` — lives in **this** project (copied
+2026-08-14 from the now-retired `clio-rate-import`, which should never be
+read or referenced directly again — Ted has corrected this multiple times).
+Use it only as a first pass to discover which resources/fields/endpoints
+exist at all — never as the final answer for actual behavior. This spec has
+repeatedly been wrong or incomplete about real behavior (nested fields
+returning stubs unless explicitly requested via `fields=`, presigned URLs
+requiring specific headers it doesn't mention, etc. — see the Equalizer
+section's Document upload notes for real examples). Always confirm shapes
+and behavior live against the actual Clio account before relying on them.
 Do NOT invent endpoints.
 
 ## Authentication
@@ -1540,33 +1548,43 @@ since the Settings panel opened clears both fields and immediately calls
 the same autofill Clio lookup; Save is also blocked (inline warning, not a
 silent no-op) if either field is empty in `first_names` mode.
 
-**PDF includes tax rates when applicable (added 2026-08-13):** `equalizer/pdf.py`'s
-main table now has a **Rate** column (None/Ordinary/LT Gain/ST Gain) per row,
-matching the on-screen grid — previously only G/L (Y/blank) was shown, not
-which rate a row actually used. A "Tax Rates Applied" section (Federal/State/
-LT/ST as percentages, one column per party) follows the main table, but only
-when at least one row has G/L checked AND a non-`None` rate — a worksheet
-that never uses tax adjustment doesn't carry a rates table nothing on it
-applies to. Live-tested (both branches: with and without an applicable row,
-confirmed via `pdfplumber` text extraction) — the After-Tax math checked out
-by hand too ($800,000 Before-Tax − ($600,000 unrealized gain × 15% LT rate)
-= $710,000).
+**PDF includes tax rates (added 2026-08-13, always-shown as of 2026-08-14):**
+`equalizer/pdf.py`'s main table has a **Rate** column (None/Ordinary/LT
+Gain/ST Gain) per row, matching the on-screen grid — previously only G/L
+(Y/blank) was shown, not which rate a row actually used. A "Tax Rates
+Applied" section (Federal/State/LT/ST as percentages, one column per party)
+follows the main table. Originally gated to only appear when at least one
+row had G/L checked with a non-`None` rate — revisited 2026-08-14 after
+reviewing a real Propertizer PDF output, which shows this table
+**unconditionally**, even on a worksheet with no G/L rows at all; this now
+matches that. Live-tested via `pdfplumber` text extraction — the After-Tax
+math checked out by hand too ($800,000 Before-Tax − ($600,000 unrealized
+gain × 15% LT rate) = $710,000).
 
 **Tax rates and the After-Tax formula:** a Tax Rates panel holds four rates
 per party — Federal, State, Long-Term Capital Gain, Short-Term Capital Gain
 (entered as decimals, e.g. `0.24`) — since post-divorce tax brackets can
-differ between the two parties. Each row picks which one applies via a
-**Rate** dropdown (None / Ordinary / LT Gain / ST Gain — Ordinary combines
-Federal + State), independent of the **G/L** checkbox, which gates whether
-any tax adjustment applies to that row at all. Tax Basis is a real dollar
-figure per row (not just the legacy tool's literal "FMV" label) — no Tax
-Basis entered means "sold at FMV, no gain," not zero-by-omission. Checking
-G/L on a row while every configured rate is still `0` (the untouched
-default) auto-opens the Tax Rates panel with a hint naming that row —
-otherwise checking G/L silently does nothing visible, since the formula just
-multiplies by a zero rate. Only fires when rates are genuinely unset; once
-real rates are saved, checking G/L on later rows doesn't re-open the panel.
-Formula
+differ between the two parties. **New worksheets now default to the legacy
+Propertizer tool's own rates** (Federal 25%, State 9.3%, LT gain 15%, ST
+gain 25%, same for both parties — confirmed 2026-08-14 against a real
+Propertizer PDF output; `equalizer/store.py`'s `DEFAULT_*` constants). This
+only applies going forward — existing worksheets keep whatever rates they
+already had (still `0` by default before this change) rather than being
+silently rewritten; the DB column `DEFAULT` was updated too but only
+actually governs a database created fresh with today's schema, not one
+where the columns already existed, which is why `store.create_worksheet()`
+sets them explicitly on every insert rather than relying on the column
+default alone. Each row picks which rate applies via a **Rate** dropdown
+(None / Ordinary / LT Gain / ST Gain — Ordinary combines Federal + State),
+independent of the **G/L** checkbox, which gates whether any tax adjustment
+applies to that row at all. Tax Basis is a real dollar figure per row (not
+just the legacy tool's literal "FMV" label) — no Tax Basis entered means
+"sold at FMV, no gain," not zero-by-omission. Checking G/L on a row while
+every configured rate is still `0` auto-opens the Tax Rates panel with a
+hint naming that row — otherwise checking G/L silently does nothing
+visible, since the formula just multiplies by a zero rate; now mostly
+relevant to worksheets created before the new non-zero defaults, or a
+worksheet where someone deliberately zeroed a rate back out. Formula
 (`equalizer/calc.py`, confirmed with Ted 2026-08-12):
 ```
 unrealized gain = FMV − Tax Basis
@@ -1580,97 +1598,177 @@ filing. A manually-typed After-Tax value always overrides the computed
 figure (same "never silently overwrite" rule as everywhere else in this
 project) — clearing the field back to empty reverts to auto-computed.
 
-**Equalization payment is fixed at 50/50 and keyed off Before-Tax totals,
-not After-Tax** — confirmed against the legacy tool's own screenshot: total
-equity $367,922, Husband's Before-Tax total $392,543, and the screenshot's
-own bottom-line "$208,582 to Wife" reconciles exactly as
-`392,543 − (367,922 / 2)`. Every row in that screenshot had G/L unchecked,
-so there's no precedent one way or the other for using After-Tax totals
-instead — revisit if a case ever needs the payment itself computed net of
-tax. Equity itself (`FMV − Debt`) is never stored, only computed at read
+**Equalization payment is fixed at 50/50 and shown TWO ways — Before-Tax
+and After-Tax — not just one** (added 2026-08-14, after reviewing a real
+Propertizer PDF output that the earlier screenshot alone couldn't settle):
+the original screenshot only ever had G/L unchecked everywhere, so its
+Before-Tax and After-Tax figures were identical and there was no way to
+tell whether Propertizer computed one or two numbers. A real Propertizer
+PDF output resolved it — its Summary page shows the equalizing payment
+under **both** the Before-Tax and After-Tax column groups, always, even
+when they match. `calc.compute_totals()` now returns both pairs
+(`equalization_amount`/`payer` from Before-Tax totals,
+`equalization_amount_after_tax`/`payer_after_tax` from After-Tax totals),
+and both the PDF and the on-screen banner show two lines rather than one.
+They're identical whenever nothing on the worksheet uses G/L (the common
+case) but genuinely diverge once a row has a real taxable gain — confirmed
+with a live test (a $600k unrealized gain row split the two figures by
+$45k). Equity itself (`FMV − Debt`) is never stored, only computed at read
 time, so it can't drift from its inputs (same reasoning as Trust Monitor's
 cushion/shortfall properties).
 
-**Persistence — live editing in SQLite, PDF archived to Clio on finalize:**
-`equalizer_worksheets`/`equalizer_items` in `data/clio_dashboard.db` hold the
-working state (matches every other subproject's pattern — fast, resumable,
-no Clio round-trip per cell edit). This is the one page in the dashboard
-that deviates from the usual full-page-reload-per-action shape: item CRUD
-and the H/W/`=` buttons are small JSON endpoints (`equalizer.js` calls them
+**Persistence — live editing in SQLite, PDF archived to Clio on Save, never
+locked (renamed from "Finalize" 2026-08-14):** `equalizer_worksheets`/
+`equalizer_items` in `data/clio_dashboard.db` hold the working state
+(matches every other subproject's pattern — fast, resumable, no Clio
+round-trip per cell edit). This is the one page in the dashboard that
+deviates from the usual full-page-reload-per-action shape: item CRUD and
+the H/W/`=` buttons are small JSON endpoints (`equalizer.js` calls them
 directly, autosaving as staff edit) rather than a submit-and-reload form —
 Settings and Tax Rates saves are the exception, since a naming-mode change
 touches column headers, every modal, and the PDF at once; those PATCH then
 reload the page rather than patching each place in JS.
 
+**"Finalize" was renamed to "Save to Clio" and stopped being a one-way
+lock** (Ted, 2026-08-14: "nothing is ever final" in this line of work — a
+family law settlement can change even after paperwork is in). A worksheet
+stays fully editable after being saved, and Save to Clio can be clicked
+again any time — it pushes a new Document **version** under the same
+`clio_document_id` (`parent: {id: clio_document_id, type: "Document"}`
+instead of `parent: {id: folder_id, type: "Folder"}`) rather than a
+duplicate file, confirmed live to return the same document id with
+`version_number` incremented, i.e. genuine Clio-native version history. The
+matter Note (below) only posts on the very first save — the link it
+contains stays correct across later edits, so re-posting one per save would
+just clutter the matter's Notes list. `status` (`draft` vs `saved`) is now
+purely informational — it does not gate editing. Deleting a worksheet is
+still blocked, but the check moved from `status != 'draft'` to
+`clio_document_id IS NOT NULL`, since a saved-and-then-further-edited
+worksheet still has to stay non-deletable (it has a real Document + Note in
+Clio) even though its status doesn't mean "locked" anymore.
+
 - **Preview** (`GET /equalizer/{id}/preview.pdf`) regenerates the PDF live
   from current draft data and never touches Clio — same dry-run-preview
   role Bradford/Legs/Printer's preview step plays, available any time,
   opens inline for view/print via the browser's own PDF viewer.
-- **Finalize** (`POST /equalizer/{id}/finalize`) is the one action that
-  writes outside `data/clio_dashboard.db`: generates the PDF, uploads it via
-  `equalizer/clio_documents.py` to the matter's existing **Evidence** folder
-  as `equalizer-{date}.pdf`, and marks the worksheet finalized (read-only
-  from then on). The Evidence folder is assumed to already exist on every
-  matter (firm standard folder template, Ted 2026-08-12) — this fails loud
-  rather than creating one in the wrong place if it's missing.
+- **Save to Clio** (`POST /equalizer/{id}/save`) is the one action that
+  writes outside `data/clio_dashboard.db`: generates the PDF and uploads it
+  via `equalizer/clio_documents.py` to the matter's existing **Evidence**
+  folder as `equalizer-{date}.pdf` (first save) or as a new version of the
+  same document (later saves). The Evidence folder is assumed to already
+  exist on every matter (firm standard folder template, Ted 2026-08-12) —
+  this fails loud rather than creating one in the wrong place if it's
+  missing.
 
-**Recall — matter search, not a flat list of everything ever finalized:**
-with hundreds of clients, a single growing table of every worksheet (draft
-and finalized) would become unusable. `/equalizer`'s own browsable table
-only ever shows `status = 'draft'` worksheets — a short, genuinely
-actionable list of what's still in progress. Finding anything else (a
-finalized worksheet, or checking whether a matter already has one before
-starting a new one) goes through the same matter search box, now pointed at
-`GET /equalizer/lookup` instead of directly creating a worksheet: a matter
-with no worksheets yet goes straight to a fresh one (no extra click for the
-common case); a matter that already has one or more (any status) shows
-`equalizer_matter.html` — that matter's worksheet history plus a "Start a
-New Worksheet" button, so recalling a finished one is a search away rather
-than scrolling a global list, and starting a duplicate isn't silent.
+**Recall — matter search, not a flat list of everything ever saved:** with
+hundreds of clients, a single growing table of every worksheet (draft and
+saved) would become unusable. `/equalizer`'s own browsable table only ever
+shows `status = 'draft'` worksheets — a short, genuinely actionable list of
+what's still unsaved. Finding anything else (a saved worksheet, or checking
+whether a matter already has one before starting a new one) goes through
+the same matter search box, pointed at `GET /equalizer/lookup` instead of
+directly creating a worksheet: a matter with no worksheets yet goes
+straight to a fresh one (no extra click for the common case); a matter that
+already has one or more (any status) shows `equalizer_matter.html` — that
+matter's worksheet history plus a "Start a New Worksheet" button, so
+recalling one is a search away rather than scrolling a global list, and
+starting a duplicate isn't silent.
 
-**Matter Note on finalize — links back to the live worksheet, not yet
-live-verified:** alongside the PDF upload, Finalize also posts a Note to the
-Clio matter (`equalizer/clio_notes.py`, `POST /notes.json`, `type: "Matter"`,
-rich-text `detail` with an `<a>` link to `{CAP_BASE_URL}/equalizer/{id}`) so
-staff browsing the matter in Clio can find and reopen the worksheet without
-going through the dashboard at all. `CAP_BASE_URL` (new optional `.env` key,
-defaults to `http://cap.lan:8421` — the same on-LAN hostname `CAP
-Dashboard.url` already points at) exists specifically so this link resolves
-for any staff member, not just whoever's running the server (never
-`localhost`). This is a secondary, best-effort step, not folded into the
-Documents-upload success/failure path — a Note failure downgrades Finalize's
-notice to "...but couldn't post the matter note: {error}" rather than
-failing the whole action, since the PDF landing in Evidence is the artifact
-that actually matters and has already succeeded by that point. Covered by
-the **Matters** permission already granted to this app (no new Developer
-Portal change needed) — but like the Documents upload below, the request
-shape is a first pass off `clio-rate-import`'s spec only, never exercised
-against the real account.
+**Matter Note on first save — links back to the live worksheet, confirmed
+working 2026-08-14:** alongside the PDF upload, the first Save to Clio also
+posts a Note to the Clio matter (`equalizer/clio_notes.py`, `POST
+/notes.json`, `type: "Matter"`, rich-text `detail` with an `<a>` link to
+`{CAP_BASE_URL}/equalizer/{id}`) so staff browsing the matter in Clio can
+find and reopen the worksheet without going through the dashboard at all.
+`CAP_BASE_URL` (optional `.env` key, defaults to `http://cap.lan:8421` —
+the same on-LAN hostname `CAP Dashboard.url` already points at) exists
+specifically so this link resolves for any staff member, not just whoever's
+running the server (never `localhost`). This is a secondary, best-effort
+step, not folded into the Documents-upload success/failure path — a Note
+failure downgrades the save notice to "...but couldn't post the matter
+note: {error}" rather than failing the whole save, since the PDF landing in
+Evidence is the artifact that actually matters and has already succeeded by
+that point. Covered by the **Matters** permission already granted to this
+app (no new Developer Portal change needed). Live-tested 2026-08-14 against
+matter AMOS, CHRISTINE — worked on the first attempt (content and link
+verified correct), then the test Note was deleted via `DELETE
+/notes/{id}.json` (also undocumented, also works, `204`).
 
-**Document upload — verify live before trusting, not yet done:** the
-create-document → PUT to a presigned `put_url` → PATCH `fully_uploaded`
-flow in `clio_documents.py` was derived from `clio-rate-import`'s
-`openapi.json` as a first-pass read of the resource shapes only, per this
-project's standing correction (`reference_clio_api.md`, 2026-07-22) — that
-spec is never trusted as the final answer for behavior. The **Documents**
-permission (Read/Write) was confirmed already granted to this app's current
-keys (Ted, 2026-08-12), so the call itself is unblocked, but the upload path
-has **not yet been exercised against the real Clio account** — only the
-local SQLite CRUD, calc engine, and PDF rendering were live-tested
-(worksheet create → item edit → H/W/`=` assign → PDF preview, all correct,
-then the disposable test worksheet was deleted). The first real Finalize
-should be watched against Clio's own UI — does the PDF actually land in
-Evidence, under the right name, fully readable — before this runs
-unattended for a real case, same caution Trust Monitor's own first live
-send was supposed to get.
+**Clio-side deletes are soft — trashed documents are detected live, added
+2026-08-14:** `DELETE /documents/{id}.json` in Clio doesn't actually delete
+— confirmed live (found via `reference/openapi.json`, then verified against
+a document Ted deleted himself): it sets `deleted_at` and the record stays
+fetchable via GET (still `200`, not `404`) for **30 days** before Clio
+purges it for good. Left unhandled, this is exactly how the dashboard's
+local `clio_document_id` link goes stale silently — a real case that
+happened: Ted deleted a worksheet's document directly in Clio, and the
+dashboard kept showing "Saved to Clio" with no way to know otherwise. Fixed
+by checking `deleted_at` live (`equalizer/clio_documents.py`'s
+`is_document_trashed()` — an outright `404`, the post-30-day-purge case,
+also counts as trashed) in two places:
+- The worksheet editor page (`GET /equalizer/{id}`) and the matter-recall
+  page (`equalizer_matter.html`) both check every linked
+  `clio_document_id` live and show a **"Clio document deleted"** badge
+  (red) instead of "Saved to Clio" when trashed, plus a warning banner on
+  the editor page explaining what happened and what Save to Clio will do
+  about it. Best-effort — a check failure (Clio temporarily unreachable)
+  just skips the warning rather than breaking the page.
+- `upload_pdf()` itself checks before deciding whether to version or
+  create fresh: if `existing_document_id` is trashed, it falls back to
+  creating a brand-new document in the Evidence folder (same path as a
+  first-ever save) instead of trying to add a version to a document that's
+  gone. The worksheet's `clio_document_id` gets updated to the new
+  document automatically via the normal `mark_saved_to_clio()` call — no
+  separate "recovery" code path, it's just what happens when the trash
+  check comes back positive.
+
+Live-tested full round trip on a real worksheet (DIBBLE, DIANNA): confirmed
+the badge/banner correctly flip to "deleted" after trashing the linked
+document, confirmed Save to Clio afterward creates a genuinely new document
+(different id, `deleted_at: null`, fresh `version_number: 1`) rather than
+erroring out. Caught and fixed a real wording bug in the process — the save
+notice was labeling this case "(new version)" (based on "is this the first
+save ever," which was `false`) instead of "(...saved as a new document)"
+(based on whether the id Clio returned actually changed) — the two aren't
+the same question once trash-recovery exists as a case.
+
+**Document upload — confirmed working end-to-end 2026-08-14** (matter AMOS,
+CHRISTINE), after two real bugs found via three failed live attempts plus
+direct diagnostic testing:
+
+1. `latest_document_version` came back as just `{id, version_number}` on
+   create — same gotcha this project has hit before with
+   `phone_numbers`/`custom_rate`: a nested field only returns a stub unless
+   its subfields are explicitly requested. Fixed with an explicit
+   `fields=id,latest_document_version{id,uuid,put_url,version_number}` on
+   the create POST.
+2. The PUT to the presigned `put_url` kept failing with S3's `403
+   SignatureDoesNotMatch` until **both** `Content-Type: application/pdf`
+   and `x-amz-server-side-encryption: AES256` were sent together — found by
+   decoding the SignatureDoesNotMatch error's own `CanonicalRequest`, which
+   named `X-Amz-SignedHeaders=content-type;host;x-amz-server-side-encryption`.
+   Sending neither, or only one of the two, both fail. The presigned URL
+   doesn't expose what value it was signed with anywhere — `AES256` is a
+   confirmed-working value found by testing, not documented by Clio; worth
+   re-checking if this ever starts failing again in case Clio's default
+   bucket encryption setting changes.
+
+Verified with the actual `upload_pdf()` function (not just the diagnostic
+script that found the bugs) — created a real document with real PDF
+content, confirmed `version_number: 1`, then deleted it. Every document
+created during this debugging (three real failed save attempts plus
+diagnostic/verification runs, 8 total) was cleaned up via `DELETE
+/documents/{id}.json` (undocumented in the retired openapi.json spec but
+works, `204`) — AMOS, CHRISTINE's Evidence folder has nothing Equalizer-
+related left in it besides what a real save creates going forward.
 
 ## Workflow
 Dashboard-only, no CLI equivalent (inherently an interactive spreadsheet
 tool) — visit `/equalizer`, search for a matter (this either opens that
 matter's existing worksheet(s) or starts a new one), add rows, assign with
 H/W/`=` or type Before-Tax splits directly, optionally set Tax Rates and
-per-row G/L/Tax Basis, Preview to check the PDF, then Finalize when it's
-ready to save to Clio.
+per-row G/L/Tax Basis, Preview to check the PDF, then Save to Clio whenever
+it's ready — and again anytime after, since editing continues.
 
 ---
 

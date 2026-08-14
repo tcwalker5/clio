@@ -6,15 +6,35 @@ back to the live system, resolved fresh wherever the matter's own name/status
 is needed.
 """
 
+# Starting tax rates for every new worksheet — matches the legacy
+# Propertizer tool's own defaults exactly (confirmed 2026-08-14 against a
+# real Propertizer PDF output: Federal 25%, State 9.3%, LT gain 15%, ST
+# gain 25%, same for both parties). Explicit here rather than relying on
+# the DB column DEFAULT alone — that only takes effect for a database
+# created fresh with today's schema, not one where these columns already
+# exist from before this change (SQLite doesn't retroactively change a
+# column's DEFAULT when CREATE TABLE IF NOT EXISTS's text changes).
+DEFAULT_FED_RATE = 0.25
+DEFAULT_STATE_RATE = 0.093
+DEFAULT_LT_RATE = 0.15
+DEFAULT_ST_RATE = 0.25
+
 
 def create_worksheet(
     conn, matter_id: int, matter_display_number: str,
     party_a_role: str = "Petitioner", party_b_role: str = "Respondent",
 ) -> int:
     cur = conn.execute(
-        """INSERT INTO equalizer_worksheets (matter_id, matter_display_number, party_a_role, party_b_role)
-           VALUES (?, ?, ?, ?)""",
-        (matter_id, matter_display_number, party_a_role, party_b_role),
+        """INSERT INTO equalizer_worksheets (
+               matter_id, matter_display_number, party_a_role, party_b_role,
+               fed_rate_a, fed_rate_b, state_rate_a, state_rate_b,
+               lt_rate_a, lt_rate_b, st_rate_a, st_rate_b
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            matter_id, matter_display_number, party_a_role, party_b_role,
+            DEFAULT_FED_RATE, DEFAULT_FED_RATE, DEFAULT_STATE_RATE, DEFAULT_STATE_RATE,
+            DEFAULT_LT_RATE, DEFAULT_LT_RATE, DEFAULT_ST_RATE, DEFAULT_ST_RATE,
+        ),
     )
     conn.commit()
     return cur.lastrowid
@@ -23,9 +43,9 @@ def create_worksheet(
 def list_worksheets(conn, status: str | None = None) -> list[dict]:
     """status=None returns every worksheet; pass "draft" to get only
     in-progress ones — the landing page's own browsable list uses that
-    filter, since a flat list of every worksheet ever finalized across
+    filter, since a flat list of every worksheet ever saved to Clio across
     hundreds of clients isn't something anyone wants to scroll (recall a
-    finalized one via the matter search instead, see list_worksheets_by_matter)."""
+    saved one via the matter search instead, see list_worksheets_by_matter)."""
     if status is None:
         rows = conn.execute("SELECT * FROM equalizer_worksheets ORDER BY updated_at DESC").fetchall()
     else:
@@ -75,10 +95,16 @@ def update_worksheet_settings(conn, worksheet_id: int, **fields) -> None:
     conn.commit()
 
 
-def finalize_worksheet(conn, worksheet_id: int, clio_document_id: int) -> None:
+def mark_saved_to_clio(conn, worksheet_id: int, clio_document_id: int) -> None:
+    """Called every time Save to Clio succeeds, not just the first — a
+    worksheet stays editable and re-savable indefinitely (Ted, 2026-08-14).
+    finalized_at only gets set the first time (COALESCE — it's "first saved
+    at", the column name is just a holdover); last_saved_at always updates."""
     conn.execute(
         """UPDATE equalizer_worksheets
-           SET status = 'finalized', clio_document_id = ?, finalized_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+           SET status = 'saved', clio_document_id = ?,
+               finalized_at = COALESCE(finalized_at, CURRENT_TIMESTAMP),
+               last_saved_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
            WHERE id = ?""",
         (clio_document_id, worksheet_id),
     )
@@ -88,9 +114,10 @@ def finalize_worksheet(conn, worksheet_id: int, clio_document_id: int) -> None:
 def delete_worksheet(conn, worksheet_id: int) -> None:
     """Items cascade via the equalizer_items.worksheet_id foreign key
     (ON DELETE CASCADE, web/db.py). Callers are responsible for only
-    offering this on draft worksheets — a finalized one already has a PDF
-    and a matter Note pointing at it in Clio, so deleting the local record
-    would orphan both rather than actually cleaning anything up."""
+    offering this on worksheets never saved to Clio (clio_document_id is
+    NULL) — one that has already has a real PDF and a matter Note pointing
+    at it in Clio, so deleting the local record would orphan both rather
+    than actually cleaning anything up."""
     conn.execute("DELETE FROM equalizer_worksheets WHERE id = ?", (worksheet_id,))
     conn.commit()
 

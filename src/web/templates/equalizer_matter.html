@@ -13,8 +13,11 @@
       <tr>
         <td>{{ w.party_a_label }} / {{ w.party_b_label }}</td>
         <td>
-          {% if w.status == 'finalized' %}
-          <span class="badge ok">Finalized</span>
+          {% if trashed_by_id.get(w.id) %}
+          <span class="badge err">Clio document deleted</span>
+          {# != 'draft' rather than == 'saved': worksheets saved before the 2026-08-14 terminology rename still carry the old 'finalized' status value #}
+          {% elif w.status != 'draft' %}
+          <span class="badge ok">Saved to Clio</span>
           {% else %}
           <span class="badge warn">Draft</span>
           {% endif %}
@@ -22,8 +25,8 @@
         <td>{{ w.updated_at }}</td>
         <td style="display:flex; gap:0.75rem;">
           <a href="/equalizer/{{ w.id }}">Open</a>
-          {% if w.status == 'draft' %}
-          <form method="post" action="/equalizer/{{ w.id }}/delete" onsubmit="return confirm('Delete this draft worksheet? This cannot be undone.');">
+          {% if not w.clio_document_id %}
+          <form method="post" action="/equalizer/{{ w.id }}/delete" onsubmit="return confirm('Delete this worksheet? This cannot be undone.');">
             <input type="hidden" name="return_to" value="/equalizer/lookup?matter_id={{ matter_id }}&matter_name={{ matter_display_number | urlencode }}">
             <button type="submit" class="secondary eq-delete-btn">Delete</button>
           </form>

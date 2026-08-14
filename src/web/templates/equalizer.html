@@ -10,7 +10,7 @@
 
 <div class="panel">
   <h2>Find or start a worksheet</h2>
-  <p class="subtitle">Search for a matter — if it already has a worksheet (draft or finalized), you'll see it; otherwise a new one starts right away.</p>
+  <p class="subtitle">Search for a matter — if it already has a worksheet (draft or already saved to Clio), you'll see it; otherwise a new one starts right away.</p>
   <form method="get" action="/equalizer/lookup" style="display:flex; align-items:flex-end; gap:0.75rem;">
     <input type="hidden" name="matter_id" class="matter-search-id" required>
     <div class="matter-search">
@@ -24,7 +24,7 @@
 
 <div class="panel">
   <h2>In-progress worksheets</h2>
-  <p class="subtitle">Drafts only — finalized worksheets don't pile up here, search for the matter above to recall one.</p>
+  <p class="subtitle">Drafts only — worksheets already saved to Clio don't pile up here, search for the matter above to recall one.</p>
   {% if worksheets %}
   <table>
     <thead><tr><th>Matter</th><th>{{ "Parties" }}</th><th>Status</th><th>Updated</th><th></th></tr></thead>

@@ -16,7 +16,7 @@ load_dotenv()
 
 BASE_URL = os.getenv("CLIO_BASE_URL", "https://app.clio.com").rstrip("/")
 CASE_NUMBER_FIELD_NAME = "Court Case Number"
-RETRY_DELAYS = [5, 15, 30]  # seconds between retries on 429, matches clio-rate-import's pattern
+RETRY_DELAYS = [5, 15, 30]  # seconds between retries on 429, same backoff used elsewhere in this project
 
 _case_number_field_id_cache: int | None = None
 

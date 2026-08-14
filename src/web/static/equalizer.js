@@ -14,6 +14,52 @@ function fmt(n) {
   return moneyFmt.format(n || 0);
 }
 
+// Comma-groups the integer part of a money-field's raw text, live, while
+// preserving whatever decimal portion is there as typed — deliberately NOT
+// a Number()/toLocaleString() round-trip, which would silently eat a
+// trailing "." or in-progress decimal digits (typing "1000.5" would
+// collapse back to "1,000" the instant the "." was typed). Sign and
+// decimals pass through untouched; only digit-grouping happens.
+function formatMoneyLive(str) {
+  const negative = str.includes("-");
+  const body = str.replace(/-/g, "");
+  const dotIndex = body.indexOf(".");
+  const rawInt = dotIndex === -1 ? body : body.slice(0, dotIndex);
+  const rawDec = dotIndex === -1 ? null : body.slice(dotIndex + 1);
+  const intPart = rawInt.replace(/\D/g, "").replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  let result = intPart;
+  if (rawDec !== null) result += "." + rawDec.replace(/\D/g, "");
+  return (negative ? "-" : "") + result;
+}
+
+// Format-on-load / after a save round-trip, where there's no in-progress
+// typing or cursor to preserve — just comma-group a plain number.
+function formatMoney(value) {
+  if (value === null || value === undefined || value === "") return "";
+  return formatMoneyLive(String(value));
+}
+
+function parseMoneyInput(str) {
+  return str.replace(/,/g, "").trim();
+}
+
+// Where to put the cursor in a freshly-reformatted string so it lands in
+// the same spot relative to the digits the user was looking at — count
+// digits before the old cursor position, then find the position after
+// that many digits in the new (possibly re-comma'd) string. Commas
+// shifting around a cursor is exactly the bug naive live-formatting hits.
+function cursorPosForDigitCount(formatted, digitCount) {
+  if (digitCount <= 0) return 0;
+  let count = 0;
+  for (let i = 0; i < formatted.length; i++) {
+    if (/[0-9.]/.test(formatted[i])) {
+      count++;
+      if (count === digitCount) return i + 1;
+    }
+  }
+  return formatted.length;
+}
+
 function initEqualizerGrid(config) {
   const tbody = document.querySelector("#eq-grid tbody");
   const taxModal = document.getElementById("eq-tax-rates-modal");
@@ -48,13 +94,23 @@ function initEqualizerGrid(config) {
     return resp.status === 204 ? null : resp.json();
   }
 
+  // Comma-formatted money fields are type="text" now, not type="number",
+  // so there's no browser-level guarantee the string parses cleanly —
+  // strip commas first, and fall back to empty/0 on garbage input (e.g. a
+  // stray paste) rather than sending NaN, which JSON.stringify silently
+  // turns into null and would crash the NOT NULL fmv/debt columns.
   function numOrNull(input) {
-    if (input.value === "") return null;
-    return parseFloat(input.value);
+    const raw = parseMoneyInput(input.value);
+    if (raw === "") return null;
+    const n = parseFloat(raw);
+    return Number.isNaN(n) ? null : n;
   }
 
   function numOrZero(input) {
-    return input.value === "" ? 0 : parseFloat(input.value);
+    const raw = parseMoneyInput(input.value);
+    if (raw === "") return 0;
+    const n = parseFloat(raw);
+    return Number.isNaN(n) ? 0 : n;
   }
 
   // An After-Tax cell shows the auto-computed figure (muted, with a
@@ -69,7 +125,7 @@ function initEqualizerGrid(config) {
     const isAuto = raw === null || raw === undefined;
     const value = isAuto ? computed : raw;
     return `<div class="eq-after-tax">
-      <input type="number" step="0.01" data-field="after_tax_${side}" value="${value}" class="${isAuto ? "eq-auto" : ""}" title="${isAuto ? "Auto-computed — edit to override" : "Manual override"}">
+      <input type="text" inputmode="decimal" class="eq-money ${isAuto ? "eq-auto" : ""}" data-field="after_tax_${side}" value="${formatMoney(value)}" title="${isAuto ? "Auto-computed — edit to override" : "Manual override"}">
       <button type="button" class="eq-reset-auto" data-field="after_tax_${side}" title="Reset to auto-computed" ${isAuto ? "disabled" : ""}>&#8635;</button>
     </div>`;
   }
@@ -86,12 +142,12 @@ function initEqualizerGrid(config) {
 
     tr.appendChild(cell(`<span class="eq-row-num"></span>`));
     tr.appendChild(cell(`<input type="text" data-field="description" value="${(item.description || "").replace(/"/g, "&quot;")}">`));
-    tr.appendChild(cell(`<input type="number" step="0.01" data-field="fmv" value="${item.fmv}">`));
-    tr.appendChild(cell(`<input type="number" step="0.01" data-field="debt" value="${item.debt}">`));
+    tr.appendChild(cell(`<input type="text" inputmode="decimal" class="eq-money" data-field="fmv" value="${formatMoney(item.fmv)}">`));
+    tr.appendChild(cell(`<input type="text" inputmode="decimal" class="eq-money" data-field="debt" value="${formatMoney(item.debt)}">`));
     tr.appendChild(cell(`<span class="eq-equity"></span>`));
-    tr.appendChild(cell(`<input type="number" step="0.01" data-field="before_tax_a" value="${item.before_tax_a}">`));
-    tr.appendChild(cell(`<input type="number" step="0.01" data-field="before_tax_b" value="${item.before_tax_b}">`));
-    tr.appendChild(cell(`<input type="number" step="0.01" data-field="tax_basis" placeholder="FMV" value="${item.tax_basis ?? ""}">`));
+    tr.appendChild(cell(`<input type="text" inputmode="decimal" class="eq-money" data-field="before_tax_a" value="${formatMoney(item.before_tax_a)}">`));
+    tr.appendChild(cell(`<input type="text" inputmode="decimal" class="eq-money" data-field="before_tax_b" value="${formatMoney(item.before_tax_b)}">`));
+    tr.appendChild(cell(`<input type="text" inputmode="decimal" class="eq-money" data-field="tax_basis" placeholder="FMV" value="${formatMoney(item.tax_basis)}">`));
 
     const rateSelect = document.createElement("select");
     rateSelect.dataset.field = "rate_type";
@@ -109,32 +165,33 @@ function initEqualizerGrid(config) {
     tr.appendChild(cell(`<input type="checkbox" data-field="gain_loss" ${item.gain_loss ? "checked" : ""}>`));
     tr.appendChild(cell(afterTaxCellHtml(item, "a")));
     tr.appendChild(cell(afterTaxCellHtml(item, "b")));
-    tr.appendChild(cell(config.readonly ? "" : `<button type="button" class="secondary eq-delete-btn">&times;</button>`));
+    tr.appendChild(cell(`<button type="button" class="secondary eq-delete-btn">&times;</button>`));
 
-    if (config.readonly) {
-      tr.querySelectorAll("input, select, button").forEach((el) => (el.disabled = true));
-    }
     refreshComputedCells(tr, item);
     return tr;
   }
 
-  // Equity display, plus a visual flag for a row that has real equity but
-  // hasn't actually been split yet (Before-Tax A and B both still $0) — the
-  // easy-to-miss trap where someone fills in FMV/Debt and assumes that's
-  // enough, when the equalization math only ever reads the Before-Tax
-  // columns. Renumbering happens separately (renumberRows()) since it needs
-  // to run across the whole table, not just one row.
+  // Equity display, plus a visual flag for a row whose Assigned columns
+  // don't add up to its equity — catches both a row that's completely
+  // unassigned (Before-Tax A and B both still $0, the easy-to-miss trap
+  // where someone fills in FMV/Debt and assumes that's enough) AND a
+  // row that's only *partially* assigned (e.g. Assigned sums to $15,000
+  // on a $35,000-equity row — a real case that produced a silently wrong
+  // equalization number, 2026-08-14, since the equalization math only
+  // ever reads the Assigned/Before-Tax columns, not FMV/Debt directly).
+  // Renumbering happens separately (renumberRows()) since it needs to run
+  // across the whole table, not just one row.
   function refreshComputedCells(tr, item) {
     const equityVal = (Number(item.fmv) || 0) - (Number(item.debt) || 0);
     tr.querySelector(".eq-equity").textContent = fmt(equityVal);
 
     const beforeA = Number(item.before_tax_a) || 0;
     const beforeB = Number(item.before_tax_b) || 0;
-    const unassigned = equityVal !== 0 && beforeA === 0 && beforeB === 0;
-    tr.classList.toggle("eq-unassigned", unassigned);
+    const mismatch = Math.round((equityVal - (beforeA + beforeB)) * 100) / 100;
+    tr.classList.toggle("eq-unassigned", mismatch !== 0);
     const numEl = tr.querySelector(".eq-row-num");
-    numEl.title = unassigned
-      ? "Equity not yet assigned to either party — select this row and click H, W, or =, or type into the Assigned columns."
+    numEl.title = mismatch !== 0
+      ? `Assigned columns (${fmt(beforeA + beforeB)}) don't add up to this row's equity (${fmt(equityVal)}) — off by ${fmt(mismatch)}. Select this row and click H, W, or =, or fix the Assigned columns directly.`
       : "";
   }
 
@@ -151,7 +208,7 @@ function initEqualizerGrid(config) {
       if (field === "gain_loss") {
         input.checked = !!item[field];
       } else if (document.activeElement !== input) {
-        input.value = item[field] ?? "";
+        input.value = input.classList.contains("eq-money") ? formatMoney(item[field]) : item[field] ?? "";
       }
     });
     ["a", "b"].forEach((side) => {
@@ -172,20 +229,25 @@ function initEqualizerGrid(config) {
     document.getElementById("eq-total-after-a").textContent = fmt(totals.total_after_tax_a);
     document.getElementById("eq-total-after-b").textContent = fmt(totals.total_after_tax_b);
 
-    const el = document.getElementById("eq-equalization");
-    if (!totals.payer) {
-      el.textContent = "Division is balanced at 50/50 — no equalization payment required.";
-    } else {
-      const payerLabel = totals.payer === "a" ? config.worksheet.party_a_label : config.worksheet.party_b_label;
-      const payeeLabel = totals.payer === "a" ? config.worksheet.party_b_label : config.worksheet.party_a_label;
-      el.textContent = `Equalization payment: ${payerLabel} pays ${payeeLabel} ${fmt(totals.equalization_amount)} to balance the division at 50/50.`;
+    // Two lines, matching the legacy Propertizer tool's own Summary page —
+    // one equalization figure from Before-Tax totals, one from After-Tax.
+    // They're identical whenever nothing on the worksheet uses G/L (the
+    // common case), but diverge for real once a row has a taxable gain.
+    function equalizationLine(label, amount, payer) {
+      if (!payer) return `${label}: Division is balanced at 50/50 — no equalization payment required.`;
+      const payerLabel = payer === "a" ? config.worksheet.party_a_label : config.worksheet.party_b_label;
+      const payeeLabel = payer === "a" ? config.worksheet.party_b_label : config.worksheet.party_a_label;
+      return `${label}: ${payerLabel} pays ${payeeLabel} ${fmt(amount)} to balance the division at 50/50.`;
     }
+    document.getElementById("eq-equalization").innerHTML =
+      `<p>${equalizationLine("Before-Tax", totals.equalization_amount, totals.payer)}</p>` +
+      `<p>${equalizationLine("After-Tax", totals.equalization_amount_after_tax, totals.payer_after_tax)}</p>`;
   }
 
   function selectRow(id) {
     selectedId = id;
     tbody.querySelectorAll("tr").forEach((tr) => tr.classList.toggle("selected", Number(tr.dataset.itemId) === id));
-    document.querySelectorAll(".eq-assign-btn").forEach((btn) => (btn.disabled = config.readonly || selectedId == null));
+    document.querySelectorAll(".eq-assign-btn").forEach((btn) => (btn.disabled = selectedId == null));
   }
 
   // Initial render
@@ -208,16 +270,36 @@ function initEqualizerGrid(config) {
       total_after_tax_a += i.after_tax_a ?? i.after_tax_a_computed ?? i.before_tax_a ?? 0;
       total_after_tax_b += i.after_tax_b ?? i.after_tax_b_computed ?? i.before_tax_b ?? 0;
     });
-    const imbalance = Math.round((total_before_tax_a - total_before_tax_b) * 100) / 100;
+    function equalizationOf(a, b) {
+      const imbalance = Math.round((a - b) * 100) / 100;
+      return {
+        amount: Math.round(Math.abs(imbalance) / 2 * 100) / 100,
+        payer: imbalance === 0 ? null : imbalance > 0 ? "a" : "b",
+      };
+    }
+    const before = equalizationOf(total_before_tax_a, total_before_tax_b);
+    const after = equalizationOf(total_after_tax_a, total_after_tax_b);
     return {
       total_fmv, total_debt, total_equity: total_fmv - total_debt,
       total_before_tax_a, total_before_tax_b, total_after_tax_a, total_after_tax_b,
-      equalization_amount: Math.round(Math.abs(imbalance) / 2 * 100) / 100,
-      payer: imbalance === 0 ? null : imbalance > 0 ? "a" : "b",
+      equalization_amount: before.amount, payer: before.payer,
+      equalization_amount_after_tax: after.amount, payer_after_tax: after.payer,
     };
   }
 
-  if (config.readonly) return;
+  // Live comma-grouping as you type — reformats on every keystroke and
+  // re-places the cursor so typing isn't interrupted by commas shifting
+  // around underneath it. No network call here; that's still the
+  // "change" handler below, on blur/commit.
+  tbody.addEventListener("input", (e) => {
+    const input = e.target.closest("input.eq-money");
+    if (!input) return;
+    const cursorPos = input.selectionStart ?? input.value.length;
+    const digitsBeforeCursor = (input.value.slice(0, cursorPos).match(/[0-9.]/g) || []).length;
+    input.value = formatMoneyLive(input.value);
+    const newPos = cursorPosForDigitCount(input.value, digitsBeforeCursor);
+    input.setSelectionRange(newPos, newPos);
+  });
 
   tbody.addEventListener("change", async (e) => {
     const input = e.target.closest("[data-field]");

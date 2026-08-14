@@ -416,7 +416,7 @@ def create_trust_request(session: requests.Session, client_id: int, matter_id: i
     supervised test.
 
     Per-matter trust_amount is sent as an int, not a float — Clio's own
-    OpenAPI spec (clio-rate-import/data/openapi.json, POST /trust_requests.json)
+    OpenAPI spec (this project's reference/openapi.json, POST /trust_requests.json)
     types the top-level data.trust_amount as number/double but the nested
     data.matter[].trust_amount as integer/int32. Amounts here are always
     whole tens already (_round_up_to_10), so this loses no precision;

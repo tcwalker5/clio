@@ -3,15 +3,17 @@ calc.py — Equalizer math: equity, after-tax, and the 50/50 equalization
 payment. Pure functions over plain dicts (sqlite3.Row-shaped) — no SQLite or
 Clio calls here, so this stays testable without either.
 
-Equalization target is fixed at 50/50 (firm decision, 2026-08-12) and is
-deliberately keyed off Before-Tax totals, not After-Tax — the legacy
-Propertizer screenshot this tool is modeled on reconciles its own bottom-line
-equalization figure exactly against Before-Tax totals (confirmed: half of
-$367,922 total equity is $183,961; Husband's $392,543 Before-Tax total minus
-that half is $208,582, matching the screenshot's own "$208,582 to Wife"
-line). Every row in that screenshot had G/L unchecked, so there's no real
-precedent for using After-Tax instead — revisit if a case ever needs the
-equalization payment itself computed net of tax.
+Equalization target is fixed at 50/50 (firm decision, 2026-08-12) — and,
+confirmed 2026-08-14 against a real legacy Propertizer PDF output (not just
+the earlier screenshot, which never had a case with real After-Tax
+divergence to check against), Propertizer computes it **two ways**: once
+from Before-Tax totals, once from After-Tax totals, shown side by side even
+when they're identical (that PDF's own G/L column was blank on every row,
+so both numbers happened to match — the two-column layout is still always
+there). `compute_totals()` below does the same — `equalization_amount`/
+`payer` from Before-Tax totals, `equalization_amount_after_tax`/
+`payer_after_tax` from After-Tax totals — and both get shown, in the PDF
+and on-screen, rather than picking one.
 
 After-Tax formula (confirmed with Ted, 2026-08-12):
     After-Tax = Before-Tax - (unrealized gain x rate)
@@ -88,6 +90,15 @@ class WorksheetTotals:
     total_after_tax_b: float
     equalization_amount: float
     payer: str | None  # 'a', 'b', or None if already balanced
+    equalization_amount_after_tax: float
+    payer_after_tax: str | None
+
+
+def _equalization(total_a: float, total_b: float) -> tuple[float, str | None]:
+    imbalance = round(total_a - total_b, 2)
+    amount = round(abs(imbalance) / 2, 2)
+    payer = None if imbalance == 0 else ("a" if imbalance > 0 else "b")
+    return amount, payer
 
 
 def compute_totals(items: list[dict], worksheet: dict) -> WorksheetTotals:
@@ -98,9 +109,8 @@ def compute_totals(items: list[dict], worksheet: dict) -> WorksheetTotals:
     total_after_a = sum(after_tax(i, worksheet, "a") for i in items)
     total_after_b = sum(after_tax(i, worksheet, "b") for i in items)
 
-    imbalance = round(total_before_a - total_before_b, 2)
-    equalization_amount = round(abs(imbalance) / 2, 2)
-    payer = None if imbalance == 0 else ("a" if imbalance > 0 else "b")
+    equalization_amount, payer = _equalization(total_before_a, total_before_b)
+    equalization_amount_after_tax, payer_after_tax = _equalization(total_after_a, total_after_b)
 
     return WorksheetTotals(
         total_fmv=total_fmv,
@@ -112,6 +122,8 @@ def compute_totals(items: list[dict], worksheet: dict) -> WorksheetTotals:
         total_after_tax_b=total_after_b,
         equalization_amount=equalization_amount,
         payer=payer,
+        equalization_amount_after_tax=equalization_amount_after_tax,
+        payer_after_tax=payer_after_tax,
     )
 
 
@@ -130,6 +142,28 @@ def enrich_item(item: dict, worksheet: dict) -> dict:
     enriched["after_tax_a_is_auto"] = item.get("after_tax_a") is None
     enriched["after_tax_b_is_auto"] = item.get("after_tax_b") is None
     return enriched
+
+
+def assign_button_labels(worksheet: dict) -> tuple[str, str]:
+    """Text for the H/W toolbar buttons: literal 'H'/'W' in husband_wife
+    mode (matches the legacy Propertizer tool), or each party's first
+    initial in first_names mode — falling back to the full first name on
+    both buttons if the initials would collide (e.g. Alex and Amanda both
+    start with 'A'). A single shared letter on two side-by-side buttons is
+    genuinely ambiguous, not just less descriptive, so this widens only
+    when it actually needs to rather than guessing at a two-letter
+    abbreviation that could still collide (Alex/Alexis)."""
+    if worksheet.get("naming_mode") != "first_names":
+        return "H", "W"
+
+    label_a = (worksheet.get("party_a_label") or "").strip()
+    label_b = (worksheet.get("party_b_label") or "").strip()
+    initial_a = label_a[:1].upper()
+    initial_b = label_b[:1].upper()
+
+    if initial_a and initial_b and initial_a != initial_b:
+        return initial_a, initial_b
+    return label_a or "A", label_b or "B"
 
 
 def assign_before_tax(fmv: float, debt: float, side: str) -> tuple[float, float]:

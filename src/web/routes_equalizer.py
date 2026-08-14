@@ -6,15 +6,19 @@ Unlike the rest of the dashboard (full-page HTML re-renders after every
 mutating POST), the worksheet editor is a live spreadsheet-style grid — item
 CRUD and the H/W/= assignment buttons are small JSON endpoints the page's own
 JS calls directly, autosaving as staff edit, rather than a submit-and-reload
-form. The list/new-worksheet page and the settings/finalize actions still
+form. The list/new-worksheet page and the settings/save actions still
 follow the usual full-page-render pattern used everywhere else.
 
-Preview vs. Finalize mirrors Bradford/Legs/Printer's dry-run/confirm split:
 /preview.pdf regenerates the PDF live from current draft data and never
-touches Clio; /finalize is the one action that uploads it, and is the only
-route in this file that writes anything outside data/clio_dashboard.db.
+touches Clio; /save is the only route in this file that writes anything
+outside data/clio_dashboard.db. Unlike a typical dry-run/confirm split
+elsewhere in this dashboard (Bradford/Legs/Printer), /save isn't a one-way
+door — a worksheet stays editable after saving, and clicking Save to Clio
+again just pushes a new Document version rather than locking anything (Ted,
+2026-08-14: "nothing is ever final" in this line of work).
 """
 
+import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Body, Depends, Form, HTTPException, Request
@@ -45,13 +49,18 @@ async def _create_worksheet_for_matter(conn, matter_id: int) -> int:
     """Always resolves the matter's display_number live from Clio rather
     than trusting any client-supplied name — the one place a new worksheet
     row actually gets created, used both by the plain "start a worksheet"
-    form and the matter-lookup route's zero-worksheets-found path."""
+    form and the matter-lookup route's zero-worksheets-found path. Starts
+    with one blank item rather than an empty grid — a brand-new worksheet
+    with zero rows looked broken (nothing to click H/W/= on, no obvious
+    next step) versus one blank row waiting to be filled in."""
     session = clio_documents.build_session()
     try:
         matter = await run_in_threadpool(clio_parties.fetch_matter_summary, session, matter_id)
     except RuntimeError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return store.create_worksheet(conn, matter_id, matter.get("display_number", str(matter_id)))
+    worksheet_id = store.create_worksheet(conn, matter_id, matter.get("display_number", str(matter_id)))
+    store.add_item(conn, worksheet_id)
+    return worksheet_id
 
 
 @router.get("", response_class=HTMLResponse)
@@ -83,8 +92,9 @@ async def equalizer_home(request: Request, _: None = Depends(require_auth)):
 async def equalizer_lookup(request: Request, matter_id: int, matter_name: str = "", _: None = Depends(require_auth)):
     """Where the landing page's matter search actually lands: a matter with
     no worksheets yet goes straight to a fresh one (the common case — no
-    extra click); a matter with existing worksheets (draft or finalized)
-    shows the list to recall from instead of silently creating a duplicate."""
+    extra click); a matter with existing worksheets (draft or saved to
+    Clio) shows the list to recall from instead of silently creating a
+    duplicate."""
     from web.app import render
 
     conn = get_connection()
@@ -97,8 +107,23 @@ async def equalizer_lookup(request: Request, matter_id: int, matter_name: str = 
     finally:
         conn.close()
 
+    # Same live trash check as the worksheet editor page — a handful of
+    # rows at most here, so checking each one is cheap, and this is exactly
+    # where staff go to recall a saved worksheet, so a stale "saved" badge
+    # would be actively misleading right where it matters most.
+    trashed_by_id: dict[int, bool] = {}
+    session = clio_documents.build_session()
+    for w in existing:
+        if w["clio_document_id"]:
+            try:
+                trashed_by_id[w["id"]] = await run_in_threadpool(
+                    clio_documents.is_document_trashed, session, w["clio_document_id"],
+                )
+            except RuntimeError as e:
+                logging.warning("Could not check Clio trash status for worksheet %s: %s", w["id"], e)
+
     return render(request, "equalizer_matter.html", matter_id=matter_id, matter_display_number=display_name,
-                  worksheets=existing)
+                  worksheets=existing, trashed_by_id=trashed_by_id)
 
 
 @router.post("/new")
@@ -116,19 +141,22 @@ async def equalizer_new(request: Request, matter_id: int = Form(...), _: None = 
 async def equalizer_delete_worksheet(
     worksheet_id: int, return_to: str = Form("/equalizer"), _: None = Depends(require_auth),
 ):
-    """Draft-only — a finalized worksheet already has a PDF and a matter
-    Note pointing at it in Clio (see clio_documents.py/clio_notes.py), so
-    deleting the local record here would orphan both rather than clean
-    anything up. return_to lets the three call sites (landing page,
-    matter-lookup page, editor toolbar) each bounce back to where they were
-    instead of always landing on the generic list; restricted to this
+    """Blocked once a worksheet has ever been saved to Clio (clio_document_id
+    set) — it already has a real Document + matter Note pointing at it there
+    (see clio_documents.py/clio_notes.py), so deleting the local record would
+    orphan both rather than clean anything up. Deliberately keyed off
+    clio_document_id, not status — a saved worksheet stays editable
+    indefinitely (Ted, 2026-08-14), so status alone no longer reliably means
+    "hasn't touched Clio yet." return_to lets the three call sites (landing
+    page, matter-lookup page, editor toolbar) each bounce back to where they
+    were instead of always landing on the generic list; restricted to this
     router's own paths, same as the /login?next= pattern elsewhere in this
     dashboard, so it can't be used as an open redirect."""
     conn = get_connection()
     try:
         worksheet = _worksheet_or_404(conn, worksheet_id)
-        if worksheet["status"] != "draft":
-            raise HTTPException(status_code=400, detail="Only draft worksheets can be deleted.")
+        if worksheet["clio_document_id"] is not None:
+            raise HTTPException(status_code=400, detail="Only worksheets never saved to Clio can be deleted.")
         store.delete_worksheet(conn, worksheet_id)
     finally:
         conn.close()
@@ -139,6 +167,13 @@ async def equalizer_delete_worksheet(
 
 @router.get("/{worksheet_id}", response_class=HTMLResponse)
 async def equalizer_editor(worksheet_id: int, request: Request, _: None = Depends(require_auth)):
+    """Checks live whether the linked Clio document has been trashed
+    directly in Clio (Clio's own DELETE is a soft delete — deleted_at gets
+    set, the record stays fetchable for 30 days) — otherwise the "Saved to
+    Clio" badge would keep claiming that even after someone deleted it on
+    the Clio side, which is exactly what happened to a real worksheet here
+    2026-08-14. Best-effort: a failure to check (e.g. Clio temporarily
+    unreachable) just skips the warning rather than breaking the page."""
     from web.app import render
 
     conn = get_connection()
@@ -148,9 +183,22 @@ async def equalizer_editor(worksheet_id: int, request: Request, _: None = Depend
     finally:
         conn.close()
 
+    clio_document_trashed = False
+    if worksheet["clio_document_id"]:
+        try:
+            session = clio_documents.build_session()
+            clio_document_trashed = await run_in_threadpool(
+                clio_documents.is_document_trashed, session, worksheet["clio_document_id"],
+            )
+        except RuntimeError as e:
+            logging.warning("Could not check Clio trash status for worksheet %s: %s", worksheet_id, e)
+
     totals = calc.compute_totals(items, worksheet)
     enriched_items = [calc.enrich_item(i, worksheet) for i in items]
-    return render(request, "equalizer_worksheet.html", worksheet=worksheet, items=enriched_items, totals=totals)
+    assign_label_a, assign_label_b = calc.assign_button_labels(worksheet)
+    return render(request, "equalizer_worksheet.html", worksheet=worksheet, items=enriched_items, totals=totals,
+                  assign_label_a=assign_label_a, assign_label_b=assign_label_b,
+                  clio_document_trashed=clio_document_trashed)
 
 
 @router.patch("/{worksheet_id}/settings")
@@ -279,8 +327,15 @@ async def equalizer_preview_pdf(worksheet_id: int, _: None = Depends(require_aut
     )
 
 
-@router.post("/{worksheet_id}/finalize", response_class=HTMLResponse)
-async def equalizer_finalize(worksheet_id: int, request: Request, _: None = Depends(require_auth)):
+@router.post("/{worksheet_id}/save", response_class=HTMLResponse)
+async def equalizer_save_to_clio(worksheet_id: int, request: Request, _: None = Depends(require_auth)):
+    """Repeatable, not one-way (Ted, 2026-08-14: "nothing is ever final" in
+    this line of work) — a worksheet stays editable after this and Save to
+    Clio can be clicked again any time. Re-saves push a new Document
+    *version* under the same clio_document_id (see clio_documents.py)
+    rather than a duplicate file, and only the very first save posts the
+    matter Note — the link it contains stays correct across later edits, so
+    reposting one per save would just clutter the matter's Notes list."""
     from web.app import render
 
     conn = get_connection()
@@ -292,11 +347,15 @@ async def equalizer_finalize(worksheet_id: int, request: Request, _: None = Depe
 
     if not items:
         totals = calc.compute_totals(items, worksheet)
+        assign_label_a, assign_label_b = calc.assign_button_labels(worksheet)
         return render(request, "equalizer_worksheet.html", worksheet=worksheet, items=[], totals=totals,
-                      error="Add at least one row before finalizing.")
+                      assign_label_a=assign_label_a, assign_label_b=assign_label_b,
+                      error="Add at least one row before saving to Clio.")
 
     pdf_bytes = await run_in_threadpool(pdf.render_worksheet_pdf, worksheet, items)
     filename = f"equalizer-{datetime.today().strftime('%Y-%m-%d')}.pdf"
+    previous_document_id = worksheet["clio_document_id"]
+    is_first_save = previous_document_id is None
 
     conn = get_connection()
     try:
@@ -304,33 +363,52 @@ async def equalizer_finalize(worksheet_id: int, request: Request, _: None = Depe
             session = clio_documents.build_session()
             document_id = await run_in_threadpool(
                 clio_documents.upload_pdf, session, worksheet["matter_id"], filename, pdf_bytes,
+                previous_document_id,
             )
-            store.finalize_worksheet(conn, worksheet_id, document_id)
+            store.mark_saved_to_clio(conn, worksheet_id, document_id)
         except RuntimeError as e:
             worksheet = store.get_worksheet(conn, worksheet_id)
             items = store.list_items(conn, worksheet_id)
             totals = calc.compute_totals(items, worksheet)
             enriched_items = [calc.enrich_item(i, worksheet) for i in items]
+            assign_label_a, assign_label_b = calc.assign_button_labels(worksheet)
             return render(request, "equalizer_worksheet.html", worksheet=worksheet, items=enriched_items, totals=totals,
-                          error=f"Finalize failed: {e}")
+                          assign_label_a=assign_label_a, assign_label_b=assign_label_b,
+                          error=f"Save to Clio failed: {e}")
 
         worksheet = store.get_worksheet(conn, worksheet_id)
         items = store.list_items(conn, worksheet_id)
     finally:
         conn.close()
 
-    # A Note pointing back to this worksheet is a secondary, best-effort
-    # step — the PDF landing in Evidence is the artifact that actually
-    # matters and has already succeeded by this point, so a Note failure
-    # downgrades to a softer notice rather than failing the whole Finalize.
-    notice = f"Finalized and saved to Clio as {filename} in the matter's Evidence folder."
-    try:
-        await run_in_threadpool(clio_notes.create_worksheet_note, session, worksheet["matter_id"], worksheet_id)
-        notice += " A note linking back to this worksheet was also posted on the matter."
-    except RuntimeError as e:
-        notice += f" (Could not post a matter note linking back to it: {e})"
+    # document_id can differ from previous_document_id even on a "re-save"
+    # if the old document had been trashed/deleted directly in Clio since
+    # the last save — upload_pdf() falls back to creating a fresh document
+    # in that case rather than trying to version one that's gone (see
+    # clio_documents.py). Get the wording right for each of the three
+    # distinct cases rather than assuming "not the first save" always means
+    # "new version of the same file."
+    if is_first_save:
+        version_note = "."
+    elif document_id == previous_document_id:
+        version_note = " (new version)."
+    else:
+        version_note = " (the previous Clio document had been deleted, so this was saved as a new document)."
+    notice = f"Saved to Clio as {filename} in the matter's Evidence folder" + version_note
+    if is_first_save:
+        # Secondary, best-effort step — the PDF landing in Evidence is the
+        # artifact that actually matters and has already succeeded by this
+        # point, so a Note failure downgrades to a softer notice rather
+        # than failing the whole save.
+        try:
+            await run_in_threadpool(clio_notes.create_worksheet_note, session, worksheet["matter_id"], worksheet_id)
+            notice += " A note linking back to this worksheet was also posted on the matter."
+        except RuntimeError as e:
+            notice += f" (Could not post a matter note linking back to it: {e})"
 
     totals = calc.compute_totals(items, worksheet)
     enriched_items = [calc.enrich_item(i, worksheet) for i in items]
+    assign_label_a, assign_label_b = calc.assign_button_labels(worksheet)
     return render(request, "equalizer_worksheet.html", worksheet=worksheet, items=enriched_items, totals=totals,
+                  assign_label_a=assign_label_a, assign_label_b=assign_label_b,
                   notice=notice)

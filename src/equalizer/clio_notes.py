@@ -2,19 +2,23 @@
 clio_notes.py — Posts a Note on the Clio matter linking back to the live
 Equalizer worksheet, so staff browsing the matter in Clio can find (and
 reopen) it without hunting through the dashboard's own worksheet list.
-Runs once, at Finalize — a secondary, best-effort step alongside the PDF
-upload (clio_documents.py), not a required part of it: if this fails, the
-worksheet is still finalized and the PDF is still saved, just without the
-matter-side pointer.
+Runs once, on the *first* Save to Clio only — a secondary, best-effort step
+alongside the PDF upload (clio_documents.py), not a required part of it: if
+this fails, the PDF is still saved, just without the matter-side pointer.
+Not re-posted on later saves (the worksheet stays editable and re-savable
+indefinitely — see clio_documents.py's module docstring) since the same
+link is still correct; a fresh Note every edit would clutter the matter's
+Notes list for no reason.
 
-Shape taken from clio-rate-import's openapi.json (POST /notes.json) as a
-first pass only, per this project's standing correction
-(reference_clio_api.md, 2026-07-22) — not yet exercised against the real
-Clio account. One thing worth confirming live: the spec's top-level
-`required` list for the request body includes `contact` even though the
-field-level description says it's "required only if the Note type is
-Contact" — plausibly a spec artifact rather than real API behavior, but
-untested either way.
+Shape taken from this project's own reference/openapi.json (POST
+/notes.json) as a first pass only, per the standing correction in
+reference_clio_api.md. Live-tested 2026-08-14 against matter
+AMOS, CHRISTINE — worked on the first attempt, no gotchas like the
+Documents upload had. The spec's top-level `required` list for the request
+body includes `contact` even though the field-level description says it's
+"required only if the Note type is Contact" — turned out to be a spec
+artifact, not real API behavior: a Matter-type note with no `contact` key
+posted successfully.
 """
 
 import logging
@@ -40,7 +44,7 @@ def create_worksheet_note(session: requests.Session, matter_id: int, worksheet_i
             "type": "Matter",
             "matter": {"id": matter_id},
             "subject": "Equalizer worksheet",
-            "detail": f'<p>Asset/debt division worksheet finalized — <a href="{link}">open it in CAP</a>.</p>',
+            "detail": f'<p>Asset/debt division worksheet saved to Clio — <a href="{link}">open it in CAP</a>.</p>',
             "detail_text_type": "rich_text",
         }
     }

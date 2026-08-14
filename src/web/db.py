@@ -169,6 +169,16 @@ CREATE INDEX IF NOT EXISTS idx_trust_requests_matter_status ON trust_requests(ma
 -- set of four (fed/state/long-term/short-term capital gain) per party — a
 -- row picks which one applies via equalizer_items.rate_type, it does not
 -- carry its own rate.
+--
+-- status: 'draft' (never pushed to Clio) or 'saved' (pushed at least once)
+-- — purely informational, does NOT lock editing (Ted, 2026-08-14: "nothing
+-- is ever final" in this line of work — a worksheet stays editable after
+-- being saved to Clio, and Save to Clio can be clicked again any time,
+-- pushing a new Document *version* rather than a duplicate file — see
+-- equalizer/clio_documents.py). finalized_at is actually "first saved to
+-- Clio at" (column name kept as-is, no real data existed to migrate when
+-- the terminology changed); last_saved_at updates on every save, including
+-- the first.
 CREATE TABLE IF NOT EXISTS equalizer_worksheets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     matter_id INTEGER NOT NULL,
@@ -178,17 +188,22 @@ CREATE TABLE IF NOT EXISTS equalizer_worksheets (
     party_b_label TEXT NOT NULL DEFAULT 'Wife',
     party_a_role TEXT NOT NULL DEFAULT 'Petitioner',
     party_b_role TEXT NOT NULL DEFAULT 'Respondent',
-    fed_rate_a REAL NOT NULL DEFAULT 0,
-    fed_rate_b REAL NOT NULL DEFAULT 0,
-    state_rate_a REAL NOT NULL DEFAULT 0,
-    state_rate_b REAL NOT NULL DEFAULT 0,
-    lt_rate_a REAL NOT NULL DEFAULT 0,
-    lt_rate_b REAL NOT NULL DEFAULT 0,
-    st_rate_a REAL NOT NULL DEFAULT 0,
-    st_rate_b REAL NOT NULL DEFAULT 0,
+    -- Defaults match the legacy Propertizer tool's own (see
+    -- equalizer/store.py's DEFAULT_* constants, which are what actually
+    -- apply these — a column DEFAULT here only governs a database created
+    -- fresh with this schema, not one where the column already existed).
+    fed_rate_a REAL NOT NULL DEFAULT 0.25,
+    fed_rate_b REAL NOT NULL DEFAULT 0.25,
+    state_rate_a REAL NOT NULL DEFAULT 0.093,
+    state_rate_b REAL NOT NULL DEFAULT 0.093,
+    lt_rate_a REAL NOT NULL DEFAULT 0.15,
+    lt_rate_b REAL NOT NULL DEFAULT 0.15,
+    st_rate_a REAL NOT NULL DEFAULT 0.25,
+    st_rate_b REAL NOT NULL DEFAULT 0.25,
     status TEXT NOT NULL DEFAULT 'draft',
     clio_document_id INTEGER,
     finalized_at TEXT,
+    last_saved_at TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
@@ -245,6 +260,7 @@ def get_connection() -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA)
     _ensure_column(conn, "staff_cache", "is_attorney", "INTEGER DEFAULT 0")
+    _ensure_column(conn, "equalizer_worksheets", "last_saved_at", "TEXT")
     conn.executemany(
         "INSERT OR IGNORE INTO purpose_mappings (raw_pattern, canonical_code, description) VALUES (?, ?, ?)",
         DEFAULT_PURPOSE_MAPPINGS,

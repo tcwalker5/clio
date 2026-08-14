@@ -325,15 +325,23 @@ form.stacked .password-field input[type="password"] { padding-right: 2.6rem; mar
 /* ---------- Equalizer ---------- */
 
 .eq-toolbar { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1rem; }
+/* Safety net, not the primary fix — column widths are sized to fit inside
+   the panel in the common case, but this keeps a genuinely-too-wide table
+   (long descriptions, a narrow browser window) scrolling inside its own
+   box instead of blowing out the panel/page horizontally, which is what
+   actually happened here (2026-08-14): min-width bumps on the money
+   columns pushed #eq-grid to 1392px against an ~1311px panel). */
+.eq-grid-scroll { overflow-x: auto; }
 .eq-toolbar-sep { width: 1px; height: 1.6rem; background: var(--border); margin: 0 0.25rem; }
 .eq-assign-btn { min-width: 2.4rem; text-align: center; font-family: var(--font-mono); }
 
-#eq-grid input[type="text"], #eq-grid input[type="number"], #eq-grid select,
+#eq-grid input[type="text"], #eq-grid select,
 .eq-modal input[type="number"] {
     width: 100%; min-width: 5.5rem; padding: 0.3rem 0.4rem; border: 1px solid transparent;
     border-radius: 4px; font-size: 0.85rem; background: transparent; color: var(--text);
 }
-#eq-grid input[type="text"] { min-width: 8rem; }
+#eq-grid input[data-field="description"] { min-width: 8rem; }
+#eq-grid input.eq-money { text-align: right; }
 #eq-grid input:hover, #eq-grid select:hover,
 #eq-grid input:focus, #eq-grid select:focus,
 .eq-modal input[type="number"]:hover, .eq-modal input[type="number"]:focus { border-color: var(--border); background: var(--panel); }
@@ -343,23 +351,21 @@ form.stacked .password-field input[type="password"] { padding-right: 2.6rem; mar
 .eq-delete-btn { background: transparent; color: var(--err); padding: 0.2rem 0.5rem; }
 .eq-delete-btn:hover { background: var(--err-bg); color: var(--err); }
 
-/* Dollar amounts and tax rates are typed or pasted, never nudged a cent/
-   thousandth at a time — the browser's built-in number-input spinner
-   arrows don't do anything useful here, so they're hidden. */
-#eq-grid input[type="number"]::-webkit-outer-spin-button,
-#eq-grid input[type="number"]::-webkit-inner-spin-button,
+/* The Tax Rates modal's percentage inputs are still native type="number"
+   (no comma-grouping needed for values under 1) — dollar amounts and tax
+   rates are typed or pasted, never nudged a cent/thousandth at a time, so
+   the browser's built-in spinner arrows don't do anything useful here. */
 .eq-modal input[type="number"]::-webkit-outer-spin-button,
 .eq-modal input[type="number"]::-webkit-inner-spin-button {
     -webkit-appearance: none; margin: 0;
 }
-#eq-grid input[type="number"], .eq-modal input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+.eq-modal input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 
 .eq-row-num { font-family: var(--font-mono); color: var(--text-muted); }
 #eq-grid tbody tr.eq-unassigned td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
 #eq-grid tbody tr.eq-unassigned .eq-row-num::after { content: " \26A0"; color: var(--warn); cursor: help; }
 
 .eq-after-tax { display: flex; align-items: center; gap: 0.2rem; }
-.eq-after-tax input { min-width: 4.5rem; }
 .eq-after-tax input.eq-auto { color: var(--text-muted); font-style: italic; }
 .eq-reset-auto {
     background: transparent; color: var(--text-muted); padding: 0.1rem 0.35rem;
@@ -372,6 +378,8 @@ form.stacked .password-field input[type="password"] { padding-right: 2.6rem; mar
     font-family: var(--font-mono); font-weight: 600; margin-top: 1rem;
     padding: 0.75rem 1rem; background: var(--bg); border-radius: var(--radius); border: 1px solid var(--border);
 }
+.eq-equalization p { margin: 0; }
+.eq-equalization p + p { margin-top: 0.4rem; }
 
 .eq-modal-backdrop {
     display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.4);

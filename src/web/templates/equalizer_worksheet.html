@@ -4,45 +4,53 @@
 <h1>Equalizer — {{ worksheet.matter_display_number }}</h1>
 <p class="subtitle">
   {{ worksheet.party_a_label }} ({{ worksheet.party_a_role }}) / {{ worksheet.party_b_label }} ({{ worksheet.party_b_role }})
-  {% if worksheet.status == 'finalized' %}<span class="badge ok">Finalized</span>{% else %}<span class="badge warn">Draft</span>{% endif %}
+  {% if clio_document_trashed %}
+  <span class="badge err">Clio document deleted</span>
+  {# != 'draft' rather than == 'saved': worksheets saved before the 2026-08-14 terminology rename still carry the old 'finalized' status value #}
+  {% elif worksheet.status != 'draft' %}<span class="badge ok">Saved to Clio</span>{% else %}<span class="badge warn">Draft</span>{% endif %}
 </p>
 <p><a href="/equalizer">&larr; All worksheets</a></p>
+
+{% if clio_document_trashed %}
+<div class="panel">
+  <p class="error-text">The PDF this worksheet was saved to has been deleted (moved to Clio's Trash) directly in Clio — this dashboard only found out just now by checking live, it isn't notified automatically. The matter Note (if one was posted) still links here, but the file it used to point to is gone. Clicking <strong>Save to Clio</strong> below will create a fresh document in the matter's Evidence folder rather than trying to update the deleted one.</p>
+</div>
+{% endif %}
 
 {% if error %}<div class="panel"><p class="error-text">{{ error }}</p></div>{% endif %}
 {% if notice %}<div class="panel"><p class="notice-text">{{ notice }}</p></div>{% endif %}
 
-{% set readonly = worksheet.status == 'finalized' %}
-
 <div class="panel">
   <div class="eq-toolbar">
-    <button type="button" class="secondary eq-assign-btn" data-side="a" disabled title="Assign full equity to {{ worksheet.party_a_label }}">H</button>
-    <button type="button" class="secondary eq-assign-btn" data-side="b" disabled title="Assign full equity to {{ worksheet.party_b_label }}">W</button>
+    <button type="button" class="secondary eq-assign-btn" data-side="a" disabled title="Assign full equity to {{ worksheet.party_a_label }}">{{ assign_label_a }}</button>
+    <button type="button" class="secondary eq-assign-btn" data-side="b" disabled title="Assign full equity to {{ worksheet.party_b_label }}">{{ assign_label_b }}</button>
     <button type="button" class="secondary eq-assign-btn" data-side="split" disabled title="Split equity 50/50">=</button>
     <span class="eq-toolbar-sep"></span>
-    <button type="button" class="secondary" id="eq-add-row" {% if readonly %}disabled{% endif %}>+ Add Row</button>
+    <button type="button" class="secondary" id="eq-add-row">+ Add Row</button>
     <span class="eq-toolbar-sep"></span>
-    <button type="button" class="secondary" id="eq-settings-btn" {% if readonly %}disabled{% endif %}>Settings</button>
-    <button type="button" class="secondary" id="eq-tax-rates-btn" {% if readonly %}disabled{% endif %}>Tax Rates</button>
+    <button type="button" class="secondary" id="eq-settings-btn">Settings</button>
+    <button type="button" class="secondary" id="eq-tax-rates-btn">Tax Rates</button>
     <span class="eq-toolbar-sep"></span>
     <a class="btn secondary" href="/equalizer/{{ worksheet.id }}/preview.pdf" target="_blank">View / Print PDF</a>
-    {% if not readonly %}
-    <form method="post" action="/equalizer/{{ worksheet.id }}/finalize" style="display:inline;" onsubmit="return confirm('Finalize this worksheet and save the PDF to Clio? This cannot be undone.');">
-      <button type="submit">Finalize &amp; Save to Clio</button>
+    <form method="post" action="/equalizer/{{ worksheet.id }}/save" style="display:inline;" onsubmit="return confirm('Save this worksheet to Clio now? This uploads the current PDF to the matter\'s Evidence folder — you can keep editing and save again anytime.');">
+      <button type="submit">Save to Clio</button>
     </form>
-    <form method="post" action="/equalizer/{{ worksheet.id }}/delete" style="display:inline;" onsubmit="return confirm('Delete this draft worksheet? This cannot be undone.');">
+    {% if not worksheet.clio_document_id %}
+    <form method="post" action="/equalizer/{{ worksheet.id }}/delete" style="display:inline;" onsubmit="return confirm('Delete this worksheet? This cannot be undone.');">
       <input type="hidden" name="return_to" value="/equalizer">
       <button type="submit" class="secondary eq-delete-btn">Delete Worksheet</button>
     </form>
     {% endif %}
   </div>
 
+  <div class="eq-grid-scroll">
   <table id="eq-grid">
     <thead>
       <tr>
         <th>#</th><th>Item</th>
         <th>FMV</th><th>Debt</th><th>Equity</th>
         <th>{{ worksheet.party_a_label }} (Assigned)</th><th>{{ worksheet.party_b_label }} (Assigned)</th>
-        <th>Tax Basis</th><th>Rate</th><th>G/L</th>
+        <th>Tax Basis</th><th>Tax Rate</th><th>G/L</th>
         <th>{{ worksheet.party_a_label }} (After Tax)</th><th>{{ worksheet.party_b_label }} (After Tax)</th>
         <th></th>
       </tr>
@@ -59,8 +67,9 @@
       </tr>
     </tfoot>
   </table>
+  </div>
 
-  <p id="eq-equalization" class="eq-equalization"></p>
+  <div id="eq-equalization" class="eq-equalization"></div>
 </div>
 
 <div class="eq-modal-backdrop" id="eq-settings-modal">
@@ -134,7 +143,6 @@ initEqualizerGrid({
   worksheetId: {{ worksheet.id }},
   items: {{ items | tojson | safe }},
   worksheet: {{ worksheet | tojson | safe }},
-  readonly: {{ "true" if readonly else "false" }},
 });
 </script>
 {% endblock %}
