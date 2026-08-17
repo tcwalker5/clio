@@ -202,6 +202,14 @@ CREATE TABLE IF NOT EXISTS equalizer_worksheets (
     st_rate_b REAL NOT NULL DEFAULT 0.25,
     status TEXT NOT NULL DEFAULT 'draft',
     clio_document_id INTEGER,
+    -- Staff-chosen filename from the last successful Save to Clio (no
+    -- extension needed to type it, .pdf gets appended) — lets multiple
+    -- scenario worksheets for the same matter/day stay distinguishable in
+    -- Clio (matches the legacy Propertizer workflow of naming each
+    -- scenario run) instead of colliding on the same date-stamped name,
+    -- and doubles as the recall list's only way to tell worksheets apart
+    -- once more than one exists for a matter (see equalizer_matter.html).
+    clio_document_name TEXT,
     finalized_at TEXT,
     last_saved_at TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -261,6 +269,7 @@ def get_connection() -> sqlite3.Connection:
     conn.executescript(SCHEMA)
     _ensure_column(conn, "staff_cache", "is_attorney", "INTEGER DEFAULT 0")
     _ensure_column(conn, "equalizer_worksheets", "last_saved_at", "TEXT")
+    _ensure_column(conn, "equalizer_worksheets", "clio_document_name", "TEXT")
     conn.executemany(
         "INSERT OR IGNORE INTO purpose_mappings (raw_pattern, canonical_code, description) VALUES (?, ?, ?)",
         DEFAULT_PURPOSE_MAPPINGS,

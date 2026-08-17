@@ -239,6 +239,23 @@ and `clio_users.py` both follow `next` directly for this reason.
 - Continue on failure — log error, move to next item
 - Never silently overwrite existing data
 
+## Designated test matter — use this, not an arbitrary real one
+**DOE, JANE** (matter id `1784289301`, client "Jane Doe," status Pending) is
+the standing target for any live testing against a real matter — creating
+worksheets, uploading documents, posting notes, anything that needs a real
+`matter_id` to exercise. Added 2026-08-14 after a real near-miss: earlier
+Equalizer testing picked "whatever matter comes next alphabetically" and
+landed on VINEY, MARY ANNE — a matter Ted was actively, genuinely using at
+that exact moment. A test step nearly overwrote real client data before it
+was caught via timestamp forensics and reverted. **Use DOE, JANE for any
+future live-Clio testing across this whole project, not just Equalizer** —
+picking "the next matter alphabetically" or any other real client's matter
+as an improvised test target is exactly the pattern that caused the
+near-miss. This matter needs its own **Evidence** folder created in Clio
+before it can be used for a document-upload test specifically (as of
+2026-08-14 it doesn't have one yet — verify live, don't assume, before
+relying on that step).
+
 ---
 
 # Development Philosophy
@@ -1673,6 +1690,46 @@ already has one or more (any status) shows `equalizer_matter.html` — that
 matter's worksheet history plus a "Start a New Worksheet" button, so
 recalling one is a search away rather than scrolling a global list, and
 starting a duplicate isn't silent.
+
+**Staff-chosen filename + "Save As" scenario cloning (added 2026-08-14):**
+Ted's stated need — staff may run several scenarios for the same matter in
+one day (e.g. "house to Husband" vs. "house sold and split") — needed two
+things, both live-tested:
+
+- **Save to Clio prompts for a filename every click**, not just the first
+  save — `equalizer.js`'s click handler uses the browser's native
+  `prompt()`, defaulting to whatever was last saved
+  (`worksheet.clio_document_name`) or a fresh `equalizer-{date}` if never
+  saved, so an ordinary re-save is just Enter. Cancelling the prompt aborts
+  the save — this replaces the plain `confirm()` the button used to have,
+  since typing/confirming a name already serves as the "are you sure" gate.
+  The typed name is sanitized server-side (`routes_equalizer.py`'s
+  `_sanitize_filename()`, allowlist not denylist) before use — it becomes a
+  URL path segment in Clio's presigned S3 upload URL
+  (`/uploads/document_version/file/{uuid}/{filename}`), so this doesn't
+  rely on Clio's backend correctly encoding arbitrary staff input.
+  `.pdf` gets appended if missing. The chosen name is stored
+  (`equalizer_worksheets.clio_document_name`) and reused as the recall
+  list's only way to tell multiple scenario worksheets for one matter apart
+  — `equalizer_matter.html`'s table leads with a **Name** column now,
+  showing `clio_document_name`, or `(saved before naming existed)` for
+  worksheets saved before this feature (their name was never recorded, but
+  they genuinely are saved — a bare "unsaved draft" fallback would have
+  been actively wrong for those), or `(unsaved draft)` for a worksheet with
+  no `clio_document_id` at all.
+- **"Save As" clones settings + every row into a brand-new draft**
+  (`equalizer/store.py`'s `duplicate_worksheet()`, `POST
+  /equalizer/{id}/duplicate`) — for "copy most of the data but make a
+  slight change" rather than retyping a whole scenario from scratch. The
+  clone starts completely unlinked from Clio (`draft`, no
+  `clio_document_id`/`clio_document_name`) — it's an independent worksheet
+  that happens to start with the same numbers, not a version of the
+  original; editing or deleting it never touches the source worksheet.
+  Live-tested against a real saved worksheet (AMOS, CHRISTINE) via the
+  actual route — confirmed the clone's 4 items matched exactly, confirmed
+  the source worksheet's `updated_at` was byte-for-byte unchanged
+  afterward, then deleted the clone (never saved to Clio, so plain local
+  delete was safe).
 
 **Matter Note on first save — links back to the live worksheet, confirmed
 working 2026-08-14:** alongside the PDF upload, the first Save to Clio also

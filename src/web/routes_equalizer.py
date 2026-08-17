@@ -19,6 +19,7 @@ again just pushes a new Document version rather than locking anything (Ted,
 """
 
 import logging
+import re
 from datetime import datetime
 
 from fastapi import APIRouter, Body, Depends, Form, HTTPException, Request
@@ -43,6 +44,23 @@ def _worksheet_or_404(conn, worksheet_id: int) -> dict:
     if worksheet is None:
         raise HTTPException(status_code=404, detail=f"No such worksheet: {worksheet_id}")
     return worksheet
+
+
+# Allowlist rather than a denylist — the filename ends up as a URL path
+# segment in Clio's own presigned S3 upload URL
+# (/uploads/document_version/file/{uuid}/{filename}), so keeping it to a
+# conservative safe set avoids relying on Clio's backend to correctly
+# encode whatever a staff member happens to type.
+_UNSAFE_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9 _\-().]")
+
+
+def _sanitize_filename(raw: str, fallback: str) -> str:
+    cleaned = re.sub(r"\s+", " ", _UNSAFE_FILENAME_CHARS.sub("", raw)).strip()[:150]
+    if not cleaned:
+        cleaned = fallback
+    if not cleaned.lower().endswith(".pdf"):
+        cleaned += ".pdf"
+    return cleaned
 
 
 async def _create_worksheet_for_matter(conn, matter_id: int) -> int:
@@ -77,7 +95,14 @@ async def equalizer_home(request: Request, _: None = Depends(require_auth)):
     all_matters: list[dict] = []
     try:
         session = clio_documents.build_session()
-        matters_raw = await run_in_threadpool(matter_matching.fetch_open_matters, session, fields="id,display_number")
+        # Includes Pending, not just Open — Equalizer's own designated test
+        # matter (DOE, JANE) is Pending, and a real matter can plausibly
+        # need an asset/debt worksheet started before its status flips to
+        # Open too. Every other caller of fetch_open_matters in this repo
+        # keeps the plain "open" default untouched.
+        matters_raw = await run_in_threadpool(
+            matter_matching.fetch_open_matters, session, fields="id,display_number", status="open,pending",
+        )
         all_matters = sorted(
             ({"id": int(m["id"]), "name": m["display_number"]} for m in matters_raw if m.get("display_number")),
             key=lambda m: m["name"],
@@ -163,6 +188,25 @@ async def equalizer_delete_worksheet(
 
     target = return_to if return_to.startswith("/equalizer") else "/equalizer"
     return RedirectResponse(url=target, status_code=303)
+
+
+@router.post("/{worksheet_id}/duplicate")
+async def equalizer_duplicate(worksheet_id: int, _: None = Depends(require_auth)):
+    """"Save As" — clone this worksheet's settings and rows into a brand
+    new draft for a variant scenario (Ted, 2026-08-14: staff may run
+    several scenarios for the same matter in one day), rather than
+    retyping everything for a small change. The clone starts completely
+    unlinked from Clio (own draft status, no clio_document_id) — it isn't
+    a version of the original, it's an independent worksheet that happens
+    to start with the same numbers."""
+    conn = get_connection()
+    try:
+        _worksheet_or_404(conn, worksheet_id)
+        new_worksheet_id = store.duplicate_worksheet(conn, worksheet_id)
+    finally:
+        conn.close()
+
+    return RedirectResponse(url=f"/equalizer/{new_worksheet_id}", status_code=303)
 
 
 @router.get("/{worksheet_id}", response_class=HTMLResponse)
@@ -328,14 +372,22 @@ async def equalizer_preview_pdf(worksheet_id: int, _: None = Depends(require_aut
 
 
 @router.post("/{worksheet_id}/save", response_class=HTMLResponse)
-async def equalizer_save_to_clio(worksheet_id: int, request: Request, _: None = Depends(require_auth)):
+async def equalizer_save_to_clio(
+    worksheet_id: int, request: Request, filename: str = Form(""), _: None = Depends(require_auth),
+):
     """Repeatable, not one-way (Ted, 2026-08-14: "nothing is ever final" in
     this line of work) — a worksheet stays editable after this and Save to
     Clio can be clicked again any time. Re-saves push a new Document
     *version* under the same clio_document_id (see clio_documents.py)
     rather than a duplicate file, and only the very first save posts the
     matter Note — the link it contains stays correct across later edits, so
-    reposting one per save would just clutter the matter's Notes list."""
+    reposting one per save would just clutter the matter's Notes list.
+
+    filename is staff-chosen (prompted client-side, equalizer.js) rather
+    than always auto-generated — added 2026-08-14 so multiple scenario
+    worksheets for the same matter/day don't collide on the same
+    date-stamped name; falls back to the old auto-generated name if left
+    blank."""
     from web.app import render
 
     conn = get_connection()
@@ -353,7 +405,8 @@ async def equalizer_save_to_clio(worksheet_id: int, request: Request, _: None = 
                       error="Add at least one row before saving to Clio.")
 
     pdf_bytes = await run_in_threadpool(pdf.render_worksheet_pdf, worksheet, items)
-    filename = f"equalizer-{datetime.today().strftime('%Y-%m-%d')}.pdf"
+    default_filename = f"equalizer-{datetime.today().strftime('%Y-%m-%d')}"
+    safe_filename = _sanitize_filename(filename, default_filename)
     previous_document_id = worksheet["clio_document_id"]
     is_first_save = previous_document_id is None
 
@@ -362,10 +415,10 @@ async def equalizer_save_to_clio(worksheet_id: int, request: Request, _: None = 
         try:
             session = clio_documents.build_session()
             document_id = await run_in_threadpool(
-                clio_documents.upload_pdf, session, worksheet["matter_id"], filename, pdf_bytes,
+                clio_documents.upload_pdf, session, worksheet["matter_id"], safe_filename, pdf_bytes,
                 previous_document_id,
             )
-            store.mark_saved_to_clio(conn, worksheet_id, document_id)
+            store.mark_saved_to_clio(conn, worksheet_id, document_id, safe_filename)
         except RuntimeError as e:
             worksheet = store.get_worksheet(conn, worksheet_id)
             items = store.list_items(conn, worksheet_id)
@@ -394,7 +447,7 @@ async def equalizer_save_to_clio(worksheet_id: int, request: Request, _: None = 
         version_note = " (new version)."
     else:
         version_note = " (the previous Clio document had been deleted, so this was saved as a new document)."
-    notice = f"Saved to Clio as {filename} in the matter's Evidence folder" + version_note
+    notice = f"Saved to Clio as {safe_filename} in the matter's Evidence folder" + version_note
     if is_first_save:
         # Secondary, best-effort step — the PDF landing in Evidence is the
         # artifact that actually matters and has already succeeded by this

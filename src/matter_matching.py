@@ -35,8 +35,18 @@ def fetch_open_matters(
     session: requests.Session,
     base_url: str = BASE_URL_DEFAULT,
     fields: str = MATTERS_FIELDS,
+    status: str = "open",
 ) -> list[dict]:
-    """Fetch all open matters from the Clio API, handling pagination.
+    """Fetch matters from the Clio API, handling pagination. Despite the
+    name (kept as-is — every existing caller relies on the "open" default
+    and this function predates status being configurable), `status` accepts
+    Clio's own comma-separated syntax, e.g. `"open,pending"` — confirmed in
+    reference/openapi.json's own description for this param. Added
+    2026-08-14 specifically so Equalizer's matter search can include
+    Pending matters (its own designated test matter, DOE JANE, is Pending)
+    without changing what every other caller of this shared function sees
+    — Printer Expenses, Bradford, Trust Monitor, Collections, etc. all keep
+    the "open" default untouched.
 
     `fields` defaults to the id/display_number/custom_number/status callers
     normally need; pass a wider string (e.g. adding `,client{id}`) when a
@@ -57,7 +67,7 @@ def fetch_open_matters(
             resp = session.get(next_url)
         else:
             params = {
-                "status": "open",
+                "status": status,
                 "fields": fields,
                 "limit": MATTERS_PAGE_SIZE,
             }
@@ -76,7 +86,7 @@ def fetch_open_matters(
         if not next_url:
             break
 
-    logging.info("Fetched %d open matters from Clio API", len(matters))
+    logging.info("Fetched %d matters (status=%s) from Clio API", len(matters), status)
     return matters
 
 

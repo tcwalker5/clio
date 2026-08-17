@@ -32,8 +32,12 @@
     <button type="button" class="secondary" id="eq-tax-rates-btn">Tax Rates</button>
     <span class="eq-toolbar-sep"></span>
     <a class="btn secondary" href="/equalizer/{{ worksheet.id }}/preview.pdf" target="_blank">View / Print PDF</a>
-    <form method="post" action="/equalizer/{{ worksheet.id }}/save" style="display:inline;" onsubmit="return confirm('Save this worksheet to Clio now? This uploads the current PDF to the matter\'s Evidence folder — you can keep editing and save again anytime.');">
-      <button type="submit">Save to Clio</button>
+    <form method="post" action="/equalizer/{{ worksheet.id }}/save" id="eq-save-form" style="display:inline;">
+      <input type="hidden" name="filename" id="eq-save-filename">
+      <button type="submit" id="eq-save-btn">Save to Clio</button>
+    </form>
+    <form method="post" action="/equalizer/{{ worksheet.id }}/duplicate" style="display:inline;" onsubmit="return confirm('Save As a new worksheet? This copies all current rows and settings into a new draft — nothing on this worksheet changes.');">
+      <button type="submit" class="secondary">Save As...</button>
     </form>
     {% if not worksheet.clio_document_id %}
     <form method="post" action="/equalizer/{{ worksheet.id }}/delete" style="display:inline;" onsubmit="return confirm('Delete this worksheet? This cannot be undone.');">

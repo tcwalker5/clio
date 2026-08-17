@@ -95,20 +95,69 @@ def update_worksheet_settings(conn, worksheet_id: int, **fields) -> None:
     conn.commit()
 
 
-def mark_saved_to_clio(conn, worksheet_id: int, clio_document_id: int) -> None:
+def mark_saved_to_clio(conn, worksheet_id: int, clio_document_id: int, clio_document_name: str) -> None:
     """Called every time Save to Clio succeeds, not just the first — a
     worksheet stays editable and re-savable indefinitely (Ted, 2026-08-14).
     finalized_at only gets set the first time (COALESCE — it's "first saved
-    at", the column name is just a holdover); last_saved_at always updates."""
+    at", the column name is just a holdover); last_saved_at and
+    clio_document_name always update, so a later save with a different
+    chosen filename overwrites the recall list's label too."""
     conn.execute(
         """UPDATE equalizer_worksheets
-           SET status = 'saved', clio_document_id = ?,
+           SET status = 'saved', clio_document_id = ?, clio_document_name = ?,
                finalized_at = COALESCE(finalized_at, CURRENT_TIMESTAMP),
                last_saved_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
            WHERE id = ?""",
-        (clio_document_id, worksheet_id),
+        (clio_document_id, clio_document_name, worksheet_id),
     )
     conn.commit()
+
+
+def duplicate_worksheet(conn, worksheet_id: int) -> int | None:
+    """"Save As" — clones a worksheet's settings and every item into a
+    brand-new draft, for running a variant scenario off an existing one
+    (Ted, 2026-08-14: staff may run several scenarios for the same matter
+    in one day) without retyping everything. The copy starts completely
+    fresh on the Clio side (status 'draft', no clio_document_id/name) — an
+    existing Save-to-Clio link belongs to the original worksheet, not the
+    copy; the copy gets its own the first time it's saved. Returns None if
+    the source worksheet doesn't exist."""
+    source = get_worksheet(conn, worksheet_id)
+    if source is None:
+        return None
+
+    cur = conn.execute(
+        """INSERT INTO equalizer_worksheets (
+               matter_id, matter_display_number, naming_mode,
+               party_a_label, party_b_label, party_a_role, party_b_role,
+               fed_rate_a, fed_rate_b, state_rate_a, state_rate_b,
+               lt_rate_a, lt_rate_b, st_rate_a, st_rate_b
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            source["matter_id"], source["matter_display_number"], source["naming_mode"],
+            source["party_a_label"], source["party_b_label"], source["party_a_role"], source["party_b_role"],
+            source["fed_rate_a"], source["fed_rate_b"], source["state_rate_a"], source["state_rate_b"],
+            source["lt_rate_a"], source["lt_rate_b"], source["st_rate_a"], source["st_rate_b"],
+        ),
+    )
+    new_worksheet_id = cur.lastrowid
+
+    for item in list_items(conn, worksheet_id):
+        conn.execute(
+            """INSERT INTO equalizer_items (
+                   worksheet_id, position, description, fmv, debt,
+                   before_tax_a, before_tax_b, tax_basis, rate_type, gain_loss,
+                   after_tax_a, after_tax_b
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                new_worksheet_id, item["position"], item["description"], item["fmv"], item["debt"],
+                item["before_tax_a"], item["before_tax_b"], item["tax_basis"], item["rate_type"], item["gain_loss"],
+                item["after_tax_a"], item["after_tax_b"],
+            ),
+        )
+
+    conn.commit()
+    return new_worksheet_id
 
 
 def delete_worksheet(conn, worksheet_id: int) -> None:

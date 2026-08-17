@@ -370,6 +370,26 @@ function initEqualizerGrid(config) {
     renderTotals(totals);
   });
 
+  // Prompted every click, even on a re-save — staff may want to rename a
+  // scenario later, and defaulting to whatever was last saved (rather than
+  // always a fresh date stamp) makes an ordinary re-save a single Enter
+  // keypress. Cancelling the prompt (Cancel button, Esc) aborts the save
+  // entirely — this replaces the plain confirm() this button used to have,
+  // since needing to type/confirm a name already serves as the "are you
+  // sure" gate.
+  document.getElementById("eq-save-btn").addEventListener("click", (e) => {
+    const today = new Date().toISOString().slice(0, 10);
+    const defaultName = config.worksheet.clio_document_name
+      ? config.worksheet.clio_document_name.replace(/\.pdf$/i, "")
+      : `equalizer-${today}`;
+    const chosen = prompt("Save to Clio as (filename):", defaultName);
+    if (chosen === null) {
+      e.preventDefault();
+      return;
+    }
+    document.getElementById("eq-save-filename").value = chosen;
+  });
+
   // ---- Settings modal ----
   const settingsModal = document.getElementById("eq-settings-modal");
   const namingSelect = document.getElementById("eq-naming-mode");

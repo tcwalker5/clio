@@ -7,10 +7,16 @@
 <div class="panel">
   <h2>Worksheets for this matter</h2>
   <table>
-    <thead><tr><th>Parties</th><th>Status</th><th>Updated</th><th></th></tr></thead>
+    <thead><tr><th>Name</th><th>Parties</th><th>Status</th><th>Updated</th><th></th></tr></thead>
     <tbody>
       {% for w in worksheets %}
       <tr>
+        <td>
+          {% if w.clio_document_name %}{{ w.clio_document_name }}
+          {% elif w.clio_document_id %}(saved before naming existed)
+          {% else %}(unsaved draft)
+          {% endif %}
+        </td>
         <td>{{ w.party_a_label }} / {{ w.party_b_label }}</td>
         <td>
           {% if trashed_by_id.get(w.id) %}
