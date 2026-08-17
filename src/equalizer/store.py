@@ -1,10 +1,111 @@
 """
 store.py — SQLite persistence for Equalizer worksheets/items
-(data/clio_dashboard.db, schema in web/db.py). No Clio calls here — matter
-linkage is just an id + display_number snapshot; matter_id is the only tie
-back to the live system, resolved fresh wherever the matter's own name/status
-is needed.
+(data/clio_dashboard.db). No Clio calls here — matter linkage is just an id +
+display_number snapshot; matter_id is the only tie back to the live system,
+resolved fresh wherever the matter's own name/status is needed.
+
+SCHEMA/SCHEMA_COLUMNS below are this module's own schema fragment — owned
+here rather than in web/db.py's schema, so a mistake in Equalizer's tables
+can't break every other subproject's tables too. web/db.py's get_connection()
+applies every subproject's fragment in its own isolated try/except; see that
+file's _apply_fragment() for the mechanism (moved 2026-08-17, alongside
+building the Moore/Marsden Calculator, once a second subproject made "one
+shared SCHEMA string, one executescript() call" a real blast-radius risk
+rather than a hypothetical one).
 """
+
+# One worksheet per asset/debt division exercise, tied to a Clio matter.
+# naming_mode 'husband_wife' (default) shows fixed H/W labels; 'first_names'
+# (the same-sex-couple case) shows party_a_label/party_b_label instead,
+# editable and normally pre-filled from the matter's client + Opposing Party
+# contact (see equalizer/clio_parties.py). Tax rates are per-worksheet, one
+# set of four (fed/state/long-term/short-term capital gain) per party — a
+# row picks which one applies via equalizer_items.rate_type, it does not
+# carry its own rate.
+#
+# status: 'draft' (never pushed to Clio) or 'saved' (pushed at least once)
+# — purely informational, does NOT lock editing (Ted, 2026-08-14: "nothing
+# is ever final" in this line of work — a worksheet stays editable after
+# being saved to Clio, and Save to Clio can be clicked again any time,
+# pushing a new Document *version* rather than a duplicate file — see
+# equalizer/clio_documents.py). finalized_at is actually "first saved to
+# Clio at" (column name kept as-is, no real data existed to migrate when
+# the terminology changed); last_saved_at updates on every save, including
+# the first.
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS equalizer_worksheets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    matter_id INTEGER NOT NULL,
+    matter_display_number TEXT NOT NULL,
+    naming_mode TEXT NOT NULL DEFAULT 'husband_wife',
+    party_a_label TEXT NOT NULL DEFAULT 'Husband',
+    party_b_label TEXT NOT NULL DEFAULT 'Wife',
+    party_a_role TEXT NOT NULL DEFAULT 'Petitioner',
+    party_b_role TEXT NOT NULL DEFAULT 'Respondent',
+    -- Defaults match the legacy Propertizer tool's own (see DEFAULT_* constants
+    -- below, which are what actually apply these — a column DEFAULT here only
+    -- governs a database created fresh with this schema, not one where the
+    -- column already existed).
+    fed_rate_a REAL NOT NULL DEFAULT 0.25,
+    fed_rate_b REAL NOT NULL DEFAULT 0.25,
+    state_rate_a REAL NOT NULL DEFAULT 0.093,
+    state_rate_b REAL NOT NULL DEFAULT 0.093,
+    lt_rate_a REAL NOT NULL DEFAULT 0.15,
+    lt_rate_b REAL NOT NULL DEFAULT 0.15,
+    st_rate_a REAL NOT NULL DEFAULT 0.25,
+    st_rate_b REAL NOT NULL DEFAULT 0.25,
+    status TEXT NOT NULL DEFAULT 'draft',
+    clio_document_id INTEGER,
+    -- Staff-chosen filename from the last successful Save to Clio (no
+    -- extension needed to type it, .pdf gets appended) — lets multiple
+    -- scenario worksheets for the same matter/day stay distinguishable in
+    -- Clio (matches the legacy Propertizer workflow of naming each
+    -- scenario run) instead of colliding on the same date-stamped name,
+    -- and doubles as the recall list's only way to tell worksheets apart
+    -- once more than one exists for a matter (see equalizer_matter.html).
+    clio_document_name TEXT,
+    finalized_at TEXT,
+    last_saved_at TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_equalizer_worksheets_matter ON equalizer_worksheets(matter_id);
+
+-- Equity (fmv - debt) is deliberately not stored — computed at read time so
+-- it can never drift from its inputs (same reasoning as trust_monitor's
+-- cushion/shortfall properties). after_tax_a/b are nullable: NULL means
+-- "auto-computed from before_tax +/- the unrealized-gain tax hit" (see
+-- equalizer/calc.py); a non-null value is a manual override a paralegal
+-- typed in directly, which always wins.
+CREATE TABLE IF NOT EXISTS equalizer_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    worksheet_id INTEGER NOT NULL REFERENCES equalizer_worksheets(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    fmv REAL NOT NULL DEFAULT 0,
+    debt REAL NOT NULL DEFAULT 0,
+    before_tax_a REAL NOT NULL DEFAULT 0,
+    before_tax_b REAL NOT NULL DEFAULT 0,
+    tax_basis REAL,
+    rate_type TEXT NOT NULL DEFAULT 'none',
+    gain_loss INTEGER NOT NULL DEFAULT 0,
+    after_tax_a REAL,
+    after_tax_b REAL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_equalizer_items_worksheet ON equalizer_items(worksheet_id, position);
+"""
+
+# (table, column, ddl) — applied via web/db.py's generic _ensure_column() for
+# databases that predate a given column (schema drift guard, not a real
+# migration framework; see that function's own docstring).
+SCHEMA_COLUMNS = [
+    ("equalizer_worksheets", "last_saved_at", "TEXT"),
+    ("equalizer_worksheets", "clio_document_name", "TEXT"),
+]
 
 # Starting tax rates for every new worksheet — matches the legacy
 # Propertizer tool's own defaults exactly (confirmed 2026-08-14 against a

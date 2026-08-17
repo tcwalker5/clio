@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}Moore/Marsden — {{ worksheet.matter_display_number }}{% endblock %}
+{% block content %}
+<h1>Moore/Marsden — {{ worksheet.matter_display_number }}</h1>
+<p class="subtitle">
+  {{ worksheet.owner_spouse_label or "Owner Spouse" }} / {{ worksheet.non_owner_spouse_label or "Non-Owner Spouse" }}
+  {% if clio_document_trashed %}
+  <span class="badge err">Clio document deleted</span>
+  {% elif worksheet.status != 'draft' %}<span class="badge ok">Saved to Clio</span>{% else %}<span class="badge warn">Draft</span>{% endif %}
+</p>
+<p><a href="/moore-marsden">&larr; All worksheets</a></p>
+
+{% if clio_document_trashed %}
+<div class="panel">
+  <p class="error-text">The PDF this worksheet was saved to has been deleted (moved to Clio's Trash) directly in Clio — this dashboard only found out just now by checking live, it isn't notified automatically. The matter Note (if one was posted) still links here, but the file it used to point to is gone. Clicking <strong>Save to Clio</strong> below will create a fresh document in the matter's Evidence folder rather than trying to update the deleted one.</p>
+</div>
+{% endif %}
+
+{% if error %}<div class="panel"><p class="error-text">{{ error }}</p></div>{% endif %}
+{% if notice %}<div class="panel"><p class="notice-text">{{ notice }}</p></div>{% endif %}
+
+<div class="panel">
+  <div class="mm-toolbar">
+    <button type="button" class="secondary" id="mm-add-segment">+ Add Refinance</button>
+    <span class="mm-toolbar-sep"></span>
+    <button type="button" class="secondary" id="mm-settings-btn">Settings</button>
+    <span class="mm-toolbar-sep"></span>
+    <a class="btn secondary" href="/moore-marsden/{{ worksheet.id }}/preview.pdf" target="_blank">View / Print PDF</a>
+    <form method="post" action="/moore-marsden/{{ worksheet.id }}/save" id="mm-save-form" style="display:inline;">
+      <input type="hidden" name="filename" id="mm-save-filename">
+      <button type="submit" id="mm-save-btn">Save to Clio</button>
+    </form>
+    <form method="post" action="/moore-marsden/{{ worksheet.id }}/duplicate" style="display:inline;" onsubmit="return confirm('Save As a new worksheet? This copies all current rows and settings into a new draft — nothing on this worksheet changes.');">
+      <button type="submit" class="secondary">Save As...</button>
+    </form>
+    {% if not worksheet.clio_document_id %}
+    <form method="post" action="/moore-marsden/{{ worksheet.id }}/delete" style="display:inline;" onsubmit="return confirm('Delete this worksheet? This cannot be undone.');">
+      <input type="hidden" name="return_to" value="/moore-marsden">
+      <button type="submit" class="secondary mm-delete-btn">Delete Worksheet</button>
+    </form>
+    {% endif %}
+  </div>
+
+  <div id="mm-grid" class="mm-grid"></div>
+
+  <div id="mm-summary" class="mm-summary"></div>
+</div>
+
+<div class="mm-modal-backdrop" id="mm-settings-modal">
+  <div class="mm-modal panel">
+    <h2>Settings</h2>
+    <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Owner spouse (whose separate property this is)</label>
+    <input type="text" id="mm-owner-label" value="{{ worksheet.owner_spouse_label or '' }}" style="width:100%; padding:0.5rem; margin-bottom:0.75rem; border:1px solid var(--border); border-radius:6px;">
+    <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Non-owner spouse</label>
+    <input type="text" id="mm-non-owner-label" value="{{ worksheet.non_owner_spouse_label or '' }}" style="width:100%; padding:0.5rem; margin-bottom:0.75rem; border:1px solid var(--border); border-radius:6px;">
+    <button type="button" class="secondary" id="mm-autofill-names">Autofill from Clio</button>
+
+    <hr style="margin:1rem 0; border:none; border-top:1px solid var(--border);">
+
+    <label style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.75rem;">
+      <input type="checkbox" id="mm-acquired-before-marriage" {% if worksheet.acquired_before_marriage %}checked{% endif %}>
+      Property was acquired before the marriage
+    </label>
+    <div id="mm-marriage-fields" style="display:none;">
+      <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Date of marriage</label>
+      <input type="date" id="mm-date-of-marriage" value="{{ worksheet.date_of_marriage or '' }}" style="width:100%; padding:0.5rem; margin-bottom:0.75rem; border:1px solid var(--border); border-radius:6px;">
+      <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Property value at date of marriage</label>
+      <input type="text" inputmode="decimal" id="mm-value-at-marriage" value="{{ worksheet.value_at_date_of_marriage if worksheet.value_at_date_of_marriage is not none else '' }}" style="width:100%; padding:0.5rem; margin-bottom:0.75rem; border:1px solid var(--border); border-radius:6px;">
+      <p class="subtitle">Community percentage still anchors to the original purchase price — this value only changes where marital appreciation is measured from, so premarital appreciation stays separate property.</p>
+    </div>
+
+    <div style="display:flex; gap:0.5rem; justify-content:flex-end; margin-top:1rem;">
+      <button type="button" class="secondary mm-modal-cancel">Cancel</button>
+      <button type="button" id="mm-settings-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/moore_marsden.js"></script>
+<script>
+initMooreMarsdenGrid({
+  worksheetId: {{ worksheet.id }},
+  segments: {{ segments | tojson | safe }},
+  worksheet: {{ worksheet | tojson | safe }},
+});
+</script>
+{% endblock %}

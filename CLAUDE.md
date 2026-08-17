@@ -93,10 +93,17 @@ clio/
 │   ├── collections_monitor.py    # Collections — unpaid, already-issued bills (read-only)
 │   ├── equalizer/                # Equalizer — asset/debt division worksheets
 │   │   ├── calc.py               #   equity, after-tax, 50/50 equalization math
-│   │   ├── store.py              #   SQLite persistence for worksheets/items
+│   │   ├── store.py              #   SQLite persistence for worksheets/items (owns its own schema fragment)
 │   │   ├── clio_parties.py       #   default party names from the matter's client + OP contact
 │   │   ├── pdf.py                #   renders a worksheet to PDF (reportlab)
 │   │   ├── clio_documents.py     #   uploads the finalized PDF to the matter's Evidence folder
+│   │   └── clio_notes.py         #   posts a matter Note linking back to the live worksheet
+│   ├── moore_marsden/            # Moore/Marsden Calculator — community-interest calculation
+│   │   ├── calc.py               #   recursive multi-refinance formula
+│   │   ├── store.py              #   SQLite persistence for worksheets/segments (owns its own schema fragment)
+│   │   ├── clio_parties.py       #   default owner/non-owner labels from the matter's client + OP contact
+│   │   ├── pdf.py                #   renders a worksheet to PDF (reportlab)
+│   │   ├── clio_documents.py     #   uploads the saved PDF to the matter's Evidence folder
 │   │   └── clio_notes.py         #   posts a matter Note linking back to the live worksheet
 │   ├── court_calendar/           # Court Calendar Sync
 │   │   ├── normalizer.py         #   court-text parsing, dept/purpose normalization
@@ -113,7 +120,7 @@ clio/
 │       ├── db.py                 #   SQLite schema (data/clio_dashboard.db)
 │       ├── preview_store.py      #   in-memory dry-run-preview -> confirm-and-post handoff
 │       ├── routes_*.py           #   one router per app (bradford/printer/calendar/legs/
-│       │                         #   ringcentral/trust/collections/equalizer)
+│       │                         #   ringcentral/trust/collections/equalizer/moore_marsden)
 │       ├── templates/            #   Jinja2 templates
 │       └── static/                #   CSS + drag-and-drop JS
 ├── start-dashboard.bat            # Launches the dashboard (uv sync + uvicorn)
@@ -1826,6 +1833,138 @@ matter's existing worksheet(s) or starts a new one), add rows, assign with
 H/W/`=` or type Before-Tax splits directly, optionally set Tax Rates and
 per-row G/L/Tax Basis, Preview to check the PDF, then Save to Clio whenever
 it's ready — and again anytime after, since editing continues.
+
+---
+
+# Moore/Marsden Calculator
+
+**Modules:** `src/moore_marsden/`, dashboard pages at `/moore-marsden`
+(`src/web/routes_moore_marsden.py`, `src/web/templates/moore_marsden.html`,
+`moore_marsden_matter.html`, `moore_marsden_worksheet.html`,
+`src/web/static/moore_marsden.js`)
+
+**Purpose:** Calculates the community's interest in a spouse's separate-
+property real estate under California's Moore/Marsden doctrine (*In re
+Marriage of Moore*, 28 Cal.3d 366 (1980); *In re Marriage of Marsden*, 130
+Cal.App.3d 426 (1982)) — a Python/Clio port of a legacy Excel workbook,
+built 2026-08-17 following the same worksheet/PDF/Save-to-Clio pattern
+Equalizer established. Same dashboard-only shape as Equalizer: item CRUD is
+small autosaving JSON endpoints, not a submit-and-reload form; Preview
+regenerates the PDF live and never touches Clio; Save to Clio is repeatable,
+not a one-way lock.
+
+**The legacy report is not the single-period formula — it's a chained,
+multi-refinance calculation**, one "Step" per refinance event, each
+resetting the community-percentage calculation against a new basis. The
+plain single-period textbook formula (community % = principal reduction ÷
+original purchase price, applied once) is just the special case of this
+worksheet with zero refinance rows.
+
+**Calculation (`moore_marsden/calc.py`), reverse-engineered from a real
+legacy report and verified to the penny** against all of its real segments
+(`tests/test_moore_marsden_calc.py`; labels in that fixture are generic
+placeholders, not the source document's client name — see the "no client
+names from redacted documents" rule below):
+
+```
+for each period (a refinance or the final valuation row), in order:
+    basis = property value at the START of this period (the purchase price,
+            or the prior period's ending/refi value)
+    appreciation = end_value - appreciation_start
+        (appreciation_start is normally == basis, except the very first
+        period when the property was acquired before marriage — there, it's
+        the value at date of marriage instead, so premarital appreciation
+        stays separate property; the community-percentage denominator is
+        still the original purchase price either way)
+    segment_cpr = cumulative_community_interest_so_far + this_period's_own_principal_paydown
+    community_pct = segment_cpr / basis
+    community_appreciation = max(0, community_pct * appreciation)  # floors at
+        # $0 on a depreciation period — separate property absorbs the loss,
+        # not community; confirmed against the legacy report's own Step 1,
+        # a depreciation period whose displayed community appreciation is $0
+        # even though the real computed percentage is nonzero
+    cumulative_community_interest_so_far = segment_cpr + community_appreciation
+
+total_community_interest = cumulative_community_interest_so_far after the last period
+each_spouse_share = total_community_interest / 2
+```
+
+Staff type each period's own **raw** principal paydown (pulled from
+mortgage statements, per this doctrine's "Records you will need" list) —
+`calc.py` carries the running cumulative total forward itself, rather than
+requiring staff to hand-sum it before typing it in the way the legacy
+Excel tool's preparer had to. This was confirmed by reverse-engineering the
+legacy report's own numbers: its displayed "Community Principal Reductions"
+figure at each step is already cumulative-through-that-step, not
+period-only, which is a real usability gap in the original tool this port
+fixes rather than replicates.
+
+**Two things flagged for sign-off, not just silently assumed** (matching
+this project's practice of naming an interpretation gap rather than
+guessing past it — see Equalizer's after-tax apportionment note for the
+same pattern): the "acquired before marriage" input branch is derived from
+doctrine, not verified against a second real report (the one report this
+was built from happens to be a purchase-during-marriage fact pattern, so
+that branch never gets exercised by it); and the separate-property (SP)
+side of the report is intentionally simplified to a single reconciling
+**SP Total** (`property_value - cumulative_community_interest`, correct by
+construction) rather than exactly replicating the legacy tool's SP-column
+sub-line breakdown (down payment / principal reduction / appreciation /
+loan balance), whose exact accounting convention couldn't be fully pinned
+down from one example — the community-interest math itself is unambiguous
+and verified.
+
+**No client names from redacted source documents.** The legacy report used
+to reverse-engineer this formula had its client-identifying header
+redacted, but the redaction failed on one page — that name must never be
+propagated into code, docs, memory, tests, or commit history. Test fixtures
+and any future documentation referencing that report use generic labels
+("the sample report," placeholder party names) instead.
+
+**Data model** (`moore_marsden_worksheets`/`moore_marsden_segments` in
+`data/clio_dashboard.db`) — one worksheet per calculation, tied to a Clio
+matter; segments are ordered rows chaining the calculation: exactly one
+`purchase` row (position 0), exactly one `valuation` row (last), zero or
+more `refinance` rows between them. `owner_spouse_label`/
+`non_owner_spouse_label` autofill from the matter's client + Opposing Party
+contact (`clio_parties.py`, same OC/OP lookup pattern as Equalizer's and
+Outlook Calendar Migration's). Equity/percentage/appreciation are never
+stored — computed at read time from the segment rows, so they can't drift
+from their inputs.
+
+**Schema ownership** — `moore_marsden/store.py` owns its own `SCHEMA`/
+`SCHEMA_COLUMNS`, applied by `web/db.py`'s `get_connection()` in its own
+isolated try/except (see that file's `_apply_fragment()`). Building this
+subproject prompted a real architecture change to `web/db.py`
+(2026-08-17): every subproject's tables used to live in one shared `SCHEMA`
+string, run through a single `executescript()` call — meaning a typo in
+any one subproject's `CREATE TABLE` would throw and take down
+`get_connection()` for the *entire* dashboard, not just the subproject that
+broke. Equalizer's schema was split out to the same per-module-fragment
+pattern at the same time, as the first proof that the mechanism
+generalizes; the remaining pre-split tables (court events, purpose
+mappings, staff cache, RingCentral sync history, trust requests) still live
+in `web/db.py`'s own `CORE_SCHEMA`, applied through the identical
+isolated-fragment mechanism as its own "core" entry — not yet broken out to
+their owning modules, low urgency since they already get the same fault
+isolation this way.
+
+**Clio integration** — same pattern as Equalizer: `clio_documents.py`
+(near-identical to Equalizer's, already fully generic — Document
+create/PUT/PATCH upload flow, presigned-URL headers, trash detection) and
+`clio_notes.py` (posts a matter Note on first save, linking back to
+`{CAP_BASE_URL}/moore-marsden/{id}`) are separate per-subproject copies
+rather than shared imports, matching this project's existing convention
+that each subproject owns its own Clio-writing helpers.
+
+## Workflow
+Dashboard-only, no CLI equivalent — visit `/moore-marsden`, search for a
+matter (opens its existing worksheet(s) or starts a new one), fill in the
+Purchase row, add Refinance rows for each real refinance (or none, for the
+single-period case), fill in the final Valuation row, optionally mark
+"acquired before marriage" in Settings, Preview to check the PDF, then Save
+to Clio whenever it's ready — and again anytime after, since editing
+continues.
 
 ---
 

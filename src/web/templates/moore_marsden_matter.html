@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Moore/Marsden — {{ matter_display_number }}{% endblock %}
+{% block content %}
+<h1>Moore/Marsden — {{ matter_display_number }}</h1>
+<p><a href="/moore-marsden">&larr; All worksheets</a></p>
+
+<div class="panel">
+  <h2>Worksheets for this matter</h2>
+  <table>
+    <thead><tr><th>Name</th><th>Parties</th><th>Status</th><th>Updated</th><th></th></tr></thead>
+    <tbody>
+      {% for w in worksheets %}
+      <tr>
+        <td>
+          {% if w.clio_document_name %}{{ w.clio_document_name }}
+          {% elif w.clio_document_id %}(saved before naming existed)
+          {% else %}(unsaved draft)
+          {% endif %}
+        </td>
+        <td>{{ w.owner_spouse_label or "?" }} / {{ w.non_owner_spouse_label or "?" }}</td>
+        <td>
+          {% if trashed_by_id.get(w.id) %}
+          <span class="badge err">Clio document deleted</span>
+          {% elif w.status != 'draft' %}
+          <span class="badge ok">Saved to Clio</span>
+          {% else %}
+          <span class="badge warn">Draft</span>
+          {% endif %}
+        </td>
+        <td>{{ w.updated_at }}</td>
+        <td style="display:flex; gap:0.75rem;">
+          <a href="/moore-marsden/{{ w.id }}">Open</a>
+          {% if not w.clio_document_id %}
+          <form method="post" action="/moore-marsden/{{ w.id }}/delete" onsubmit="return confirm('Delete this worksheet? This cannot be undone.');">
+            <input type="hidden" name="return_to" value="/moore-marsden/lookup?matter_id={{ matter_id }}&matter_name={{ matter_display_number | urlencode }}">
+            <button type="submit" class="secondary mm-delete-btn">Delete</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="panel">
+  <form method="post" action="/moore-marsden/new">
+    <input type="hidden" name="matter_id" value="{{ matter_id }}">
+    <button type="submit">Start a New Worksheet</button>
+  </form>
+</div>
+{% endblock %}

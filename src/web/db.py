@@ -3,10 +3,32 @@ db.py — SQLite connection and schema for the Clio dashboard.
 
 Single local file, no external service. Fine for LAN-scale, low-concurrency
 use by a handful of staff (see CLAUDE.md philosophy: no external dependencies).
+
+**Schema ownership is per-subproject, applied here as isolated fragments**
+(changed 2026-08-17, while adding the Moore/Marsden Calculator as a second
+consumer made the original design's real cost concrete): every subproject
+table used to live in one shared SCHEMA string, run through a single
+conn.executescript() call on every get_connection() — meaning a typo in any
+one subproject's CREATE TABLE would throw inside that one call and take down
+get_connection() for the *entire* dashboard (trust, calendar, equalizer,
+everything), not just the subproject that broke. Equalizer and Moore/Marsden
+now each own their own SCHEMA (+ optional SCHEMA_COLUMNS for the
+_ensure_column-style patches) in their own store.py, and _apply_fragment()
+below applies each one in its own try/except — a broken fragment disables
+only that subproject's tables, loudly (logged), rather than the whole app.
+CORE_SCHEMA below still covers the tables that predate this split (court
+events, purpose mappings, staff cache, RingCentral sync history, trust
+requests) — not yet broken out to their owning modules; low urgency since
+each already gets isolated as its own "core" fragment through the same
+mechanism, but worth doing if those files are touched again.
 """
 
+import logging
 import sqlite3
 from pathlib import Path
+
+import equalizer.store as equalizer_store
+import moore_marsden.store as moore_marsden_store
 
 DB_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "clio_dashboard.db"
 
@@ -72,7 +94,7 @@ DEFAULT_PURPOSE_MAPPINGS: list[tuple[str, str, str]] = [
     ("TRO", "TRO", "Temporary Restraining Order Hearing"),
 ]
 
-SCHEMA = """
+CORE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS court_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     event_uid TEXT UNIQUE NOT NULL,
@@ -160,90 +182,21 @@ CREATE TABLE IF NOT EXISTS trust_requests (
 );
 
 CREATE INDEX IF NOT EXISTS idx_trust_requests_matter_status ON trust_requests(matter_id, status);
-
--- One worksheet per asset/debt division exercise, tied to a Clio matter.
--- naming_mode 'husband_wife' (default) shows fixed H/W labels; 'first_names'
--- (the same-sex-couple case) shows party_a_label/party_b_label instead,
--- editable and normally pre-filled from the matter's client + Opposing Party
--- contact (see equalizer/clio_parties.py). Tax rates are per-worksheet, one
--- set of four (fed/state/long-term/short-term capital gain) per party — a
--- row picks which one applies via equalizer_items.rate_type, it does not
--- carry its own rate.
---
--- status: 'draft' (never pushed to Clio) or 'saved' (pushed at least once)
--- — purely informational, does NOT lock editing (Ted, 2026-08-14: "nothing
--- is ever final" in this line of work — a worksheet stays editable after
--- being saved to Clio, and Save to Clio can be clicked again any time,
--- pushing a new Document *version* rather than a duplicate file — see
--- equalizer/clio_documents.py). finalized_at is actually "first saved to
--- Clio at" (column name kept as-is, no real data existed to migrate when
--- the terminology changed); last_saved_at updates on every save, including
--- the first.
-CREATE TABLE IF NOT EXISTS equalizer_worksheets (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    matter_id INTEGER NOT NULL,
-    matter_display_number TEXT NOT NULL,
-    naming_mode TEXT NOT NULL DEFAULT 'husband_wife',
-    party_a_label TEXT NOT NULL DEFAULT 'Husband',
-    party_b_label TEXT NOT NULL DEFAULT 'Wife',
-    party_a_role TEXT NOT NULL DEFAULT 'Petitioner',
-    party_b_role TEXT NOT NULL DEFAULT 'Respondent',
-    -- Defaults match the legacy Propertizer tool's own (see
-    -- equalizer/store.py's DEFAULT_* constants, which are what actually
-    -- apply these — a column DEFAULT here only governs a database created
-    -- fresh with this schema, not one where the column already existed).
-    fed_rate_a REAL NOT NULL DEFAULT 0.25,
-    fed_rate_b REAL NOT NULL DEFAULT 0.25,
-    state_rate_a REAL NOT NULL DEFAULT 0.093,
-    state_rate_b REAL NOT NULL DEFAULT 0.093,
-    lt_rate_a REAL NOT NULL DEFAULT 0.15,
-    lt_rate_b REAL NOT NULL DEFAULT 0.15,
-    st_rate_a REAL NOT NULL DEFAULT 0.25,
-    st_rate_b REAL NOT NULL DEFAULT 0.25,
-    status TEXT NOT NULL DEFAULT 'draft',
-    clio_document_id INTEGER,
-    -- Staff-chosen filename from the last successful Save to Clio (no
-    -- extension needed to type it, .pdf gets appended) — lets multiple
-    -- scenario worksheets for the same matter/day stay distinguishable in
-    -- Clio (matches the legacy Propertizer workflow of naming each
-    -- scenario run) instead of colliding on the same date-stamped name,
-    -- and doubles as the recall list's only way to tell worksheets apart
-    -- once more than one exists for a matter (see equalizer_matter.html).
-    clio_document_name TEXT,
-    finalized_at TEXT,
-    last_saved_at TEXT,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_equalizer_worksheets_matter ON equalizer_worksheets(matter_id);
-
--- Equity (fmv - debt) is deliberately not stored — computed at read time so
--- it can never drift from its inputs (same reasoning as trust_monitor's
--- cushion/shortfall properties). after_tax_a/b are nullable: NULL means
--- "auto-computed from before_tax +/- the unrealized-gain tax hit" (see
--- equalizer/calc.py); a non-null value is a manual override a paralegal
--- typed in directly, which always wins.
-CREATE TABLE IF NOT EXISTS equalizer_items (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    worksheet_id INTEGER NOT NULL REFERENCES equalizer_worksheets(id) ON DELETE CASCADE,
-    position INTEGER NOT NULL,
-    description TEXT NOT NULL DEFAULT '',
-    fmv REAL NOT NULL DEFAULT 0,
-    debt REAL NOT NULL DEFAULT 0,
-    before_tax_a REAL NOT NULL DEFAULT 0,
-    before_tax_b REAL NOT NULL DEFAULT 0,
-    tax_basis REAL,
-    rate_type TEXT NOT NULL DEFAULT 'none',
-    gain_loss INTEGER NOT NULL DEFAULT 0,
-    after_tax_a REAL,
-    after_tax_b REAL,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_equalizer_items_worksheet ON equalizer_items(worksheet_id, position);
 """
+
+CORE_SCHEMA_COLUMNS = [
+    ("staff_cache", "is_attorney", "INTEGER DEFAULT 0"),
+]
+
+# Every subproject's schema fragment, applied in this order. Each entry is
+# (name, schema_sql, schema_columns) — name is just for logging. Add a new
+# subproject here by importing its store module and appending one line; see
+# equalizer/store.py or moore_marsden/store.py for the fragment shape.
+_FRAGMENTS = [
+    ("core", CORE_SCHEMA, CORE_SCHEMA_COLUMNS),
+    ("equalizer", equalizer_store.SCHEMA, equalizer_store.SCHEMA_COLUMNS),
+    ("moore_marsden", moore_marsden_store.SCHEMA, moore_marsden_store.SCHEMA_COLUMNS),
+]
 
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
@@ -251,6 +204,19 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) 
     existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
     if column not in existing:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+
+
+def _apply_fragment(conn: sqlite3.Connection, name: str, schema_sql: str, columns) -> None:
+    """Applies one subproject's schema in isolation — a broken CREATE TABLE
+    or ALTER TABLE here only disables that subproject's own tables (logged
+    loudly), rather than throwing out of get_connection() and taking every
+    other subproject down with it. See this module's docstring."""
+    try:
+        conn.executescript(schema_sql)
+        for table, column, ddl in columns:
+            _ensure_column(conn, table, column, ddl)
+    except sqlite3.Error as e:
+        logging.error("Schema fragment %r failed to apply — its tables may be unavailable: %s", name, e)
 
 
 def get_connection() -> sqlite3.Connection:
@@ -266,10 +232,8 @@ def get_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    conn.executescript(SCHEMA)
-    _ensure_column(conn, "staff_cache", "is_attorney", "INTEGER DEFAULT 0")
-    _ensure_column(conn, "equalizer_worksheets", "last_saved_at", "TEXT")
-    _ensure_column(conn, "equalizer_worksheets", "clio_document_name", "TEXT")
+    for name, schema_sql, columns in _FRAGMENTS:
+        _apply_fragment(conn, name, schema_sql, columns)
     conn.executemany(
         "INSERT OR IGNORE INTO purpose_mappings (raw_pattern, canonical_code, description) VALUES (?, ?, ?)",
         DEFAULT_PURPOSE_MAPPINGS,

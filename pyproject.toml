@@ -17,3 +17,11 @@ dependencies = [
     "pytesseract>=0.3.13",
     "reportlab>=5.0.0",
 ]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
