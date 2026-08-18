@@ -91,6 +91,7 @@ clio/
 │   ├── legs_expenses.py          # Legs Expenses (OCR'd statement PDF -> ExpenseEntry)
 │   ├── trust_monitor.py          # Trust Monitor & Replenishment Requests
 │   ├── collections_monitor.py    # Collections — unpaid, already-issued bills (read-only)
+│   ├── staff_unbilled_monitor.py # Staff Unbilled Report — unbilled activity by staff member (read-only)
 │   ├── equalizer/                # Equalizer — asset/debt division worksheets
 │   │   ├── calc.py               #   equity, after-tax, 50/50 equalization math
 │   │   ├── store.py              #   SQLite persistence for worksheets/items (owns its own schema fragment)
@@ -121,7 +122,8 @@ clio/
 │       ├── db.py                 #   SQLite schema (data/clio_dashboard.db)
 │       ├── preview_store.py      #   in-memory dry-run-preview -> confirm-and-post handoff
 │       ├── routes_*.py           #   one router per app (bradford/printer/calendar/legs/
-│       │                         #   ringcentral/trust/collections/equalizer/moore_marsden)
+│       │                         #   ringcentral/trust/collections/staff_unbilled/equalizer/
+│       │                         #   moore_marsden)
 │       ├── templates/            #   Jinja2 templates
 │       └── static/                #   CSS + drag-and-drop JS
 ├── start-dashboard.bat            # Launches the dashboard (uv sync + uvicorn)
@@ -1532,6 +1534,98 @@ Nothing here writes to Clio at all.
 uv run src/collections_monitor.py
 ```
 Or just visit `/collections` — same live pipeline, rendered as a table.
+
+---
+
+# Staff Unbilled Report
+
+**Modules:** `src/staff_unbilled_monitor.py`, dashboard page at
+`/staff-unbilled` (`src/web/routes_staff_unbilled.py`,
+`src/web/templates/staff_unbilled.html`) — added 2026-08-17 (Ted). The
+dashboard page is one summary row per staff member (at-risk matter count,
+total unbilled, total shortfall, total owed on their own matters) that
+expands on click into the underlying per-matter rows — matter name,
+client, unbilled activity, matter WIP, trust balance, shortfall, owed —
+via a plain `<tr>`-pair-plus-JS-toggle (`toggleStaffDetail()` in the
+template; no accordion/expand pattern existed elsewhere in this codebase
+to reuse, so this is the first one). `staff_unbilled_monitor.
+build_user_summaries(rows)` does the grouping (one `UserSummary` per staff
+member, `rows` sorted by descending unbilled) and is shared by both the
+CLI's console summary and the dashboard route — not duplicated logic.
+
+**Purpose:** Answers "who is billing time that's at risk of not getting
+collected?" — a per-staff-member/per-matter cut Clio's own reporting UI
+doesn't offer directly. Started 2026-08-17 as a flat "who's working on
+matters that owe money" list; same day, Ted asked for the nuance that
+actually makes it useful — filter out anyone whose client still has
+retainer funds available, leaving only the staff/matter combinations
+genuinely at risk of going uncollected.
+
+**At-risk filter — the whole point of this report, not a display option:**
+a staff/matter row only appears if that matter's Clio **trust balance is
+less than its real WIP** (`trust_monitor.fetch_billable_matters_unbilled()`
+never-billed amount + `trust_monitor.BILL_WIP_STATES`
+draft/awaiting-approval bill totals — the exact same WIP definition
+`trust_monitor.py` already established and audited, reused via
+`trust_monitor.build_trust_statuses()` rather than recomputed). This is
+deliberately **buffer-free** — a sharper, different condition from
+`/trust`'s own $2,500-cushion "flagged" early warning. Confirmed live
+2026-08-17 on a real matter (BERNARD, LIESL): trust $2,364.70 against WIP
+$2,365.00 — a $0.30 shortfall — correctly appears here despite being nowhere
+near $2,500 under water, proving no minimum-buffer threshold leaked in.
+Matters where trust still covers WIP are filtered out **entirely**, not
+just badged — that was the explicit ask ("filter out people who have
+retainer funds available"), a deliberate deviation from this project's
+usual show-everything-and-badge-the-risk convention
+(`trust_monitor.py`/`collections_monitor.py` both list every matter/bill
+and flag the risky ones instead of dropping the safe ones). Matters
+`trust_monitor.build_trust_statuses()` itself excludes (the firm-overhead
+client, or a genuinely zero trust/WIP/outstanding matter) are skipped here
+too, logged as their own count — neither is a real client to be "at risk
+of not collecting" from.
+
+**Data — figures per row:**
+- **Unbilled Activity** (per-staff) — the *staff member's own* unbilled
+  work on that matter (`GET /activities.json?status=unbilled`, summed by
+  `user{id,name}` + `matter{id}`). Clio's `status` enum keeps `unbilled`
+  and `non_billable` as distinct values, so this is billable-only with no
+  extra client-side filtering needed. Confirmed live 2026-08-17: summing
+  this figure across all staff for a given matter reproduces
+  `trust_monitor.py`'s own `unbilled_amount` for that matter exactly (two
+  real matters checked, KAHELE and HAMMER, byte-for-byte) — the same
+  underlying Clio definition, just re-sliced by user instead of only by
+  matter.
+- **Matter WIP / Trust Balance / Shortfall** (matter-level) — WIP and
+  trust balance are `trust_monitor.py`'s own figures, reused directly;
+  Shortfall = `max(0, Matter WIP − Trust Balance)`, i.e. how much of the
+  matter's current WIP the retainer *doesn't* cover (always > 0 here since
+  only at-risk rows survive the filter).
+- **Owed (Outstanding Bills)** (matter-level) — reuses
+  `trust_monitor.fetch_bills_by_matter()` directly (not reimplemented)
+  called with `state=awaiting_payment`, `amount_field=balance` — the exact
+  same figure `collections_monitor.py` reports per bill. Confirmed live
+  matches (POJUNIS, JOSEPH: $1,026.30 in both reports).
+
+**Matter WIP, Trust Balance, Shortfall, and Owed are matter-level, not
+per-user splits** — none of them are tied to one specific staff member's
+work, so if two staff both have unbilled activity on the same at-risk
+matter, both rows show the *same* values for all four. Summing any of
+those columns across every row double-counts; only sum "Unbilled Activity"
+across rows for a genuine per-staff total.
+
+**Scope:** open matters only, same convention as every other subproject
+(Trust Monitor, Printer Expenses, etc.). An unbilled activity attached to
+a non-open matter is skipped and counted in the log rather than silently
+dropped.
+
+## Workflow
+```powershell
+# Read-only report (writes output/staff_unbilled_YYYY-MM-DD.csv + a log)
+uv run src/staff_unbilled_monitor.py
+```
+Or just visit `/staff-unbilled` — same live pipeline, rendered as an
+expandable table; "Download CSV" there serves the same-day CSV the CLI (or
+the page's own live run) already wrote to `output/`.
 
 ---
 

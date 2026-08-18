@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}Staff Unbilled{% endblock %}
+{% block content %}
+<h1>Staff Unbilled Report</h1>
+<p class="subtitle">Who's billing time that's at risk of not getting collected. Already filtered to matters where the client's trust balance no longer covers the matter's real WIP (unbilled activity + any draft/awaiting-approval bill total) — matters with retainer funds still available to cover the work aren't shown at all. This is a stricter, buffer-free version of <a href="/trust">Trust Monitor</a>'s own $2,500-cushion early warning — trust here isn't just running low, it's already short. One row per staff member — click to expand into the at-risk matters behind that total. "Owed"/"Matter WIP"/"Trust Balance" are matter-level figures, not per-user splits — if two staff both have unbilled time on the same matter, both see the same values for it, so don't sum those columns across staff.</p>
+
+{% if error %}
+<div class="panel"><p class="error-text">{{ error }}</p></div>
+{% endif %}
+
+{% if summaries is not none %}
+<div class="panel" id="results">
+  <div class="summary-bar">
+    <div class="summary-stat"><strong>{{ summaries|length }}</strong>staff member(s)</div>
+    <div class="summary-stat"><strong>{{ matter_count }}</strong>at-risk matter(s)</div>
+    <div class="summary-stat"><strong>${{ total_unbilled|money }}</strong>total unbilled</div>
+    <div class="summary-stat"><strong>${{ total_shortfall|money }}</strong>total shortfall</div>
+  </div>
+
+  <div style="margin-bottom:0.75rem;">
+    <a class="btn secondary" href="/staff-unbilled/download">Download CSV</a>
+  </div>
+
+  {% if summaries %}
+  <div style="overflow-x:auto;">
+  <table class="nowrap" id="staff-table">
+    <thead><tr>
+      <th></th>
+      <th>User</th>
+      <th>At-Risk Matters</th>
+      <th>Unbilled Activity</th>
+      <th>Shortfall (their matters)</th>
+      <th>Owed (their matters)</th>
+    </tr></thead>
+    <tbody>
+      {% for s in summaries %}
+      <tr class="row-toggle" onclick="toggleStaffDetail('staff-detail-{{ loop.index }}')">
+        <td class="expand-icon"><span id="staff-icon-{{ loop.index }}">&#9656;</span></td>
+        <td>{{ s.user_name }}</td>
+        <td>{{ s.matter_count }}</td>
+        <td>${{ s.total_unbilled|money }}</td>
+        <td>${{ s.total_shortfall|money }}</td>
+        <td>${{ s.total_owed|money }}</td>
+      </tr>
+      <tr id="staff-detail-{{ loop.index }}" class="detail-row hidden">
+        <td colspan="6">
+          <table class="nowrap detail-table">
+            <thead><tr>
+              <th>Matter</th><th>Client</th><th>Unbilled Activity</th>
+              <th>Matter WIP</th><th>Trust Balance</th><th>Shortfall</th>
+              <th>Owed (Outstanding Bills)</th>
+            </tr></thead>
+            <tbody>
+              {% for r in s.rows %}
+              <tr>
+                <td>{{ r.display_number }}</td>
+                <td>{{ r.client_name }}</td>
+                <td>${{ r.total_unbilled|money }}</td>
+                <td>${{ r.matter_wip|money }}</td>
+                <td>${{ r.matter_trust_balance|money }}</td>
+                <td>${{ r.shortfall|money }}</td>
+                <td>${{ r.total_owed|money }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="subtitle">No unbilled activity on any open matter right now.</p>
+  {% endif %}
+</div>
+<script>
+function toggleStaffDetail(id) {
+  const row = document.getElementById(id);
+  const icon = document.getElementById("staff-icon-" + id.split("-").pop());
+  const expanded = !row.classList.contains("hidden");
+  row.classList.toggle("hidden", expanded);
+  icon.innerHTML = expanded ? "&#9656;" : "&#9662;";
+}
+</script>
+{% endif %}
+{% endblock %}
