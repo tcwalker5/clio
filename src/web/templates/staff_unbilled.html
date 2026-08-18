@@ -2,7 +2,7 @@
 {% block title %}Staff Unbilled{% endblock %}
 {% block content %}
 <h1>Staff Unbilled Report</h1>
-<p class="subtitle">Who's billing time that's at risk of not getting collected. Already filtered to matters where the client's trust balance no longer covers the matter's real WIP (unbilled activity + any draft/awaiting-approval bill total) — matters with retainer funds still available to cover the work aren't shown at all. This is a stricter, buffer-free version of <a href="/trust">Trust Monitor</a>'s own $2,500-cushion early warning — trust here isn't just running low, it's already short. One row per staff member — click to expand into the at-risk matters behind that total. "Owed"/"Matter WIP"/"Trust Balance" are matter-level figures, not per-user splits — if two staff both have unbilled time on the same matter, both see the same values for it, so don't sum those columns across staff.</p>
+<p class="subtitle">Who's billing time that's at risk of not getting collected. Already filtered to matters where the client's trust balance no longer covers the matter's real WIP (unbilled activity + any draft/awaiting-approval bill total) — matters with retainer funds still available to cover the work aren't shown at all. One row per staff member — click to expand into the at-risk matters behind that total. "Owed"/"Matter WIP"/"Trust Balance" are matter-level figures, not per-user splits — if two staff both have unbilled time on the same matter, both see the same values for it, so don't sum those columns across staff.</p>
 
 {% if error %}
 <div class="panel"><p class="error-text">{{ error }}</p></div>
