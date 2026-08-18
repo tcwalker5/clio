@@ -183,27 +183,82 @@ def compare_events(
     matched_entry_ids: set[int] = set()
     results: list[MatchResult] = []
 
+    # Resolve every event's matter/purpose up front so same-matter/same-day
+    # groups can be sized before any entry gets claimed — needed to tell a
+    # combined appearance (real example: a DVRO and an FRC heard together,
+    # same date/time/dept/case, staff-entered as ONE Clio calendar entry)
+    # apart from two genuinely separate hearings that each need their own
+    # entry. See the group_size/shared-entry branch below.
+    resolved: list[tuple[str, int | None, str, str, str] | None] = []
+    group_sizes: dict[tuple[int, str], int] = {}
     for ce in court_events:
         if not ce.party:
+            resolved.append(None)
             continue
-
         purpose_code = normalize_purpose(ce.purpose_raw, purpose_mappings)
         party_norm = normalize_party_name(ce.party)
         matter_id, resolution_status, case_number_status, clio_case_number = _resolve_matter(
             party_norm, ce.case_number, matters_by_name, case_numbers_by_matter,
         )
+        resolved.append((purpose_code, matter_id, resolution_status, case_number_status, clio_case_number))
+        if matter_id:
+            key = (matter_id, ce.date)
+            group_sizes[key] = group_sizes.get(key, 0) + 1
+
+    for ce, r in zip(court_events, resolved):
+        if r is None:
+            continue
+        purpose_code, matter_id, resolution_status, case_number_status, clio_case_number = r
 
         if matter_id:
             owner_initials = initials((matter_owner_by_matter or {}).get(matter_id, ""))
             candidates = entries_by_matter.get(matter_id, [])
             same_day = [e for e in candidates if e.start_at.date() == ce.dt.date()]
+            group_size = group_sizes[(matter_id, ce.date)]
+
+            if group_size > 1 and 0 < len(same_day) < group_size:
+                # Fewer Clio entries than hearings this matter/day — the
+                # common real-world cause is a combined appearance entered
+                # as one entry, not several distinct hearings each missing
+                # their own. Every hearing in the group shares whichever
+                # entry best fits its own purpose text, and a hearing is
+                # only flagged if NONE of the group's purposes appear in
+                # that entry at all — not just because the entry doesn't
+                # separately spell out this one specific hearing type.
+                entry = next(
+                    (e for e in same_day if purpose_code in _entry_purposes(e, purpose_mappings)),
+                    same_day[0],
+                )
+                reasons, changes = _diff_entry(ce, entry, purpose_code, purpose_mappings)
+                group_purposes = {
+                    other_r[0] for other_ce, other_r in zip(court_events, resolved)
+                    if other_r and other_r[1] == matter_id and other_ce.date == ce.date
+                }
+                entry_purposes = _entry_purposes(entry, purpose_mappings)
+                if "Purpose mismatch" in reasons and entry_purposes & group_purposes:
+                    idx = reasons.index("Purpose mismatch")
+                    reasons.pop(idx)
+                    changes.pop(idx)
+                if case_number_status == "not_on_file":
+                    reasons.append("Case number not on file")
+                    changes.append(f"Case number: not on file in Clio, court calendar has {ce.case_number}")
+                elif case_number_status == "mismatch":
+                    reasons.append("Case number mismatch")
+                    changes.append(f"Case number: Clio has {clio_case_number}, court calendar has {ce.case_number}")
+                results.append(MatchResult(
+                    court_event=ce, status="matched" if not changes else "to_update",
+                    clio_entry=entry, matter_id=matter_id, match_method="matter_id",
+                    reason=", ".join(reasons), changes=changes, matter_owner_initials=owner_initials,
+                    case_number_status=case_number_status, clio_case_number=clio_case_number,
+                ))
+                continue
+
             # Excludes entries already claimed by an earlier court event for
-            # this same matter/day — without this, two distinct hearings
-            # calendared together (real example: an RFO and an FRC status
-            # conference for the same client, same day/time) both matched
-            # against the one Clio entry that actually only covers one of
-            # them, and the other produced a false "Purpose mismatch" against
-            # an entry it was never meant to represent.
+            # this same matter/day — only reached when this matter/day has
+            # at least as many Clio entries as hearings (the group_size
+            # branch above already handled the undersupplied/combined case),
+            # so any leftover claim here means a hearing genuinely needs its
+            # own separate entry rather than sharing one.
             same_day_available = [e for e in same_day if e.id not in matched_entry_ids]
 
             if same_day_available:

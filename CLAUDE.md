@@ -896,6 +896,21 @@ This is more reliable than `calendar-check`'s original text-only approach whenev
 link a Matter on the calendar entry (which they usually do) — no free-text parsing needed
 for the common case.
 
+**Combined appearances (fixed 2026-08-18):** `matcher.py`'s `compare_events()` sizes each
+matter/day's group of court-calendar hearings against how many Clio entries actually exist
+for that matter/day before matching. When there are fewer Clio entries than hearings — the
+common cause is a combined appearance (real example: matter Bassett, case `26FL001421N`, a
+DVRO hearing and an FRC heard together at the same date/time/dept, entered in Clio as ONE
+calendar entry, a normal staff convention, not a gap) — every hearing in that group shares
+whichever entry best fits by purpose text, rather than the first-processed hearing claiming
+it exclusively. A hearing only gets flagged "Purpose mismatch" if *none* of the group's
+purposes appear in the entry at all; it's not required to be individually named alongside
+the others. Before this fix, the first hearing falsely showed "Purpose mismatch" (the entry
+"belonged" to the other one) and the second falsely showed "Missing / No calendar event",
+even though Clio had nothing actually wrong. When a matter/day genuinely has as many (or
+more) Clio entries as hearings, the original one-entry-per-hearing exclusive-claim matching
+still applies unchanged. Regression coverage: `tests/test_court_calendar_matcher.py`.
+
 **Attorney/staff assignment:** read directly from the matched Clio calendar entry's
 `calendar_owner`/`attendees` (their `name` field, as returned by Clio) — not a regex
 search for a name in the summary text. Note: `calendar_owner`/`attendees` are Clio
