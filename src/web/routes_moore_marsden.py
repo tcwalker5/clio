@@ -13,16 +13,23 @@ segment-mutating endpoint therefore returns the *entire* re-enriched segment
 list, not just the one row that was touched, so the client-side grid always
 re-renders in full rather than trying to patch one row in place.
 
+date_of_marriage/date_of_separation are never stored locally — they're real
+Clio matter custom fields, fetched live on every totals computation (see
+_totals_payload/moore_marsden/clio_matter_dates.py) and written straight
+through to Clio whenever staff enter or correct one via Settings.
+
 /preview.pdf regenerates the PDF live from current draft data and never
-touches Clio; /save is the only route in this file that writes anything
-outside data/clio_dashboard.db — same repeatable, non-locking Save to Clio
-behavior as Equalizer (a worksheet stays editable after saving, and Save to
-Clio can be clicked again any time).
+touches Clio; /save is the only route in this file that writes a Document
+to Clio — same repeatable, non-locking Save to Clio behavior as Equalizer
+(a worksheet stays editable after saving, and Save to Clio can be clicked
+again any time). The Settings PATCH route is a second, narrower Clio write
+path, scoped to just the two matter date fields.
 """
 
 import logging
 import re
 from datetime import datetime
+from urllib.parse import quote
 
 from fastapi import APIRouter, Body, Depends, Form, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
@@ -31,6 +38,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 import matter_matching
 import moore_marsden.calc as calc
 import moore_marsden.clio_documents as clio_documents
+import moore_marsden.clio_matter_dates as clio_matter_dates
 import moore_marsden.clio_notes as clio_notes
 import moore_marsden.clio_parties as clio_parties
 import moore_marsden.pdf as pdf
@@ -76,14 +84,42 @@ async def _create_worksheet_for_matter(conn, matter_id: int) -> int:
     return store.create_worksheet(conn, matter_id, matter.get("display_number", str(matter_id)))
 
 
-def _totals_dict(worksheet: dict, segments: list[dict]):
-    enriched = calc.compute_segments(worksheet, segments)
-    totals = calc.compute_final(enriched)
-    return enriched, totals
+async def _totals_payload(worksheet: dict, segments: list[dict], capital_improvements: list[dict], session) -> dict:
+    """Fetches live Date of Marriage/Separation from the matter (source of
+    truth — never cached locally), merges them into the dict calc.py
+    expects, and returns everything a mutating endpoint's JSON response
+    needs: re-enriched segments, totals (including the capital-improvements
+    breakdown), the live dates themselves (so the client can display them
+    without a full page reload), and which pro-tanto improvements couldn't
+    be placed into any segment period (so the UI can flag them instead of
+    letting their dollar amount silently vanish from the total)."""
+    date_of_marriage, date_of_separation = await run_in_threadpool(
+        clio_matter_dates.fetch_matter_dates, session, worksheet["matter_id"]
+    )
+    worksheet_for_calc = {**worksheet, "date_of_marriage": date_of_marriage, "date_of_separation": date_of_separation}
+    enriched = calc.compute_segments(worksheet_for_calc, segments, capital_improvements)
+    totals = calc.compute_final(enriched, capital_improvements)
+    unbucketed = calc.unbucketed_improvements(segments, capital_improvements)
+    return {
+        "segments": enriched,
+        "totals": totals.__dict__,
+        "date_of_marriage": date_of_marriage,
+        "date_of_separation": date_of_separation,
+        "unbucketed_improvement_ids": [imp["id"] for imp in unbucketed],
+    }
+
+
+async def _worksheet_with_live_dates(worksheet: dict, session) -> dict:
+    """For callers (PDF rendering) that just need calc.py's expected dict
+    shape, not the full JSON response _totals_payload builds."""
+    date_of_marriage, date_of_separation = await run_in_threadpool(
+        clio_matter_dates.fetch_matter_dates, session, worksheet["matter_id"]
+    )
+    return {**worksheet, "date_of_marriage": date_of_marriage, "date_of_separation": date_of_separation}
 
 
 @router.get("", response_class=HTMLResponse)
-async def moore_marsden_home(request: Request, _: None = Depends(require_auth)):
+async def moore_marsden_home(request: Request, error: str | None = None, _: None = Depends(require_auth)):
     from web.app import render
 
     conn = get_connection()
@@ -92,7 +128,6 @@ async def moore_marsden_home(request: Request, _: None = Depends(require_auth)):
     finally:
         conn.close()
 
-    error = None
     all_matters: list[dict] = []
     try:
         session = clio_documents.build_session()
@@ -107,24 +142,37 @@ async def moore_marsden_home(request: Request, _: None = Depends(require_auth)):
             key=lambda m: m["name"],
         )
     except RuntimeError as e:
-        error = str(e)
+        error = error or str(e)
 
     return render(request, "moore_marsden.html", worksheets=worksheets, all_matters=all_matters, error=error)
 
 
 @router.get("/lookup", response_class=HTMLResponse)
-async def moore_marsden_lookup(request: Request, matter_id: int, matter_name: str = "", _: None = Depends(require_auth)):
+async def moore_marsden_lookup(request: Request, matter_id: str = "", matter_name: str = "", _: None = Depends(require_auth)):
     """A matter with no worksheets yet goes straight to a fresh one; a
     matter with existing worksheets (draft or saved) shows the list to
     recall from instead of silently creating a duplicate — same pattern as
-    Equalizer's /equalizer/lookup."""
+    Equalizer's /equalizer/lookup.
+
+    matter_id is a raw string here, not FastAPI's usual int coercion — the
+    search form's hidden field starts blank and a browser's `required` on a
+    type="hidden" input isn't actually enforced (matter_search.js guards
+    against this client-side too, but Enter-before-JS-loads or a direct hit
+    on this URL could still arrive here empty). A strict `int` param would
+    surface a raw Pydantic validation blob instead of the friendly "pick a
+    matter" redirect this does."""
     from web.app import render
+
+    try:
+        matter_id_int = int(matter_id)
+    except ValueError:
+        return RedirectResponse(url="/moore-marsden?error=" + quote("Pick a matter from the list before submitting."), status_code=303)
 
     conn = get_connection()
     try:
-        existing = store.list_worksheets_by_matter(conn, matter_id)
+        existing = store.list_worksheets_by_matter(conn, matter_id_int)
         if not existing:
-            worksheet_id = await _create_worksheet_for_matter(conn, matter_id)
+            worksheet_id = await _create_worksheet_for_matter(conn, matter_id_int)
             return RedirectResponse(url=f"/moore-marsden/{worksheet_id}", status_code=303)
         display_name = matter_name or existing[0]["matter_display_number"]
     finally:
@@ -141,7 +189,7 @@ async def moore_marsden_lookup(request: Request, matter_id: int, matter_name: st
             except RuntimeError as e:
                 logging.warning("Could not check Clio trash status for worksheet %s: %s", w["id"], e)
 
-    return render(request, "moore_marsden_matter.html", matter_id=matter_id, matter_display_number=display_name,
+    return render(request, "moore_marsden_matter.html", matter_id=matter_id_int, matter_display_number=display_name,
                   worksheets=existing, trashed_by_id=trashed_by_id)
 
 
@@ -203,40 +251,58 @@ async def moore_marsden_editor(worksheet_id: int, request: Request, _: None = De
     try:
         worksheet = _worksheet_or_404(conn, worksheet_id)
         segments = store.list_segments(conn, worksheet_id)
+        capital_improvements = store.list_capital_improvements(conn, worksheet_id)
     finally:
         conn.close()
 
+    session = clio_documents.build_session()
     clio_document_trashed = False
     if worksheet["clio_document_id"]:
         try:
-            session = clio_documents.build_session()
             clio_document_trashed = await run_in_threadpool(
                 clio_documents.is_document_trashed, session, worksheet["clio_document_id"],
             )
         except RuntimeError as e:
             logging.warning("Could not check Clio trash status for worksheet %s: %s", worksheet_id, e)
 
-    enriched, totals = _totals_dict(worksheet, segments)
-    return render(request, "moore_marsden_worksheet.html", worksheet=worksheet, segments=enriched, totals=totals,
+    payload = await _totals_payload(worksheet, segments, capital_improvements, session)
+    return render(request, "moore_marsden_worksheet.html", worksheet=worksheet, segments=payload["segments"],
+                  totals=payload["totals"], capital_improvements=capital_improvements,
+                  date_of_marriage=payload["date_of_marriage"], date_of_separation=payload["date_of_separation"],
+                  unbucketed_improvement_ids=payload["unbucketed_improvement_ids"],
                   clio_document_trashed=clio_document_trashed)
+
+
+# date_of_marriage/date_of_separation are handled separately from every
+# other settings field — they're not local columns at all (see
+# moore_marsden/store.py), so a payload containing either gets routed to a
+# Clio write (clio_matter_dates.update_matter_dates) instead of the local
+# store, in the same PATCH call.
+_CLIO_DATE_FIELDS = ("date_of_marriage", "date_of_separation")
 
 
 @router.patch("/{worksheet_id}/settings")
 async def moore_marsden_update_settings(worksheet_id: int, payload: dict = Body(...), _: None = Depends(require_auth)):
     conn = get_connection()
     try:
-        _worksheet_or_404(conn, worksheet_id)
+        worksheet = _worksheet_or_404(conn, worksheet_id)
+        local_fields = {k: v for k, v in payload.items() if k not in _CLIO_DATE_FIELDS}
         try:
-            store.update_worksheet_settings(conn, worksheet_id, **payload)
+            store.update_worksheet_settings(conn, worksheet_id, **local_fields)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-        worksheet = store.get_worksheet(conn, worksheet_id)
-        segments = store.list_segments(conn, worksheet_id)
     finally:
         conn.close()
 
-    enriched, totals = _totals_dict(worksheet, segments)
-    return {"worksheet": worksheet, "segments": enriched, "totals": totals.__dict__}
+    clio_dates = {k: v for k, v in payload.items() if k in _CLIO_DATE_FIELDS and v}
+    if clio_dates:
+        session = clio_documents.build_session()
+        try:
+            await run_in_threadpool(clio_matter_dates.update_matter_dates, session, worksheet["matter_id"], **clio_dates)
+        except RuntimeError as e:
+            raise HTTPException(status_code=502, detail=f"Saved locally, but failed to update the matter's dates in Clio: {e}")
+
+    return {"ok": True}
 
 
 @router.post("/{worksheet_id}/settings/autofill-names")
@@ -266,11 +332,11 @@ async def moore_marsden_add_segment(worksheet_id: int, _: None = Depends(require
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         segments = store.list_segments(conn, worksheet_id)
+        capital_improvements = store.list_capital_improvements(conn, worksheet_id)
     finally:
         conn.close()
 
-    enriched, totals = _totals_dict(worksheet, segments)
-    return {"segments": enriched, "totals": totals.__dict__}
+    return await _totals_payload(worksheet, segments, capital_improvements, clio_documents.build_session())
 
 
 @router.patch("/{worksheet_id}/segments/{segment_id}")
@@ -283,13 +349,13 @@ async def moore_marsden_update_segment(worksheet_id: int, segment_id: int, paylo
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         segments = store.list_segments(conn, worksheet_id)
+        capital_improvements = store.list_capital_improvements(conn, worksheet_id)
     finally:
         conn.close()
 
     if not any(s["id"] == segment_id for s in segments):
         raise HTTPException(status_code=404, detail=f"No such segment: {segment_id}")
-    enriched, totals = _totals_dict(worksheet, segments)
-    return {"segments": enriched, "totals": totals.__dict__}
+    return await _totals_payload(worksheet, segments, capital_improvements, clio_documents.build_session())
 
 
 @router.delete("/{worksheet_id}/segments/{segment_id}")
@@ -302,11 +368,63 @@ async def moore_marsden_delete_segment(worksheet_id: int, segment_id: int, _: No
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         segments = store.list_segments(conn, worksheet_id)
+        capital_improvements = store.list_capital_improvements(conn, worksheet_id)
     finally:
         conn.close()
 
-    enriched, totals = _totals_dict(worksheet, segments)
-    return {"segments": enriched, "totals": totals.__dict__}
+    return await _totals_payload(worksheet, segments, capital_improvements, clio_documents.build_session())
+
+
+@router.post("/{worksheet_id}/capital-improvements")
+async def moore_marsden_add_capital_improvement(worksheet_id: int, _: None = Depends(require_auth)):
+    conn = get_connection()
+    try:
+        worksheet = _worksheet_or_404(conn, worksheet_id)
+        store.add_capital_improvement(conn, worksheet_id)
+        segments = store.list_segments(conn, worksheet_id)
+        capital_improvements = store.list_capital_improvements(conn, worksheet_id)
+    finally:
+        conn.close()
+
+    payload = await _totals_payload(worksheet, segments, capital_improvements, clio_documents.build_session())
+    return {**payload, "capital_improvements": capital_improvements}
+
+
+@router.patch("/{worksheet_id}/capital-improvements/{improvement_id}")
+async def moore_marsden_update_capital_improvement(
+    worksheet_id: int, improvement_id: int, payload: dict = Body(...), _: None = Depends(require_auth),
+):
+    conn = get_connection()
+    try:
+        worksheet = _worksheet_or_404(conn, worksheet_id)
+        try:
+            store.update_capital_improvement(conn, improvement_id, **payload)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        segments = store.list_segments(conn, worksheet_id)
+        capital_improvements = store.list_capital_improvements(conn, worksheet_id)
+    finally:
+        conn.close()
+
+    if not any(i["id"] == improvement_id for i in capital_improvements):
+        raise HTTPException(status_code=404, detail=f"No such capital improvement: {improvement_id}")
+    result = await _totals_payload(worksheet, segments, capital_improvements, clio_documents.build_session())
+    return {**result, "capital_improvements": capital_improvements}
+
+
+@router.delete("/{worksheet_id}/capital-improvements/{improvement_id}")
+async def moore_marsden_delete_capital_improvement(worksheet_id: int, improvement_id: int, _: None = Depends(require_auth)):
+    conn = get_connection()
+    try:
+        worksheet = _worksheet_or_404(conn, worksheet_id)
+        store.delete_capital_improvement(conn, improvement_id)
+        segments = store.list_segments(conn, worksheet_id)
+        capital_improvements = store.list_capital_improvements(conn, worksheet_id)
+    finally:
+        conn.close()
+
+    result = await _totals_payload(worksheet, segments, capital_improvements, clio_documents.build_session())
+    return {**result, "capital_improvements": capital_improvements}
 
 
 @router.get("/{worksheet_id}/preview.pdf")
@@ -315,10 +433,13 @@ async def moore_marsden_preview_pdf(worksheet_id: int, _: None = Depends(require
     try:
         worksheet = _worksheet_or_404(conn, worksheet_id)
         segments = store.list_segments(conn, worksheet_id)
+        capital_improvements = store.list_capital_improvements(conn, worksheet_id)
     finally:
         conn.close()
 
-    pdf_bytes = await run_in_threadpool(pdf.render_worksheet_pdf, worksheet, segments)
+    session = clio_documents.build_session()
+    worksheet_for_pdf = await _worksheet_with_live_dates(worksheet, session)
+    pdf_bytes = await run_in_threadpool(pdf.render_worksheet_pdf, worksheet_for_pdf, segments, capital_improvements)
     return Response(
         content=pdf_bytes, media_type="application/pdf",
         headers={"Content-Disposition": f'inline; filename="moore-marsden-{worksheet["matter_display_number"]}.pdf"'},
@@ -340,18 +461,25 @@ async def moore_marsden_save_to_clio(
     try:
         worksheet = _worksheet_or_404(conn, worksheet_id)
         segments = store.list_segments(conn, worksheet_id)
+        capital_improvements = store.list_capital_improvements(conn, worksheet_id)
     finally:
         conn.close()
 
-    def _render_editor(worksheet, segments, **extra):
-        enriched, totals = _totals_dict(worksheet, segments)
-        return render(request, "moore_marsden_worksheet.html", worksheet=worksheet, segments=enriched,
-                      totals=totals, **extra)
+    async def _render_editor(worksheet, segments, capital_improvements, **extra):
+        session = clio_documents.build_session()
+        payload = await _totals_payload(worksheet, segments, capital_improvements, session)
+        return render(request, "moore_marsden_worksheet.html", worksheet=worksheet, segments=payload["segments"],
+                      totals=payload["totals"], capital_improvements=capital_improvements,
+                      date_of_marriage=payload["date_of_marriage"], date_of_separation=payload["date_of_separation"],
+                      unbucketed_improvement_ids=payload["unbucketed_improvement_ids"], **extra)
 
     if len(segments) < 2:
-        return _render_editor(worksheet, segments, error="A worksheet needs at least a purchase and a valuation row before saving to Clio.")
+        return await _render_editor(worksheet, segments, capital_improvements,
+                                     error="A worksheet needs at least a purchase and a valuation row before saving to Clio.")
 
-    pdf_bytes = await run_in_threadpool(pdf.render_worksheet_pdf, worksheet, segments)
+    session = clio_documents.build_session()
+    worksheet_for_pdf = await _worksheet_with_live_dates(worksheet, session)
+    pdf_bytes = await run_in_threadpool(pdf.render_worksheet_pdf, worksheet_for_pdf, segments, capital_improvements)
     default_filename = f"moore-marsden-{datetime.today().strftime('%Y-%m-%d')}"
     safe_filename = _sanitize_filename(filename, default_filename)
     previous_document_id = worksheet["clio_document_id"]
@@ -360,7 +488,6 @@ async def moore_marsden_save_to_clio(
     conn = get_connection()
     try:
         try:
-            session = clio_documents.build_session()
             document_id = await run_in_threadpool(
                 clio_documents.upload_pdf, session, worksheet["matter_id"], safe_filename, pdf_bytes,
                 previous_document_id,
@@ -369,7 +496,7 @@ async def moore_marsden_save_to_clio(
         except RuntimeError as e:
             worksheet = store.get_worksheet(conn, worksheet_id)
             segments = store.list_segments(conn, worksheet_id)
-            return _render_editor(worksheet, segments, error=f"Save to Clio failed: {e}")
+            return await _render_editor(worksheet, segments, capital_improvements, error=f"Save to Clio failed: {e}")
 
         worksheet = store.get_worksheet(conn, worksheet_id)
         segments = store.list_segments(conn, worksheet_id)
@@ -390,4 +517,4 @@ async def moore_marsden_save_to_clio(
         except RuntimeError as e:
             notice += f" (Could not post a matter note linking back to it: {e})"
 
-    return _render_editor(worksheet, segments, notice=notice)
+    return await _render_editor(worksheet, segments, capital_improvements, notice=notice)

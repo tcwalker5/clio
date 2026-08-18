@@ -8,8 +8,34 @@ function initMatterSearch(matters) {
 
   document.querySelectorAll(".matter-search-input").forEach((input) => {
     const results = input.parentElement.querySelector(".matter-search-results");
-    const hiddenId = input.closest("form").querySelector(".matter-search-id");
+    const form = input.closest("form");
+    const hiddenId = form.querySelector(".matter-search-id");
     if (!results || !hiddenId) return;
+
+    function clearError() {
+      input.classList.remove("matter-search-invalid");
+      const error = input.parentElement.querySelector(".matter-search-error");
+      if (error) error.remove();
+    }
+
+    // A hidden input's `required` attribute isn't enforced by any browser
+    // (hidden fields are exempt from the Constraint Validation API), so
+    // pressing Enter/clicking submit without ever picking a suggestion —
+    // matter_id is still blank — would otherwise reach the server and
+    // surface a raw FastAPI validation error on a blank page. Block it here
+    // instead, with an inline message pointing at the field to fix.
+    form.addEventListener("submit", (e) => {
+      if (hiddenId.value) return;
+      e.preventDefault();
+      input.classList.add("matter-search-invalid");
+      input.focus();
+      if (!input.parentElement.querySelector(".matter-search-error")) {
+        const error = document.createElement("div");
+        error.className = "matter-search-error";
+        error.textContent = "Pick a matter from the list before submitting.";
+        input.parentElement.appendChild(error);
+      }
+    });
 
     function render(query) {
       const q = query.trim().toLowerCase();
@@ -32,6 +58,7 @@ function initMatterSearch(matters) {
 
     input.addEventListener("input", () => {
       hiddenId.value = "";
+      clearError();
       render(input.value);
     });
 
@@ -48,6 +75,7 @@ function initMatterSearch(matters) {
       input.value = item.textContent;
       results.style.display = "none";
       results.innerHTML = "";
+      clearError();
     });
 
     input.addEventListener("blur", () => {

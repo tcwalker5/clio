@@ -21,6 +21,13 @@ subproject's tables. Same pattern as equalizer/store.py.
 # moore_marsden_segments), but marital appreciation is measured from
 # value_at_date_of_marriage instead of the purchase price when the home
 # predates the marriage, so premarital appreciation stays separate property.
+#
+# Deliberately NO date_of_marriage/date_of_separation columns here (removed
+# 2026-08-18) — these are real Clio matter custom fields at this firm
+# ("Date of Marriage"/"Date of Separation"), so Clio is the source of truth
+# and this worksheet never keeps its own copy that could drift from it. See
+# moore_marsden/clio_matter_dates.py: fetched live on every page load,
+# written straight through to Clio whenever staff enter or correct one.
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS moore_marsden_worksheets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -29,7 +36,6 @@ CREATE TABLE IF NOT EXISTS moore_marsden_worksheets (
     owner_spouse_label TEXT NOT NULL DEFAULT '',
     non_owner_spouse_label TEXT NOT NULL DEFAULT '',
     acquired_before_marriage INTEGER NOT NULL DEFAULT 0,
-    date_of_marriage TEXT,
     value_at_date_of_marriage REAL,
     status TEXT NOT NULL DEFAULT 'draft',
     clio_document_id INTEGER,
@@ -72,6 +78,34 @@ CREATE TABLE IF NOT EXISTS moore_marsden_segments (
 );
 
 CREATE INDEX IF NOT EXISTS idx_moore_marsden_segments_worksheet ON moore_marsden_segments(worksheet_id, position);
+
+-- Capital improvements are tracked separately from the segment chain
+-- (roof replacement, addition, renovation, etc.) rather than folded into
+-- purchase price or an ordinary period's principal reduction — per
+-- California case law (Marriage of Allen, 96 Cal.App.4th 497 (2002)) they
+-- need their own source/timing/treatment analysis, not a blanket add. Only
+-- funded_by='cp' rows affect the calculation at all — an SP-funded
+-- improvement to the owner spouse's own separate property creates no
+-- community interest, so those rows are logged for the record only (see
+-- moore_marsden/calc.py). treatment only matters for CP-funded rows:
+-- 'reimbursement' adds the dollar amount straight to the final total, no
+-- appreciation share; 'pro_tanto' folds it into whichever segment period
+-- contains event_date, same mechanism as that segment's cp_contribution,
+-- so it shares proportionally in appreciation from that point forward.
+CREATE TABLE IF NOT EXISTS moore_marsden_capital_improvements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    worksheet_id INTEGER NOT NULL REFERENCES moore_marsden_worksheets(id) ON DELETE CASCADE,
+    event_date TEXT,
+    description TEXT NOT NULL DEFAULT '',
+    amount REAL NOT NULL DEFAULT 0,
+    funded_by TEXT NOT NULL DEFAULT 'cp',
+    treatment TEXT NOT NULL DEFAULT 'pro_tanto',
+    notes TEXT NOT NULL DEFAULT '',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_mm_capital_improvements_worksheet ON moore_marsden_capital_improvements(worksheet_id);
 """
 
 # (table, column, ddl) — applied via web/db.py's generic _ensure_column() for
@@ -143,7 +177,7 @@ def list_segments(conn, worksheet_id: int) -> list[dict]:
 
 _SETTINGS_FIELDS = (
     "owner_spouse_label", "non_owner_spouse_label",
-    "acquired_before_marriage", "date_of_marriage", "value_at_date_of_marriage",
+    "acquired_before_marriage", "value_at_date_of_marriage",
 )
 
 
@@ -177,12 +211,15 @@ def mark_saved_to_clio(conn, worksheet_id: int, clio_document_id: int, clio_docu
 
 
 def duplicate_worksheet(conn, worksheet_id: int) -> int | None:
-    """"Save As" — clones a worksheet's settings and every segment (purchase,
-    every refinance, and valuation) into a brand-new draft, for running a
-    variant scenario without retyping the whole chain. The copy starts fresh
-    on the Clio side (status 'draft', no clio_document_id/name) — same
-    reasoning as equalizer.store.duplicate_worksheet. Returns None if the
-    source worksheet doesn't exist."""
+    """"Save As" — clones a worksheet's settings, every segment (purchase,
+    every refinance, and valuation), and every capital improvement into a
+    brand-new draft, for running a variant scenario without retyping the
+    whole chain. The copy starts fresh on the Clio side (status 'draft', no
+    clio_document_id/name) — same reasoning as equalizer.store.
+    duplicate_worksheet. date_of_marriage/date_of_separation aren't cloned
+    here since they're not stored on the worksheet at all — the copy reads
+    the same live matter dates as the original, being on the same matter.
+    Returns None if the source worksheet doesn't exist."""
     source = get_worksheet(conn, worksheet_id)
     if source is None:
         return None
@@ -190,12 +227,12 @@ def duplicate_worksheet(conn, worksheet_id: int) -> int | None:
     cur = conn.execute(
         """INSERT INTO moore_marsden_worksheets (
                matter_id, matter_display_number, owner_spouse_label, non_owner_spouse_label,
-               acquired_before_marriage, date_of_marriage, value_at_date_of_marriage
-           ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+               acquired_before_marriage, value_at_date_of_marriage
+           ) VALUES (?, ?, ?, ?, ?, ?)""",
         (
             source["matter_id"], source["matter_display_number"],
             source["owner_spouse_label"], source["non_owner_spouse_label"],
-            source["acquired_before_marriage"], source["date_of_marriage"], source["value_at_date_of_marriage"],
+            source["acquired_before_marriage"], source["value_at_date_of_marriage"],
         ),
     )
     new_worksheet_id = cur.lastrowid
@@ -210,6 +247,17 @@ def duplicate_worksheet(conn, worksheet_id: int) -> int | None:
                 new_worksheet_id, seg["position"], seg["segment_type"], seg["event_date"], seg["event_label"],
                 seg["property_value"], seg["loan_balance"], seg["community_principal_reduction"],
                 seg["sp_contribution"], seg["cp_contribution"], seg["notes"],
+            ),
+        )
+
+    for imp in list_capital_improvements(conn, worksheet_id):
+        conn.execute(
+            """INSERT INTO moore_marsden_capital_improvements (
+                   worksheet_id, event_date, description, amount, funded_by, treatment, notes
+               ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                new_worksheet_id, imp["event_date"], imp["description"], imp["amount"],
+                imp["funded_by"], imp["treatment"], imp["notes"],
             ),
         )
 
@@ -291,5 +339,59 @@ def delete_segment(conn, segment_id: int) -> None:
     if row["segment_type"] != "refinance":
         raise ValueError("Only refinance rows can be deleted — the purchase and valuation rows are required.")
     conn.execute("DELETE FROM moore_marsden_segments WHERE id = ?", (segment_id,))
+    conn.execute("UPDATE moore_marsden_worksheets SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (row["worksheet_id"],))
+    conn.commit()
+
+
+def list_capital_improvements(conn, worksheet_id: int) -> list[dict]:
+    rows = conn.execute(
+        "SELECT * FROM moore_marsden_capital_improvements WHERE worksheet_id = ? ORDER BY event_date, id",
+        (worksheet_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def add_capital_improvement(conn, worksheet_id: int) -> int:
+    cur = conn.execute(
+        "INSERT INTO moore_marsden_capital_improvements (worksheet_id) VALUES (?)", (worksheet_id,)
+    )
+    conn.execute("UPDATE moore_marsden_worksheets SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (worksheet_id,))
+    conn.commit()
+    return cur.lastrowid
+
+
+_CAPITAL_IMPROVEMENT_FIELDS = ("event_date", "description", "amount", "funded_by", "treatment", "notes")
+
+
+def update_capital_improvement(conn, improvement_id: int, **fields) -> None:
+    unknown = set(fields) - set(_CAPITAL_IMPROVEMENT_FIELDS)
+    if unknown:
+        raise ValueError(f"Unknown capital improvement field(s): {unknown}")
+    if "funded_by" in fields and fields["funded_by"] not in ("sp", "cp"):
+        raise ValueError(f"funded_by must be 'sp' or 'cp', got {fields['funded_by']!r}")
+    if "treatment" in fields and fields["treatment"] not in ("reimbursement", "pro_tanto"):
+        raise ValueError(f"treatment must be 'reimbursement' or 'pro_tanto', got {fields['treatment']!r}")
+    if not fields:
+        return
+    set_clause = ", ".join(f"{k} = ?" for k in fields)
+    conn.execute(
+        f"UPDATE moore_marsden_capital_improvements SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (*fields.values(), improvement_id),
+    )
+    row = conn.execute(
+        "SELECT worksheet_id FROM moore_marsden_capital_improvements WHERE id = ?", (improvement_id,)
+    ).fetchone()
+    if row:
+        conn.execute("UPDATE moore_marsden_worksheets SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (row[0],))
+    conn.commit()
+
+
+def delete_capital_improvement(conn, improvement_id: int) -> None:
+    row = conn.execute(
+        "SELECT worksheet_id FROM moore_marsden_capital_improvements WHERE id = ?", (improvement_id,)
+    ).fetchone()
+    if row is None:
+        return
+    conn.execute("DELETE FROM moore_marsden_capital_improvements WHERE id = ?", (improvement_id,))
     conn.execute("UPDATE moore_marsden_worksheets SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (row["worksheet_id"],))
     conn.commit()

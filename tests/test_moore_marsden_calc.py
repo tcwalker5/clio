@@ -95,3 +95,89 @@ def test_acquired_before_marriage_uses_value_at_marriage_for_appreciation_only()
     # segment_cpr (20000) / basis (500000) = 4%.
     assert row["community_pct"] == 0.04
     assert round(row["community_appreciation"], 2) == 8000.0  # 4% of 200k
+
+
+# --- Capital improvements (added 2026-08-18) ---
+
+IMPROVEMENT_WORKSHEET = {"acquired_before_marriage": False, "value_at_date_of_marriage": None}
+IMPROVEMENT_SEGMENTS = [
+    {"segment_type": "purchase", "property_value": 500000.0, "cp_contribution": 0, "event_date": "2015-01-01"},
+    {"segment_type": "valuation", "property_value": 700000.0, "community_principal_reduction": 0, "event_date": "2020-01-01"},
+]
+
+
+def test_pro_tanto_improvement_shares_in_appreciation():
+    """A $50,000 CP-funded pro-tanto improvement, dated inside the only
+    period, becomes that period's own_paydown (like cp_contribution) and
+    earns a proportional share of the period's appreciation: 50,000/500,000
+    = 10% community share x $200,000 appreciation = $20,000, on top of the
+    $50,000 itself."""
+    improvements = [{"event_date": "2016-01-01", "amount": 50000.0, "funded_by": "cp", "treatment": "pro_tanto"}]
+    enriched = calc.compute_segments(IMPROVEMENT_WORKSHEET, IMPROVEMENT_SEGMENTS, improvements)
+    totals = calc.compute_final(enriched, improvements)
+
+    row = enriched[1]
+    assert row["community_pct"] == 0.1
+    assert round(row["community_appreciation"], 2) == 20000.0
+    assert totals.segment_chain_total == 70000.0  # 50,000 + 20,000
+    assert totals.reimbursement_total == 0.0
+    assert totals.total_community_interest == 70000.0
+    assert totals.owner_spouse_share == 35000.0
+
+
+def test_reimbursement_improvement_has_no_appreciation_share():
+    """The same $50,000, tagged 'reimbursement' instead, adds flat to the
+    final total with zero effect on the segment chain's own math — no
+    community_pct, no appreciation share, unlike pro_tanto."""
+    improvements = [{"event_date": "2016-01-01", "amount": 50000.0, "funded_by": "cp", "treatment": "reimbursement"}]
+    enriched = calc.compute_segments(IMPROVEMENT_WORKSHEET, IMPROVEMENT_SEGMENTS, improvements)
+    totals = calc.compute_final(enriched, improvements)
+
+    row = enriched[1]
+    assert row["community_pct"] == 0.0
+    assert row["community_appreciation"] == 0.0
+    assert totals.segment_chain_total == 0.0
+    assert totals.reimbursement_total == 50000.0
+    assert totals.total_community_interest == 50000.0
+    assert totals.owner_spouse_share == 25000.0
+
+
+def test_sp_funded_improvement_has_zero_effect():
+    """An SP-funded improvement to the owner spouse's own separate property
+    creates no community interest, regardless of its treatment tag — it's
+    logged for the record only."""
+    for treatment in ("pro_tanto", "reimbursement"):
+        improvements = [{"event_date": "2016-01-01", "amount": 50000.0, "funded_by": "sp", "treatment": treatment}]
+        enriched = calc.compute_segments(IMPROVEMENT_WORKSHEET, IMPROVEMENT_SEGMENTS, improvements)
+        totals = calc.compute_final(enriched, improvements)
+        assert totals.total_community_interest == 0.0, treatment
+
+
+def test_unbucketed_improvement_excluded_and_flagged():
+    """A pro-tanto improvement dated before the purchase date can't be
+    placed in any period — it must not silently vanish into the total
+    unexplained; unbucketed_improvements() surfaces it for the UI instead."""
+    improvements = [{"event_date": "2010-01-01", "amount": 50000.0, "funded_by": "cp", "treatment": "pro_tanto"}]
+    enriched = calc.compute_segments(IMPROVEMENT_WORKSHEET, IMPROVEMENT_SEGMENTS, improvements)
+    totals = calc.compute_final(enriched, improvements)
+
+    assert totals.total_community_interest == 0.0
+    flagged = calc.unbucketed_improvements(IMPROVEMENT_SEGMENTS, improvements)
+    assert len(flagged) == 1
+    assert flagged[0]["amount"] == 50000.0
+
+
+def test_spans_separation_flag():
+    """A period's date range straddling date_of_separation is flagged, so
+    staff know to double check the principal-reduction figure they entered
+    only reflects pre-separation community activity."""
+    worksheet_with_sep = {**IMPROVEMENT_WORKSHEET, "date_of_separation": "2018-01-01"}
+    enriched = calc.compute_segments(worksheet_with_sep, IMPROVEMENT_SEGMENTS)
+    assert enriched[1]["spans_separation"] is True
+
+    worksheet_sep_after = {**IMPROVEMENT_WORKSHEET, "date_of_separation": "2021-01-01"}
+    enriched_after = calc.compute_segments(worksheet_sep_after, IMPROVEMENT_SEGMENTS)
+    assert enriched_after[1]["spans_separation"] is False
+
+    enriched_no_sep = calc.compute_segments(IMPROVEMENT_WORKSHEET, IMPROVEMENT_SEGMENTS)
+    assert enriched_no_sep[1]["spans_separation"] is False

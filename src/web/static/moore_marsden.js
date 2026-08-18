@@ -102,9 +102,18 @@ function initMooreMarsdenGrid(config) {
     return `<label>${label}${html}</label>`;
   }
 
-  function moneyField(label, field_, value) {
-    return field(label, `<input type="text" inputmode="decimal" class="mm-money" data-field="${field_}" value="${formatMoney(value)}">`);
+  function moneyField(label, field_, value, titleAttr) {
+    const titleHtml = titleAttr ? ` title="${titleAttr.replace(/"/g, "&quot;")}"` : "";
+    return field(label, `<input type="text" inputmode="decimal" class="mm-money" data-field="${field_}" value="${formatMoney(value)}"${titleHtml}>`);
   }
+
+  // The standard Moore/Marsden denominator is the contract sales price only
+  // — not total cash needed to close. Down payment and mortgage principal
+  // are already reflected in that price (don't add them again); escrow/
+  // title/recording fees, loan points, and prepaid interest/tax/insurance
+  // are transaction/financing/carrying costs, not part of the property's
+  // capital investment, and don't belong here at all.
+  const PURCHASE_PRICE_HINT = "Contract sales price only — not total cash needed to close. Excludes down payment/mortgage (already reflected in this price) and escrow, title, recording, loan points, or prepaid interest/tax/insurance (transaction and financing costs, not capital investment).";
 
   function computedItem(label, value, extraClass) {
     return `<div class="mm-computed-item ${extraClass || ""}"><span class="mm-computed-label">${label}</span><span class="mm-computed-value">${value}</span></div>`;
@@ -127,7 +136,9 @@ function initMooreMarsdenGrid(config) {
 
     const inputFields = [
       field("Date", `<input type="date" data-field="event_date" value="${segment.event_date || ""}">`),
-      moneyField("Property Value", "property_value", segment.property_value),
+      isPurchase
+        ? moneyField("Purchase Price", "property_value", segment.property_value, PURCHASE_PRICE_HINT)
+        : moneyField("Property Value", "property_value", segment.property_value),
       moneyField("Loan Balance", "loan_balance", segment.loan_balance),
       isPurchase ? "" : moneyField("Principal Reduction (this period)", "community_principal_reduction", segment.community_principal_reduction),
       moneyField("SP Contribution", "sp_contribution", segment.sp_contribution),
@@ -149,6 +160,14 @@ function initMooreMarsdenGrid(config) {
           computedItem("SP Total", fmt(segment.sp_total)),
         ].join("");
 
+    // A period whose date range straddles the matter's date of separation —
+    // the principal-reduction figure entered above may be mixing pre- and
+    // post-separation activity, since post-separation earnings are
+    // generally separate property (Family Code §771).
+    const separationWarning = segment.spans_separation
+      ? `<div class="mm-warning-banner">This period spans the date of separation — double check that the amount entered above only reflects community-funded activity before separation.</div>`
+      : "";
+
     card.innerHTML = `
       <div class="mm-segment-head">
         <span class="mm-segment-title">${stepPrefix}<input type="text" data-field="event_label" placeholder="${autoLabel}" value="${(segment.event_label || "").replace(/"/g, "&quot;")}"></span>
@@ -156,6 +175,7 @@ function initMooreMarsdenGrid(config) {
       </div>
       <div class="mm-field-grid">${inputFields}</div>
       <div class="mm-computed-grid">${computedItems}</div>
+      ${separationWarning}
     `;
 
     return card;
@@ -170,27 +190,125 @@ function initMooreMarsdenGrid(config) {
     });
   }
 
+  // Tracked as local mutable state since capital-improvement CRUD responses
+  // include a fresh list, and segment CRUD responses include a fresh
+  // unbucketed-ids list (editing a segment's date can change which period
+  // an existing improvement buckets into, or unbucket it entirely).
+  let capitalImprovements = config.capitalImprovements || [];
+  let unbucketedIds = new Set(config.unbucketedImprovementIds || []);
+
   function renderSummary(totals) {
     const ownerLabel = config.worksheet.owner_spouse_label || "Owner Spouse";
     const nonOwnerLabel = config.worksheet.non_owner_spouse_label || "Non-Owner Spouse";
+    const breakdown = totals.reimbursement_total
+      ? `<p class="mm-breakdown">Segment chain: ${fmt(totals.segment_chain_total)} + community-funded improvement reimbursements: ${fmt(totals.reimbursement_total)}</p>`
+      : "";
+    const unbucketedWarning = unbucketedIds.size
+      ? `<div class="mm-warning-banner">${unbucketedIds.size} capital improvement${unbucketedIds.size > 1 ? "s" : ""} below ${unbucketedIds.size > 1 ? "have" : "has"} a date outside every segment's period and ${unbucketedIds.size > 1 ? "are" : "is"} NOT included in this total — fix the date(s) to include them.</div>`
+      : "";
     document.getElementById("mm-summary").innerHTML = `
+      ${breakdown}
       <p>The community interest in the property is: <strong>${fmt(totals.total_community_interest)}</strong></p>
       <p>${ownerLabel}'s share: ${fmt(totals.owner_spouse_share)} &nbsp;&nbsp; ${nonOwnerLabel}'s share: ${fmt(totals.non_owner_spouse_share)}</p>
+      ${unbucketedWarning}
     `;
   }
 
-  // Initial render
-  renderGrid(config.segments);
-  renderSummary(computeTotalsClientSide(config.segments));
+  // ---- Capital Improvements ----
+  const improvementsTbody = document.querySelector("#mm-improvements-table tbody");
+  const FUNDED_BY_LABELS = { sp: "Separate Property", cp: "Community Property" };
+  const TREATMENT_LABELS = { reimbursement: "Reimbursement", pro_tanto: "Pro Tanto" };
 
-  function computeTotalsClientSide(segments) {
-    // Rough initial totals before any edit — good enough for first paint;
-    // the server's authoritative totals arrive on the very next mutation.
-    const last = segments[segments.length - 1];
-    const total = (last && last.cumulative_cp) || 0;
-    const half = Math.round((total / 2) * 100) / 100;
-    return { total_community_interest: total, owner_spouse_share: half, non_owner_spouse_share: Math.round((total - half) * 100) / 100 };
+  function buildImprovementRow(imp) {
+    const tr = document.createElement("tr");
+    tr.dataset.improvementId = imp.id;
+    tr.classList.toggle("mm-unbucketed", unbucketedIds.has(imp.id));
+
+    const cell = (html) => {
+      const td = document.createElement("td");
+      td.innerHTML = html;
+      return td;
+    };
+
+    const fundedBySelect = `<select data-field="funded_by">${Object.entries(FUNDED_BY_LABELS)
+      .map(([v, l]) => `<option value="${v}" ${imp.funded_by === v ? "selected" : ""}>${l}</option>`)
+      .join("")}</select>`;
+    const treatmentCell = imp.funded_by === "cp"
+      ? `<select data-field="treatment">${Object.entries(TREATMENT_LABELS)
+          .map(([v, l]) => `<option value="${v}" ${imp.treatment === v ? "selected" : ""}>${l}</option>`)
+          .join("")}</select>`
+      : `<span class="mm-computed">—</span>`;
+
+    tr.appendChild(cell(`<input type="date" data-field="event_date" value="${imp.event_date || ""}" title="${unbucketedIds.has(imp.id) ? "This date doesn't fall within any segment's period, so it's excluded from the total" : ""}">`));
+    tr.appendChild(cell(`<input type="text" data-field="description" value="${(imp.description || "").replace(/"/g, "&quot;")}">`));
+    tr.appendChild(cell(`<input type="text" inputmode="decimal" class="mm-money" data-field="amount" value="${formatMoney(imp.amount)}">`));
+    tr.appendChild(cell(fundedBySelect));
+    tr.appendChild(cell(treatmentCell));
+    tr.appendChild(cell(`<button type="button" class="secondary mm-delete-btn">&times;</button>`));
+    return tr;
   }
+
+  function renderImprovements() {
+    improvementsTbody.innerHTML = "";
+    capitalImprovements.forEach((imp) => improvementsTbody.appendChild(buildImprovementRow(imp)));
+  }
+
+  function applyMutationResult(result) {
+    unbucketedIds = new Set(result.unbucketed_improvement_ids || []);
+    if (result.capital_improvements) capitalImprovements = result.capital_improvements;
+    renderGrid(result.segments);
+    renderSummary(result.totals);
+    renderImprovements();
+  }
+
+  improvementsTbody.addEventListener("input", (e) => {
+    const input = e.target.closest("input.mm-money");
+    if (!input) return;
+    const cursorPos = input.selectionStart ?? input.value.length;
+    const digitsBeforeCursor = (input.value.slice(0, cursorPos).match(/[0-9.]/g) || []).length;
+    input.value = formatMoneyLive(input.value);
+    const newPos = cursorPosForDigitCount(input.value, digitsBeforeCursor);
+    input.setSelectionRange(newPos, newPos);
+  });
+
+  improvementsTbody.addEventListener("change", async (e) => {
+    const input = e.target.closest("[data-field]");
+    if (!input) return;
+    const tr = input.closest("tr");
+    const improvementId = Number(tr.dataset.improvementId);
+    const field = input.dataset.field;
+
+    let value;
+    if (field === "event_date" || field === "description" || field === "funded_by" || field === "treatment") value = input.value;
+    else value = numOrZero(input);
+
+    const result = await api("PATCH", `/moore-marsden/${config.worksheetId}/capital-improvements/${improvementId}`, { [field]: value });
+    applyMutationResult(result);
+  });
+
+  improvementsTbody.addEventListener("click", async (e) => {
+    if (!e.target.closest(".mm-delete-btn")) return;
+    const tr = e.target.closest("tr");
+    const improvementId = Number(tr.dataset.improvementId);
+    if (!confirm("Remove this capital improvement?")) return;
+    const result = await api("DELETE", `/moore-marsden/${config.worksheetId}/capital-improvements/${improvementId}`);
+    applyMutationResult(result);
+  });
+
+  document.getElementById("mm-add-improvement").addEventListener("click", async () => {
+    const result = await api("POST", `/moore-marsden/${config.worksheetId}/capital-improvements`, {});
+    applyMutationResult(result);
+  });
+
+  // Initial render — uses the server's own computed totals (passed through
+  // config.totals from the same _totals_payload the editor GET route
+  // renders with), not a client-side approximation: once capital
+  // improvements could add a reimbursement on top of the segment chain,
+  // a client-only estimate from segments alone would be wrong on first
+  // paint until the next edit triggered a server round-trip.
+  renderGrid(config.segments);
+  renderImprovements();
+  renderSummary(config.totals);
 
   // Live comma-grouping as you type, no network call — same as equalizer.js.
   grid.addEventListener("input", (e) => {
@@ -215,9 +333,8 @@ function initMooreMarsdenGrid(config) {
     else if (field === "loan_balance") value = numOrNull(input);
     else value = numOrZero(input);
 
-    const { segments, totals } = await api("PATCH", `/moore-marsden/${config.worksheetId}/segments/${segmentId}`, { [field]: value });
-    renderGrid(segments);
-    renderSummary(totals);
+    const result = await api("PATCH", `/moore-marsden/${config.worksheetId}/segments/${segmentId}`, { [field]: value });
+    applyMutationResult(result);
   });
 
   grid.addEventListener("click", async (e) => {
@@ -225,15 +342,13 @@ function initMooreMarsdenGrid(config) {
     const card = e.target.closest(".mm-segment-card");
     const segmentId = Number(card.dataset.segmentId);
     if (!confirm("Remove this refinance row?")) return;
-    const { segments, totals } = await api("DELETE", `/moore-marsden/${config.worksheetId}/segments/${segmentId}`);
-    renderGrid(segments);
-    renderSummary(totals);
+    const result = await api("DELETE", `/moore-marsden/${config.worksheetId}/segments/${segmentId}`);
+    applyMutationResult(result);
   });
 
   document.getElementById("mm-add-segment").addEventListener("click", async () => {
-    const { segments, totals } = await api("POST", `/moore-marsden/${config.worksheetId}/segments`, {});
-    renderGrid(segments);
-    renderSummary(totals);
+    const result = await api("POST", `/moore-marsden/${config.worksheetId}/segments`, {});
+    applyMutationResult(result);
   });
 
   // Prompted every click, even on a re-save — same reasoning as
@@ -277,9 +392,16 @@ function initMooreMarsdenGrid(config) {
       owner_spouse_label: ownerLabelInput.value.trim(),
       non_owner_spouse_label: nonOwnerLabelInput.value.trim(),
       acquired_before_marriage: beforeMarriageCheckbox.checked,
-      date_of_marriage: document.getElementById("mm-date-of-marriage").value || null,
       value_at_date_of_marriage: numOrNull(document.getElementById("mm-value-at-marriage")),
     };
+    // Only sent when non-empty — the settings route writes these straight
+    // to the matter's own Clio custom fields, and an empty value has
+    // nothing useful to write (see routes_moore_marsden.py's _CLIO_DATE_FIELDS).
+    const dom = document.getElementById("mm-date-of-marriage").value;
+    const dos = document.getElementById("mm-date-of-separation").value;
+    if (dom) payload.date_of_marriage = dom;
+    if (dos) payload.date_of_separation = dos;
+
     await api("PATCH", `/moore-marsden/${config.worksheetId}/settings`, payload);
     window.location.reload();
   });

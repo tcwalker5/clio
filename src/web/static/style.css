@@ -321,6 +321,8 @@ form.stacked .password-field input[type="password"] { padding-right: 2.6rem; mar
 .matter-search-item { padding: 0.4rem 0.6rem; font-size: 0.85rem; cursor: pointer; }
 .matter-search-item:hover { background: var(--bg); }
 .matter-search-empty { padding: 0.4rem 0.6rem; font-size: 0.85rem; color: var(--text-muted); }
+.matter-search-input.matter-search-invalid { border-color: var(--err); }
+.matter-search-error { color: var(--err); font-size: 0.78rem; margin-top: 0.3rem; }
 
 /* ---------- Equalizer ---------- */
 
@@ -445,6 +447,29 @@ form.stacked .password-field input[type="password"] { padding-right: 2.6rem; mar
 }
 .mm-summary p { margin: 0; }
 .mm-summary p + p { margin-top: 0.4rem; }
+.mm-summary .mm-breakdown { font-weight: 400; color: var(--text-muted); font-size: 0.85rem; }
+
+/* A period whose date range straddles the matter's date of separation, or a
+   pro-tanto improvement whose date couldn't be placed into any period —
+   both need a human to double check rather than being silently included or
+   excluded. */
+.mm-warning-banner {
+    display: flex; gap: 0.5rem; align-items: flex-start; margin-top: 0.6rem;
+    padding: 0.5rem 0.7rem; background: var(--warn-bg); color: var(--warn);
+    border-radius: 6px; font-size: 0.8rem;
+}
+
+.mm-improvements-scroll { overflow-x: auto; }
+#mm-improvements-table input[type="text"], #mm-improvements-table input[type="date"],
+#mm-improvements-table select {
+    width: 100%; min-width: 6rem; padding: 0.3rem 0.4rem; border: 1px solid transparent;
+    border-radius: 4px; font-size: 0.85rem; background: transparent; color: var(--text);
+}
+#mm-improvements-table input[data-field="description"] { min-width: 10rem; }
+#mm-improvements-table input.mm-money { text-align: right; }
+#mm-improvements-table input:hover, #mm-improvements-table input:focus,
+#mm-improvements-table select:hover, #mm-improvements-table select:focus { border-color: var(--border); background: var(--panel); }
+#mm-improvements-table tbody tr.mm-unbucketed td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
 
 .mm-modal-backdrop {
     display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.4);

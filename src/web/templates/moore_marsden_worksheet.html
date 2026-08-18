@@ -46,6 +46,21 @@
   <div id="mm-summary" class="mm-summary"></div>
 </div>
 
+<div class="panel">
+  <div class="mm-toolbar">
+    <h2 style="margin:0;">Capital Improvements</h2>
+    <span class="mm-toolbar-sep"></span>
+    <button type="button" class="secondary" id="mm-add-improvement">+ Add Improvement</button>
+  </div>
+  <p class="subtitle">Tracked separately from the purchase/refinance/valuation chain — a community-funded improvement needs its own source, timing, and treatment, not a blanket add to purchase price or an ordinary period's principal reduction.</p>
+  <div class="mm-improvements-scroll">
+  <table id="mm-improvements-table">
+    <thead><tr><th>Date</th><th>Description</th><th>Amount</th><th>Funded By</th><th>Treatment</th><th></th></tr></thead>
+    <tbody></tbody>
+  </table>
+  </div>
+</div>
+
 <div class="mm-modal-backdrop" id="mm-settings-modal">
   <div class="mm-modal panel">
     <h2>Settings</h2>
@@ -57,13 +72,19 @@
 
     <hr style="margin:1rem 0; border:none; border-top:1px solid var(--border);">
 
+    <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Date of marriage</label>
+    <input type="date" id="mm-date-of-marriage" value="{{ date_of_marriage or '' }}" style="width:100%; padding:0.5rem; margin-bottom:0.75rem; border:1px solid var(--border); border-radius:6px;">
+    <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Date of separation</label>
+    <input type="date" id="mm-date-of-separation" value="{{ date_of_separation or '' }}" style="width:100%; padding:0.5rem; margin-bottom:0.75rem; border:1px solid var(--border); border-radius:6px;">
+    <p class="subtitle">Synced with the matter's own Date of Marriage / Date of Separation fields in Clio — editing here updates the matter, not just this worksheet.</p>
+
+    <hr style="margin:1rem 0; border:none; border-top:1px solid var(--border);">
+
     <label style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.75rem;">
       <input type="checkbox" id="mm-acquired-before-marriage" {% if worksheet.acquired_before_marriage %}checked{% endif %}>
       Property was acquired before the marriage
     </label>
     <div id="mm-marriage-fields" style="display:none;">
-      <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Date of marriage</label>
-      <input type="date" id="mm-date-of-marriage" value="{{ worksheet.date_of_marriage or '' }}" style="width:100%; padding:0.5rem; margin-bottom:0.75rem; border:1px solid var(--border); border-radius:6px;">
       <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Property value at date of marriage</label>
       <input type="text" inputmode="decimal" id="mm-value-at-marriage" value="{{ worksheet.value_at_date_of_marriage if worksheet.value_at_date_of_marriage is not none else '' }}" style="width:100%; padding:0.5rem; margin-bottom:0.75rem; border:1px solid var(--border); border-radius:6px;">
       <p class="subtitle">Community percentage still anchors to the original purchase price — this value only changes where marital appreciation is measured from, so premarital appreciation stays separate property.</p>
@@ -82,6 +103,11 @@ initMooreMarsdenGrid({
   worksheetId: {{ worksheet.id }},
   segments: {{ segments | tojson | safe }},
   worksheet: {{ worksheet | tojson | safe }},
+  totals: {{ totals | tojson | safe }},
+  capitalImprovements: {{ capital_improvements | tojson | safe }},
+  dateOfMarriage: {{ date_of_marriage | tojson | safe }},
+  dateOfSeparation: {{ date_of_separation | tojson | safe }},
+  unbucketedImprovementIds: {{ unbucketed_improvement_ids | tojson | safe }},
 });
 </script>
 {% endblock %}

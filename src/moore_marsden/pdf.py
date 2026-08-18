@@ -20,6 +20,17 @@ rounding a real figure to zero.
 Used for both the anytime "Preview" (regenerated live from current draft
 state, never touches Clio) and "Save to Clio" (repeatable — a worksheet
 stays editable after saving) — same render_worksheet_pdf() call either way.
+
+capital_improvements (added 2026-08-18) get their own section, listed
+individually with source (SP/CP) and treatment (reimbursement/pro-tanto) —
+per Marriage of Allen, these need their own record, not a blanket add to
+purchase price or an ordinary period's principal reduction. The Community
+Interest section shows the reimbursement breakdown (segment chain total +
+reimbursements = grand total) whenever any reimbursement-mode improvements
+exist, so the final number is never opaque about where it came from.
+`worksheet` is expected to already carry live date_of_marriage/
+date_of_separation (see routes_moore_marsden.py's _worksheet_with_live_dates)
+— this module makes no Clio calls itself.
 """
 
 from datetime import datetime
@@ -87,11 +98,46 @@ def _cp_sp_table(segment_cpr: float, community_appreciation: float, cumulative_c
     return table
 
 
-def render_worksheet_pdf(worksheet: dict, segments: list[dict]) -> bytes:
-    enriched = calc.compute_segments(worksheet, segments)
-    totals = calc.compute_final(enriched)
+_FUNDED_BY_LABELS = {"sp": "Separate Property", "cp": "Community Property"}
+_TREATMENT_LABELS = {"reimbursement": "Reimbursement", "pro_tanto": "Pro Tanto"}
+
+
+def _capital_improvements_table(capital_improvements: list[dict], unbucketed_ids: set) -> Table:
+    rows = [("Date", "Description", "Funded By", "Treatment", "Amount")]
+    for imp in capital_improvements:
+        flag = " (unplaced — not counted)" if imp["id"] in unbucketed_ids else ""
+        treatment = _TREATMENT_LABELS.get(imp.get("treatment"), "") if imp.get("funded_by") == "cp" else "—"
+        rows.append((
+            imp.get("event_date") or "", imp.get("description") or "",
+            _FUNDED_BY_LABELS.get(imp.get("funded_by"), ""), treatment + flag,
+            _money(imp.get("amount")),
+        ))
+    table = Table(rows, colWidths=[0.9 * inch, 2.3 * inch, 1.3 * inch, 1.6 * inch, 1.0 * inch])
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), INK),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("GRID", (0, 0), (-1, -1), 0.5, BORDER),
+        ("ALIGN", (4, 0), (4, -1), "RIGHT"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+    ]))
+    return table
+
+
+def render_worksheet_pdf(worksheet: dict, segments: list[dict], capital_improvements: list[dict] | None = None) -> bytes:
+    capital_improvements = capital_improvements or []
+    enriched = calc.compute_segments(worksheet, segments, capital_improvements)
+    totals = calc.compute_final(enriched, capital_improvements)
+    unbucketed_ids = {imp["id"] for imp in calc.unbucketed_improvements(segments, capital_improvements)}
     owner_label = worksheet.get("owner_spouse_label") or "Owner Spouse"
     non_owner_label = worksheet.get("non_owner_spouse_label") or "Non-Owner Spouse"
+
+    subtitle = f"{owner_label} (Owner Spouse) / {non_owner_label} (Non-Owner Spouse) — generated {datetime.today().strftime('%B %d, %Y')}"
+    date_bits = []
+    if worksheet.get("date_of_marriage"):
+        date_bits.append(f"Date of Marriage: {worksheet['date_of_marriage']}")
+    if worksheet.get("date_of_separation"):
+        date_bits.append(f"Date of Separation: {worksheet['date_of_separation']}")
 
     buffer = BytesIO()
     doc = SimpleDocTemplate(
@@ -102,13 +148,11 @@ def render_worksheet_pdf(worksheet: dict, segments: list[dict]) -> bytes:
     styles = getSampleStyleSheet()
     story = [
         Paragraph(f"Moore/Marsden Calculation — Matter {worksheet['matter_display_number']}", styles["Title"]),
-        Paragraph(
-            f"{owner_label} (Owner Spouse) / {non_owner_label} (Non-Owner Spouse) — "
-            f"generated {datetime.today().strftime('%B %d, %Y')}",
-            styles["Normal"],
-        ),
-        Spacer(1, 0.2 * inch),
+        Paragraph(subtitle, styles["Normal"]),
     ]
+    if date_bits:
+        story.append(Paragraph(" &nbsp;&nbsp; ".join(date_bits), styles["Normal"]))
+    story.append(Spacer(1, 0.2 * inch))
 
     purchase = enriched[0]
     purchase_rows = [("", "Purchase Price", _money(purchase.get("property_value")))]
@@ -158,7 +202,30 @@ def render_worksheet_pdf(worksheet: dict, segments: list[dict]) -> bytes:
         ))
         story.append(Spacer(1, 0.3 * inch))
 
+    if capital_improvements:
+        story.append(Paragraph("Capital Improvements", styles["Heading2"]))
+        story.append(_capital_improvements_table(capital_improvements, unbucketed_ids))
+        if unbucketed_ids:
+            story.append(Spacer(1, 0.08 * inch))
+            story.append(Paragraph(
+                "“Unplaced” improvements above could not be matched to a segment period "
+                "(missing or out-of-range date) and are excluded from the total below — fix the date "
+                "and re-save to include them.",
+                styles["Normal"],
+            ))
+        story.append(Spacer(1, 0.3 * inch))
+
     story.append(Paragraph("Community Interest", styles["Heading2"]))
+    if totals.reimbursement_total:
+        story.append(Paragraph(
+            f"Community interest from the purchase/refinance/valuation chain: {_money(totals.segment_chain_total)}",
+            styles["Normal"],
+        ))
+        story.append(Paragraph(
+            f"Plus community-funded improvement reimbursements: {_money(totals.reimbursement_total)}",
+            styles["Normal"],
+        ))
+        story.append(Spacer(1, 0.05 * inch))
     story.append(Paragraph(
         f"The community interest in the property is: <b>{_money(totals.total_community_interest)}</b>",
         styles["Normal"],

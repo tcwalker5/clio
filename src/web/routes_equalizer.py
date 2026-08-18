@@ -21,6 +21,7 @@ again just pushes a new Document version rather than locking anything (Ted,
 import logging
 import re
 from datetime import datetime
+from urllib.parse import quote
 
 from fastapi import APIRouter, Body, Depends, Form, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
@@ -82,7 +83,7 @@ async def _create_worksheet_for_matter(conn, matter_id: int) -> int:
 
 
 @router.get("", response_class=HTMLResponse)
-async def equalizer_home(request: Request, _: None = Depends(require_auth)):
+async def equalizer_home(request: Request, error: str | None = None, _: None = Depends(require_auth)):
     from web.app import render
 
     conn = get_connection()
@@ -91,7 +92,6 @@ async def equalizer_home(request: Request, _: None = Depends(require_auth)):
     finally:
         conn.close()
 
-    error = None
     all_matters: list[dict] = []
     try:
         session = clio_documents.build_session()
@@ -108,25 +108,38 @@ async def equalizer_home(request: Request, _: None = Depends(require_auth)):
             key=lambda m: m["name"],
         )
     except RuntimeError as e:
-        error = str(e)
+        error = error or str(e)
 
     return render(request, "equalizer.html", worksheets=worksheets, all_matters=all_matters, error=error)
 
 
 @router.get("/lookup", response_class=HTMLResponse)
-async def equalizer_lookup(request: Request, matter_id: int, matter_name: str = "", _: None = Depends(require_auth)):
+async def equalizer_lookup(request: Request, matter_id: str = "", matter_name: str = "", _: None = Depends(require_auth)):
     """Where the landing page's matter search actually lands: a matter with
     no worksheets yet goes straight to a fresh one (the common case — no
     extra click); a matter with existing worksheets (draft or saved to
     Clio) shows the list to recall from instead of silently creating a
-    duplicate."""
+    duplicate.
+
+    matter_id is a raw string, not FastAPI's usual int coercion — the
+    search form's hidden field starts blank and a browser's `required` on a
+    type="hidden" input isn't actually enforced (matter_search.js guards
+    against this client-side too, but Enter-before-JS-loads or a direct hit
+    on this URL could still arrive here empty). A strict `int` param would
+    surface a raw Pydantic validation blob instead of the friendly "pick a
+    matter" redirect this does."""
     from web.app import render
+
+    try:
+        matter_id_int = int(matter_id)
+    except ValueError:
+        return RedirectResponse(url="/equalizer?error=" + quote("Pick a matter from the list before submitting."), status_code=303)
 
     conn = get_connection()
     try:
-        existing = store.list_worksheets_by_matter(conn, matter_id)
+        existing = store.list_worksheets_by_matter(conn, matter_id_int)
         if not existing:
-            worksheet_id = await _create_worksheet_for_matter(conn, matter_id)
+            worksheet_id = await _create_worksheet_for_matter(conn, matter_id_int)
             return RedirectResponse(url=f"/equalizer/{worksheet_id}", status_code=303)
         display_name = matter_name or existing[0]["matter_display_number"]
     finally:
@@ -147,7 +160,7 @@ async def equalizer_lookup(request: Request, matter_id: int, matter_name: str = 
             except RuntimeError as e:
                 logging.warning("Could not check Clio trash status for worksheet %s: %s", w["id"], e)
 
-    return render(request, "equalizer_matter.html", matter_id=matter_id, matter_display_number=display_name,
+    return render(request, "equalizer_matter.html", matter_id=matter_id_int, matter_display_number=display_name,
                   worksheets=existing, trashed_by_id=trashed_by_id)
 
 
