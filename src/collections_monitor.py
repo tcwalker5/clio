@@ -48,6 +48,75 @@ BILL_STATE = "awaiting_payment"
 
 PAGE_SIZE = 200
 
+# Fixed dropdown of collections handling decisions (Ted, 2026-08-18) — kept
+# to this exact list rather than freeform text so the review report reads
+# consistently across every matter, same reasoning as this project's other
+# explicit-mapping constants (purpose codes, etc.).
+#
+# FLARPL and Payment plan record our own INTENTION only (Ted, 2026-08-19) —
+# neither dropdown value means the thing has actually happened. FLARPL has
+# a real, separate confirmation source: Clio's own "FLARPL Recorded" matter
+# custom field, read-only from here (collections_flarpl.py) since recording
+# a lien is an external act this dashboard doesn't perform. Payment plan has
+# no equivalent Clio field (confirmed live — searched "Payment Plan",
+# "Payment", "Installment", "Plan", "Schedule": nothing), so there is
+# nothing here for it to reflect; it stays a plain dropdown option with no
+# second-stage indicator until a real field exists in Clio to be the source
+# of truth for it. (An earlier version of this feature gave Payment plan a
+# locally-writable "Active" checkbox — removed: a dashboard flag with no
+# external truth behind it is exactly the pattern being avoided for FLARPL.)
+COLLECTIONS_ACTIONS = [
+    "Keep billing",
+    "Escalate to attorney",
+    "Escalate to Heidi",
+    "Send to collections agency",
+    "Claim as uncollectable",
+    "FLARPL",
+    "Payment plan",
+]
+
+# Own schema fragment (see web/db.py's _apply_fragment) rather than added to
+# its monolithic CORE_SCHEMA — one row per MATTER, not per bill: a matter
+# with more than one unpaid bill still gets ONE handling decision, since
+# "how are we collecting this" is a client-level call, not per-invoice
+# (per Ted: today every matter has at most one unpaid bill anyway, a 1:1
+# match, so this doesn't come up in practice yet).
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS collections_actions (
+    matter_id INTEGER PRIMARY KEY,
+    action TEXT NOT NULL,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+SCHEMA_COLUMNS = []
+
+
+def fetch_actions_by_matter(conn) -> dict[int, str]:
+    rows = conn.execute("SELECT matter_id, action FROM collections_actions").fetchall()
+    return {row["matter_id"]: row["action"] for row in rows}
+
+
+def set_action(conn, matter_id: int, action: str) -> None:
+    """action="" clears the decision back to unset (the "—" dropdown option)
+    — deletes the row rather than trying to store an empty string, which
+    used to fail COLLECTIONS_ACTIONS validation and silently fail to save
+    (real bug, 2026-08-19: the dropdown itself still showed "—" selected
+    since nothing reverted it on the failed request, so it looked saved)."""
+    if not action:
+        conn.execute("DELETE FROM collections_actions WHERE matter_id = ?", (matter_id,))
+        conn.commit()
+        return
+    if action not in COLLECTIONS_ACTIONS:
+        raise ValueError(f"Unknown collections action: {action!r}")
+    conn.execute(
+        """INSERT INTO collections_actions (matter_id, action, updated_at)
+           VALUES (?, ?, CURRENT_TIMESTAMP)
+           ON CONFLICT(matter_id) DO UPDATE SET action = excluded.action, updated_at = CURRENT_TIMESTAMP""",
+        (matter_id, action),
+    )
+    conn.commit()
+
 
 def setup_logging(log_dir: Path) -> None:
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -76,6 +145,8 @@ class UnpaidBill:
     due_at: str | None
     total: float
     balance: float
+    action: str = ""  # persisted collections_actions.action for this matter, set by the route layer
+    flarpl_recorded: bool = False  # live, read-only from Clio's own FLARPL Recorded custom field, only meaningful when action == "FLARPL"
 
     @property
     def days_overdue(self) -> int:

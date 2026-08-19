@@ -27,6 +27,7 @@ import logging
 import sqlite3
 from pathlib import Path
 
+import collections_monitor
 import equalizer.store as equalizer_store
 import moore_marsden.store as moore_marsden_store
 
@@ -196,6 +197,7 @@ _FRAGMENTS = [
     ("core", CORE_SCHEMA, CORE_SCHEMA_COLUMNS),
     ("equalizer", equalizer_store.SCHEMA, equalizer_store.SCHEMA_COLUMNS),
     ("moore_marsden", moore_marsden_store.SCHEMA, moore_marsden_store.SCHEMA_COLUMNS),
+    ("collections", collections_monitor.SCHEMA, collections_monitor.SCHEMA_COLUMNS),
 ]
 
 

@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Collections Action Report{% endblock %}
+{% block content %}
+<h1>Collections Action Report</h1>
+<p class="subtitle no-print">Handling decisions for unpaid bills, sorted by matter — client name is left off since each matter has one client today. Set/change a decision on the <a href="/collections">Collections</a> page; this view is for printing/review.</p>
+
+{% if error %}
+<div class="panel"><p class="error-text">{{ error }}</p></div>
+{% endif %}
+
+{% if bills is not none %}
+<div class="panel">
+  <button type="button" class="btn secondary no-print" onclick="window.print()" style="margin-bottom:0.75rem;">Print</button>
+
+  {% if bills %}
+  <div style="overflow-x:auto;">
+  <table class="nowrap">
+    <thead><tr>
+      <th>Matter</th><th>Bill #</th><th>Due</th><th>Days Overdue</th><th>Balance</th><th>Handling</th><th>Confirmed</th>
+    </tr></thead>
+    <tbody>
+      {% for b in bills %}
+      <tr>
+        <td>{{ b.display_number }}</td>
+        <td>{{ b.number }}</td>
+        <td>{{ b.due_at or "—" }}</td>
+        <td>{{ b.days_overdue }}</td>
+        <td>${{ b.balance|money }}</td>
+        <td>{{ b.action or "—" }}</td>
+        <td>
+          {% if b.action == "FLARPL" %}{{ "Recorded" if b.flarpl_recorded else "Not recorded yet" }}
+          {% elif b.action == "Payment plan" %}Not tracked in Clio
+          {% else %}—
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="subtitle">Nothing unpaid right now.</p>
+  {% endif %}
+</div>
+{% endif %}
+
+<style>
+@media print {
+  .no-print, header.topbar { display: none !important; }
+  .panel { border: none; padding: 0; }
+  body { background: #fff; color: #000; }
+  table.nowrap th, table.nowrap td { color: #000; border-color: #ccc; }
+}
+</style>
+{% endblock %}

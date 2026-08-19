@@ -2,7 +2,7 @@
 {% block title %}Collections{% endblock %}
 {% block content %}
 <h1>Collections</h1>
-<p class="subtitle">Bills already sent to clients that haven't been paid yet — money earned for work already done, entirely separate from the <a href="/trust">Trust Monitor</a>'s retainer tracking (that's money held for future, unearned work). Visibility only for now — no payment-request action is wired up yet.</p>
+<p class="subtitle">Bills already sent to clients that haven't been paid yet — money earned for work already done, entirely separate from the <a href="/trust">Trust Monitor</a>'s retainer tracking (that's money held for future, unearned work).</p>
 
 {% if error %}
 <div class="panel"><p class="error-text">{{ error }}</p></div>
@@ -22,6 +22,7 @@
       Show only past-due bills ({{ overdue_count }})
     </label>
     <a class="btn secondary" href="/collections/download">Download CSV</a>
+    <a class="btn secondary" href="/collections/action-report" target="_blank">Print report for review</a>
   </div>
 
   {% if bills %}
@@ -30,21 +31,44 @@
     <thead><tr>
       <th>Status</th>
       <th class="sortable" onclick="sortTable('collections-table', 1, 'text', this)">Matter <span class="sort-icon">&#8645;</span></th>
-      <th>Client</th><th>Bill #</th><th>Issued</th><th>Due</th>
-      <th class="sortable" onclick="sortTable('collections-table', 6, 'number', this)">Days Overdue <span class="sort-icon">&#8645;</span></th>
-      <th class="sortable" onclick="sortTable('collections-table', 7, 'number', this)">Balance <span class="sort-icon">&#8645;</span></th>
+      <th>Bill #</th><th>Issued</th><th>Due</th>
+      <th class="sortable" onclick="sortTable('collections-table', 5, 'number', this)">Days Overdue <span class="sort-icon">&#8645;</span></th>
+      <th class="sortable" onclick="sortTable('collections-table', 6, 'number', this)">Balance <span class="sort-icon">&#8645;</span></th>
+      <th>Handling</th>
+      <th title="Confirmation from Clio, not something set here — FLARPL shows Clio's own FLARPL Recorded matter field (read-only). Payment plan has no matching Clio field yet, so there's nothing to confirm here.">Confirmed</th>
     </tr></thead>
     <tbody>
       {% for b in bills %}
       <tr data-overdue="{{ 'yes' if b.overdue else 'no' }}">
         <td>{% if b.overdue %}<span class="badge err">{{ b.days_overdue }}d past due</span>{% else %}<span class="badge ok">Current</span>{% endif %}</td>
         <td data-sort="{{ b.display_number }}">{{ b.display_number }}</td>
-        <td>{{ b.client_name }}</td>
         <td>{{ b.number }}</td>
         <td>{{ b.issued_at }}</td>
         <td>{{ b.due_at or "—" }}</td>
         <td data-sort="{{ b.days_overdue }}">{{ b.days_overdue }}</td>
         <td data-sort="{{ b.balance }}">${{ b.balance|money }}</td>
+        <td>
+          {% if b.matter_id %}
+          <select class="collections-action" data-matter-id="{{ b.matter_id }}" onchange="setAction(this)" style="padding:0.3rem 0.4rem;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text);font-size:0.85rem;">
+            <option value="" {% if not b.action %}selected{% endif %}>—</option>
+            {% for opt in actions %}
+            <option value="{{ opt }}" {% if b.action == opt %}selected{% endif %}>{{ opt }}</option>
+            {% endfor %}
+          </select>
+          {% else %}
+          <span title="No matter linked to this bill">—</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if b.action == "FLARPL" %}
+          {% if b.flarpl_recorded %}<span class="badge ok" title="From Clio's FLARPL Recorded field">Recorded</span>
+          {% else %}<span class="badge warn" title="From Clio's FLARPL Recorded field — update it in Clio once the lien is actually recorded">Not recorded yet</span>{% endif %}
+          {% elif b.action == "Payment plan" %}
+          <span class="badge warn" title="No Clio field exists to confirm this from yet">Not tracked in Clio</span>
+          {% else %}
+          —
+          {% endif %}
+        </td>
       </tr>
       {% endfor %}
     </tbody>
@@ -55,6 +79,31 @@
   {% endif %}
 </div>
 <script>
+async function setAction(select) {
+  const matterId = select.dataset.matterId;
+  const action = select.value;
+  select.disabled = true;
+  try {
+    const resp = await fetch("/collections/set-action", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: `matter_id=${encodeURIComponent(matterId)}&action=${encodeURIComponent(action)}`,
+    });
+    if (resp.ok) {
+      // Reload rather than patch the row in place — switching to FLARPL
+      // needs a fresh live read of Clio's own Recorded checkbox, which this
+      // page load didn't fetch for a matter that wasn't already FLARPL.
+      window.location.reload();
+    } else {
+      alert("Couldn't save — try again.");
+      select.disabled = false;
+    }
+  } catch (e) {
+    alert("Couldn't save — try again.");
+    select.disabled = false;
+  }
+}
+
 function filterResults() {
   const onlyOverdue = document.getElementById("overdue-only").checked;
   document.querySelectorAll("#results tbody tr[data-overdue]").forEach((row) => {

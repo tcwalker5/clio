@@ -942,8 +942,17 @@ CSV import or `client_case_mappings`-style conflict resolution here.
 **Comparison reason flags:** every non-matched row in `/calendar`'s comparison table gets
 a specific `reason` (ported from `calendar-check`'s `findMismatchReason()`): "No matter in
 Clio", "Ambiguous matter", "No calendar event", "Wrong date", or a comma-joined "Time/Dept/
-Purpose mismatch" — never a blank "Missing" badge with no explanation. Full detail is a
-hover tooltip on that cell (`matcher.py`'s `changes` list, one sentence per reason).
+Purpose mismatch" — never a blank "Missing" badge with no explanation. Full detail
+(`matcher.py`'s `changes` list, one entry per reason) shows as small muted lines under the
+reason itself — brought back 2026-08-18 at Ted's request, echoing a hint the legacy
+Outlook-based `calendar-check` tool used to show ("Court says X and Outlook says Y").
+Previously this only showed on hover (a `title=` tooltip), easy to miss at a glance; a first
+pass showed it as one visible but overly long joined line, revised same-day into `changes`
+being a list of small dicts instead of pre-joined sentences — `{"court": ..., "clio": ...}`
+for a field-level comparison (rendered as two short lines, "Court: X" / "Clio: Y") or
+`{"detail": ...}` for a freeform explanation with no natural Court/Clio split (e.g.
+"Ambiguous matter", rendered as one line) — so each row reads as reason + up to two short
+lines rather than one long sentence.
 
 **Matter owner column, and the CSV-export myth:** `matter_fields.py` fetches
 **Responsible Attorney/Staff, Originating Attorney, and Court Case Number live** from
@@ -1542,6 +1551,59 @@ payment" action — a payable link the client can pay by card — would need
 the **Clio Payments** permission, not currently granted to this app's
 Developer Portal registration (see the App Permissions table above).
 Nothing here writes to Clio at all.
+
+**Handling decisions (added 2026-08-18, Ted):** a **Handling** column on `/collections`
+lets staff record how each matter's collections situation is being handled, from a fixed
+dropdown (`collections_monitor.COLLECTIONS_ACTIONS`): Keep billing, Escalate to attorney,
+Escalate to Heidi, Send to collections agency, Claim as uncollectable — a closed list
+rather than freeform text, so the review report reads consistently across every matter,
+same reasoning as this project's other explicit-mapping constants. Persisted in its own
+`collections_actions` table (own schema fragment, see `web/db.py`'s `_apply_fragment`),
+keyed by **matter, not bill** — a matter with more than one unpaid bill still gets ONE
+decision, since "how are we collecting this" is a client-level call, not a per-invoice
+one (confirmed live: AMOS, CHRISTINE's 3 separate unpaid bills all correctly show the
+same decision). Saved via `onchange` on the dropdown (`POST /collections/set-action`,
+`collections_monitor.set_action()`) — no separate save button, same instant-persist
+pattern as Equalizer's inline editing. Purely local dashboard state; never sent to Clio.
+
+**Print report for review** (`GET /collections/action-report`) — the same live bill list
+with a **Print** button and print stylesheet, sorted alphabetically by matter
+`display_number` rather than by overdue/balance like the main table (Clio's own
+"Last, First" convention already sorts by last name, so no separate name-parsing is
+needed), and **deliberately leaves the Client column off** — per Ted, every matter today
+has exactly one client (a 1:1 match), so the matter name alone is enough and sorting by
+it is more intuitive than by client.
+
+**FLARPL and Payment plan — Handling records intent only; confirmation is never set
+from this dashboard (added 2026-08-18, corrected 2026-08-19):** the **Handling** dropdown
+records the firm's own INTENTION (e.g. "we're going to pursue a FLARPL" / "we're setting
+up a payment plan") — neither value means the thing has actually happened yet. A first
+version of this feature added a **Status** checkbox next to Handling that staff could
+tick directly from the dashboard; corrected same day (Ted) — recording a FLARPL is an
+external act (filed with the county), not something that should be settable by clicking
+a checkbox here. Current design:
+
+- **FLARPL** (Family Law Attorney's Real Property Lien — a lien on real property to be
+  sold later, securing fees) — its **Confirmed** column shows Clio's own **real matter
+  custom field** ("FLARPL Recorded", id `19226673`, `field_type: checkbox`, confirmed
+  live 2026-08-18), **read-only** (`collections_flarpl.py` — no write function exists in
+  this codebase anymore; staff flip it in Clio itself once the county confirms
+  recording, and this dashboard just reflects that back). Only batch-fetched for matters
+  currently showing "FLARPL" (`collections_flarpl.fetch_recorded_by_matter()`, one
+  `ids[]` call), not for every unpaid-bill matter. Live-tested 2026-08-18 (before the
+  write path was removed) against the designated test matter (DOE, JANE): set true,
+  confirmed true via a direct Clio read, reverted to false, confirmed reverted — see
+  "Designated test matter" above for why that matter specifically.
+- **Payment plan** — no matching Clio custom field exists (confirmed live, searched
+  "Payment Plan", "Payment", "Installment", "Plan", "Schedule" — nothing). Since there's
+  nothing external to confirm against, it has **no Confirmed-column indicator at all**
+  rather than a dashboard-only flag standing in for one — a first version gave it a
+  locally-writable "Active" checkbox (`collections_actions.payment_plan_active`),
+  removed same day as the FLARPL fix for exactly the same reason: a checkbox with no
+  external truth behind it is the pattern being avoided, not a narrower exception to it.
+  If a real confirmation source is wanted later, it needs an actual Clio custom field
+  first (a one-time manual step in Clio's Settings, like Court Case Number's field
+  already is) — nothing to wire up here until one exists.
 
 ## Workflow
 ```powershell
