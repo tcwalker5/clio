@@ -100,7 +100,17 @@ function viewCourtCalendar() {
           {% elif r.status == "to_update" %}<span class="badge warn">Needs update</span>
           {% else %}<span class="badge err">Missing</span>{% endif %}
         </td>
-        <td {% if r.changes %}title="{{ r.changes|join(' | ') }}"{% endif %}>{{ r.reason or "—" }}</td>
+        <td>
+          {{ r.reason or "—" }}
+          {% for c in r.changes %}
+            {% if c.detail %}
+          <div class="reason-hint">{{ c.detail }}</div>
+            {% else %}
+          <div class="reason-hint">Court: {{ c.court }}</div>
+          <div class="reason-hint">Clio: {{ c.clio }}</div>
+            {% endif %}
+          {% endfor %}
+        </td>
         <td>{{ r.court_event.date }}</td>
         <td>{{ r.court_event.start_time }}</td>
         <td>{{ r.court_event.party }}</td>

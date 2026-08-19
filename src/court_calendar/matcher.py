@@ -44,7 +44,13 @@ class MatchResult:
     reason: str = ""  # short flag: "No matter in Clio" | "Ambiguous matter" |
     # "No calendar event" | "Wrong date" | "Time mismatch" | "Dept mismatch" |
     # "Purpose mismatch" (comma-joined when more than one) | "" when matched
-    changes: list[str] = field(default_factory=list)  # one detailed sentence per reason, same order
+    # One entry per reason, same order as the reason it belongs to would
+    # appear in `reason`. Each entry is either {"court": ..., "clio": ...}
+    # (a field-level Court-vs-Clio comparison) or {"detail": ...} (a
+    # freeform explanation with no natural Court/Clio split, e.g. "Ambiguous
+    # matter"). Rendered as 2 or 1 extra small lines respectively under the
+    # reason label — see calendar_sync.html.
+    changes: list[dict[str, str]] = field(default_factory=list)
     matter_owner_initials: str = ""
     case_number_status: str = "n/a"  # "match" | "mismatch" | "not_on_file" | "n/a"
     clio_case_number: str = ""  # on-file number in Clio, when case_number_status == "mismatch"
@@ -116,7 +122,7 @@ def _diff_entry(
     entry: CalendarEntry,
     purpose_code: str,
     purpose_mappings: dict[str, str],
-) -> tuple[list[str], list[str]]:
+) -> tuple[list[str], list[dict[str, str]]]:
     """Returns (reasons, changes) — parallel lists, one entry per field that differs."""
     reasons = []
     changes = []
@@ -125,17 +131,17 @@ def _diff_entry(
         delta = abs((entry.start_at - court_event.dt).total_seconds())
         if delta > TIME_TOLERANCE_SECONDS:
             reasons.append("Time mismatch")
-            changes.append(f"Time: Clio has {entry.start_at.strftime('%H:%M')}, court calendar has {court_event.start_time}")
+            changes.append({"court": court_event.start_time, "clio": entry.start_at.strftime('%H:%M')})
 
     entry_dept = extract_dept_from_text(entry.summary) or extract_dept_from_text(entry.description)
     if entry_dept and entry_dept != court_event.dept:
         reasons.append("Dept mismatch")
-        changes.append(f"Dept: Clio entry mentions {entry_dept}, court calendar has {court_event.dept}")
+        changes.append({"court": court_event.dept, "clio": entry_dept})
 
     entry_purposes = _entry_purposes(entry, purpose_mappings)
     if entry_purposes and purpose_code not in entry_purposes:
         reasons.append("Purpose mismatch")
-        changes.append(f"Purpose: Clio entry mentions {', '.join(sorted(entry_purposes))}, court calendar has {purpose_code}")
+        changes.append({"court": purpose_code, "clio": ', '.join(sorted(entry_purposes))})
 
     return reasons, changes
 
@@ -241,10 +247,10 @@ def compare_events(
                     changes.pop(idx)
                 if case_number_status == "not_on_file":
                     reasons.append("Case number not on file")
-                    changes.append(f"Case number: not on file in Clio, court calendar has {ce.case_number}")
+                    changes.append({"court": ce.case_number, "clio": "not on file"})
                 elif case_number_status == "mismatch":
                     reasons.append("Case number mismatch")
-                    changes.append(f"Case number: Clio has {clio_case_number}, court calendar has {ce.case_number}")
+                    changes.append({"court": ce.case_number, "clio": clio_case_number})
                 results.append(MatchResult(
                     court_event=ce, status="matched" if not changes else "to_update",
                     clio_entry=entry, matter_id=matter_id, match_method="matter_id",
@@ -277,10 +283,10 @@ def compare_events(
                 # button is sitting right there unresolved on that row.
                 if case_number_status == "not_on_file":
                     reasons.append("Case number not on file")
-                    changes.append(f"Case number: not on file in Clio, court calendar has {ce.case_number}")
+                    changes.append({"court": ce.case_number, "clio": "not on file"})
                 elif case_number_status == "mismatch":
                     reasons.append("Case number mismatch")
-                    changes.append(f"Case number: Clio has {clio_case_number}, court calendar has {ce.case_number}")
+                    changes.append({"court": ce.case_number, "clio": clio_case_number})
                 matched_entry_ids.add(entry.id)
                 results.append(MatchResult(
                     court_event=ce, status="matched" if not changes else "to_update",
@@ -293,8 +299,8 @@ def compare_events(
                     court_event=ce, status="to_create", clio_entry=None, matter_id=matter_id,
                     match_method="matter_id", matter_owner_initials=owner_initials,
                     reason="No calendar event",
-                    changes=[f"Matter has a Clio entry on {ce.date}, but it's already matched to a "
-                             f"different hearing that day — this one needs its own entry"],
+                    changes=[{"detail": f"Matter has a Clio entry on {ce.date}, but it's already matched to a "
+                                         f"different hearing that day — this one needs its own entry"}],
                     case_number_status=case_number_status, clio_case_number=clio_case_number,
                 ))
             elif candidates:
@@ -302,7 +308,7 @@ def compare_events(
                     court_event=ce, status="to_update", clio_entry=None, matter_id=matter_id,
                     match_method="matter_id", matter_owner_initials=owner_initials,
                     reason="Wrong date",
-                    changes=[f"No Clio calendar entry on {ce.date} — matter has {len(candidates)} other entries in range"],
+                    changes=[{"detail": f"No Clio calendar entry on {ce.date} — matter has {len(candidates)} other entries in range"}],
                     case_number_status=case_number_status, clio_case_number=clio_case_number,
                 ))
             else:
@@ -310,7 +316,7 @@ def compare_events(
                     court_event=ce, status="to_create", clio_entry=None,
                     matter_id=matter_id, match_method="matter_id", matter_owner_initials=owner_initials,
                     reason="No calendar event",
-                    changes=[f"Matter {matter_id} has no Clio calendar entry at all in this date range"],
+                    changes=[{"detail": f"Matter {matter_id} has no Clio calendar entry at all in this date range"}],
                     case_number_status=case_number_status, clio_case_number=clio_case_number,
                 ))
             continue
@@ -329,15 +335,15 @@ def compare_events(
             results.append(MatchResult(
                 court_event=ce, status="to_create", clio_entry=None,
                 matter_id=None, match_method="none", reason="Ambiguous matter",
-                changes=["Multiple open matters share this last name and the court case number "
-                         "isn't on file in Clio to disambiguate — add the Court Case Number to the "
-                         "right matter in Clio, or resolve manually"],
+                changes=[{"detail": "Multiple open matters share this last name and the court case number "
+                                    "isn't on file in Clio to disambiguate — add the Court Case Number to the "
+                                    "right matter in Clio, or resolve manually"}],
             ))
         else:
             results.append(MatchResult(
                 court_event=ce, status="to_create", clio_entry=None,
                 matter_id=None, match_method="none", reason="No matter in Clio",
-                changes=[f'No open Clio matter found for "{ce.party}"'],
+                changes=[{"detail": f'No open Clio matter found for "{ce.party}"'}],
             ))
 
     return results

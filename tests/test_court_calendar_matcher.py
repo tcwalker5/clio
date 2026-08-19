@@ -88,9 +88,17 @@ def test_entry_matching_neither_purpose_still_flags_mismatch():
     )
 
     assert len(results) == 2
+    dvro_result = next(r for r in results if r.court_event.purpose_raw == "Restraining Ord")
+    frc_result = next(r for r in results if r.court_event.purpose_raw == "Family Resoluti")
+
     for r in results:
         assert r.status == "to_update"
         assert "Purpose mismatch" in r.reason
+
+    # Structured court/clio pairs, not pre-joined sentences — the template
+    # renders each as separate "Court:"/"Clio:" lines.
+    assert {"court": "DVRO", "clio": "TRIAL, TRIAL SETTING CONFERENCE"} in dvro_result.changes
+    assert {"court": "FRC", "clio": "TRIAL, TRIAL SETTING CONFERENCE"} in frc_result.changes
 
 
 def test_two_hearings_with_two_separate_entries_still_pair_one_to_one():

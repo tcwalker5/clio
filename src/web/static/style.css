@@ -277,6 +277,8 @@ table.detail-table th { font-size: 0.7rem; }
 
 th.formula-op, td.formula-op { text-align: center; color: var(--text-muted); padding-left: 0.3rem; padding-right: 0.3rem; }
 
+.reason-hint { font-size: 0.7rem; line-height: 1.3; color: var(--text-muted); margin-top: 0.1rem; white-space: normal; }
+
 .summary-bar { display: flex; gap: 1.5rem; margin: 1rem 0; flex-wrap: wrap; }
 .summary-stat { font-size: 0.85rem; color: var(--text-muted); }
 .summary-stat strong {
