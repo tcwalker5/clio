@@ -30,10 +30,10 @@
   <table class="nowrap" id="collections-table">
     <thead><tr>
       <th>Status</th>
-      <th class="sortable" onclick="sortTable('collections-table', 1, 'text', this)">Matter <span class="sort-icon">&#8645;</span></th>
+      <th class="sortable" data-col-index="1" onclick="sortTable('collections-table', 1, 'text', this)">Matter <span class="sort-icon">&#8645;</span></th>
       <th>Bill #</th><th>Issued</th><th>Due</th>
-      <th class="sortable" onclick="sortTable('collections-table', 5, 'number', this)">Days Overdue <span class="sort-icon">&#8645;</span></th>
-      <th class="sortable" onclick="sortTable('collections-table', 6, 'number', this)">Balance <span class="sort-icon">&#8645;</span></th>
+      <th class="sortable" data-col-index="5" onclick="sortTable('collections-table', 5, 'number', this)">Days Overdue <span class="sort-icon">&#8645;</span></th>
+      <th class="sortable" data-col-index="6" onclick="sortTable('collections-table', 6, 'number', this)">Balance <span class="sort-icon">&#8645;</span></th>
       <th>Handling</th>
       <th title="Confirmation from Clio, not something set here — FLARPL shows Clio's own FLARPL Recorded matter field (read-only). Payment plan has no matching Clio field yet, so there's nothing to confirm here.">Confirmed</th>
     </tr></thead>
@@ -112,6 +112,12 @@ function filterResults() {
 }
 filterResults();
 
+// sortTable() only reorders DOM rows in memory — setAction() above does a
+// full window.location.reload() (needed for a fresh live FLARPL read), which
+// otherwise silently threw away whatever sort was picked and fell back to
+// the server's default order. Persisted per table in sessionStorage (a
+// same-tab, this-review-session preference, not something worth keeping
+// forever) and reapplied once the page's rows exist again.
 function sortTable(tableId, colIndex, type, headerEl) {
   const table = document.getElementById(tableId);
   const tbody = table.querySelector('tbody');
@@ -132,7 +138,23 @@ function sortTable(tableId, colIndex, type, headerEl) {
   });
   headerEl.dataset.dir = ascending ? 'asc' : 'desc';
   headerEl.querySelector('.sort-icon').innerHTML = ascending ? '&#9650;' : '&#9660;';
+
+  sessionStorage.setItem(`sort:${tableId}`, JSON.stringify({ colIndex, type, ascending }));
 }
+
+function restoreSort(tableId) {
+  const saved = sessionStorage.getItem(`sort:${tableId}`);
+  if (!saved) return;
+  const { colIndex, type, ascending } = JSON.parse(saved);
+  const table = document.getElementById(tableId);
+  const headerEl = table && table.querySelector(`th.sortable[data-col-index="${colIndex}"]`);
+  if (!headerEl) return;
+  // sortTable() toggles off of headerEl.dataset.dir — pre-set it to whatever
+  // makes sortTable() land back on the saved `ascending` value.
+  headerEl.dataset.dir = ascending ? '' : 'asc';
+  sortTable(tableId, colIndex, type, headerEl);
+}
+restoreSort('collections-table');
 </script>
 {% endif %}
 {% endblock %}
