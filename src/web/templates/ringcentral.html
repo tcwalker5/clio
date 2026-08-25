@@ -10,7 +10,7 @@
 
 <div class="panel">
   {% if last_run %}
-  <h2>Last sync — {{ last_run.run_at }}</h2>
+  <h2>Last sync — {{ last_run.run_at | local_time }}</h2>
   <div class="summary-bar">
     <div class="summary-stat"><strong>{{ last_run.included_count }}</strong>in directory</div>
     <div class="summary-stat"><strong>{{ last_run.conflict_count }}</strong>conflicts</div>

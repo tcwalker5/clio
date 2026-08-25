@@ -34,7 +34,7 @@
         <td>{{ w.matter_display_number }}</td>
         <td>{{ w.party_a_label }} / {{ w.party_b_label }}</td>
         <td><span class="badge warn">Draft</span></td>
-        <td>{{ w.updated_at }}</td>
+        <td>{{ w.updated_at | local_time }}</td>
         <td style="display:flex; gap:0.75rem;">
           <a href="/equalizer/{{ w.id }}">Open</a>
           <form method="post" action="/equalizer/{{ w.id }}/delete" onsubmit="return confirm('Delete this draft worksheet? This cannot be undone.');">

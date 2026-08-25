@@ -34,7 +34,7 @@
         <td>{{ w.matter_display_number }}</td>
         <td>{{ w.owner_spouse_label or "?" }} / {{ w.non_owner_spouse_label or "?" }}</td>
         <td><span class="badge warn">Draft</span></td>
-        <td>{{ w.updated_at }}</td>
+        <td>{{ w.updated_at | local_time }}</td>
         <td style="display:flex; gap:0.75rem;">
           <a href="/moore-marsden/{{ w.id }}">Open</a>
           <form method="post" action="/moore-marsden/{{ w.id }}/delete" onsubmit="return confirm('Delete this draft worksheet? This cannot be undone.');">

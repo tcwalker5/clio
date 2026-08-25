@@ -11,7 +11,9 @@ this repo resolve flat imports like `import matter_matching`.)
 import json
 import os
 import secrets
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Form, Request
@@ -29,6 +31,24 @@ from web.auth import PASSPHRASE, AuthRequired, is_authenticated, require_auth  #
 
 WEB_DIR = Path(__file__).resolve().parent
 
+PACIFIC = ZoneInfo("America/Los_Angeles")
+
+
+def local_time(value: str | None, fmt: str = "%Y-%m-%d %I:%M %p") -> str:
+    """Render a SQLite `CURRENT_TIMESTAMP` string (always UTC, no tz marker) as Pacific time.
+
+    Every `*_sync_runs`/`*_at` column that relies on the column-level
+    `DEFAULT CURRENT_TIMESTAMP` (see web/db.py) is stored in UTC — SQLite has
+    no concept of a local default. Displaying that raw string reads like a
+    local time and is off by 7-8 hours (confirmed live 2026-08-25: a sync run
+    at ~11:40am Pacific stored/displayed as 18:39:58).
+    """
+    if not value:
+        return ""
+    utc_dt = datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=ZoneInfo("UTC"))
+    return utc_dt.astimezone(PACIFIC).strftime(fmt)
+
+
 app = FastAPI(title="Collier Automation Platform")
 
 SECRET_KEY = os.getenv("CLIO_DASHBOARD_SECRET") or secrets.token_urlsafe(32)
@@ -39,6 +59,7 @@ templates = Jinja2Templates(directory=WEB_DIR / "templates")
 templates.env.filters["judge_last_name"] = judge_last_name
 templates.env.filters["tojson"] = json.dumps
 templates.env.filters["money"] = lambda value, decimals=2: f"{value:,.{decimals}f}"
+templates.env.filters["local_time"] = local_time
 
 # Cache-busting query param for static assets (?v=<mtime>) — browsers were
 # found to keep serving a stale cached style.css after an edit even on a

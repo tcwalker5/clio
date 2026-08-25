@@ -76,7 +76,7 @@
           </form>
           {% endif %}
           {% if c.state == "already_requested" %}
-          <span style="color:var(--text-muted);font-size:0.78rem;">sent {{ c.requested_at }}</span>
+          <span style="color:var(--text-muted);font-size:0.78rem;">sent {{ c.requested_at | local_time }}</span>
           {% endif %}
           </div>
         </td>

@@ -28,7 +28,7 @@
           <span class="badge warn">Draft</span>
           {% endif %}
         </td>
-        <td>{{ w.updated_at }}</td>
+        <td>{{ w.updated_at | local_time }}</td>
         <td style="display:flex; gap:0.75rem;">
           <a href="/equalizer/{{ w.id }}">Open</a>
           {% if not w.clio_document_id %}
