@@ -1570,11 +1570,36 @@ show both on one table (an "Outstanding" column bolted onto the WIP/cushion
 formula) — that read as if the two numbers were related, when they never
 were.
 
-**Data:** every Clio `Bill` in `state = awaiting_payment`, one row per bill
-(not aggregated per matter — staff following up need to see which specific
-invoice is overdue). `days_overdue` is computed client-side from `due_at`
-vs. today; a bill not yet past its due date shows as "Current," not
-flagged.
+**Data:** every Clio `Bill` in `state = awaiting_payment`
+(`collections_monitor.fetch_unpaid_bills()`, one `UnpaidBill` per bill —
+this part is unchanged). `days_overdue` is computed client-side from
+`due_at` vs. today; a bill not yet past its due date shows as "Current,"
+not flagged.
+
+**Grouped by matter on `/collections` (restructured 2026-08-25, Ted):**
+`collections_monitor.build_matter_summaries()` groups those per-bill rows
+into one `MatterBillSummary` per matter — **Total Balance** (sum of that
+matter's unpaid bills), **Oldest Issued** (the earliest `issued_at` among
+them), and a past-due badge/**Days Overdue** figure taken from whichever of
+the matter's bills is individually most overdue (not necessarily the
+oldest-issued one — a later bill can still be the most overdue if it had a
+shorter payment term). A bill with no matter linked can't be grouped with
+anything and becomes its own single-bill summary rather than being dropped.
+The summary row has a **▶/▼ expand toggle** (`toggleDetail()` in
+`collections.html` — same `<tr>`-pair-plus-JS-toggle pattern
+`toggleStaffDetail()` established for Staff Unbilled, reused rather than
+inventing a second one) revealing that matter's individual bills
+underneath, each with its own Bill #/Issued/Due/Days Overdue/Balance/status
+badge. The three sortable columns (Matter/Oldest Issued/Total Balance) move
+each summary+detail `<tr>` pair together via their shared `data-detail-id`,
+so an expanded matter's detail never gets separated from its own summary
+row — sort choice is persisted in `sessionStorage` and reapplied on
+`setAction()`'s reload (added 2026-08-25, same day: switching a matter's
+Handling reloads the whole page — needed for a fresh live FLARPL/Payment
+Plan read — which used to silently reset whatever sort was picked). The
+overdue-only filter checkbox now filters at the matter level (any bill
+overdue → matter shows) and hides/shows the paired detail row alongside its
+summary row.
 
 **Visibility-only, no send action** — same incremental path Trust Monitor
 itself started on (report first, action later). An actual "request
@@ -1596,14 +1621,21 @@ one (confirmed live: AMOS, CHRISTINE's 3 separate unpaid bills all correctly sho
 same decision). Saved via `onchange` on the dropdown (`POST /collections/set-action`,
 `collections_monitor.set_action()`) — no separate save button, same instant-persist
 pattern as Equalizer's inline editing. Purely local dashboard state; never sent to Clio.
+**Lives on the summary row only as of the 2026-08-25 matter-grouping restructure above**
+— before that, the same dropdown/value was rendered redundantly on every one of a
+matter's bill rows (harmless since they were always kept in sync, but Ted asked for it
+to only appear once, on the summary line, once bills stopped being flat per-row anyway).
 
-**Print report for review** (`GET /collections/action-report`) — the same live bill list
-with a **Print** button and print stylesheet, sorted alphabetically by matter
-`display_number` rather than by overdue/balance like the main table (Clio's own
-"Last, First" convention already sorts by last name, so no separate name-parsing is
-needed), and **deliberately leaves the Client column off** — per Ted, every matter today
-has exactly one client (a 1:1 match), so the matter name alone is enough and sorting by
-it is more intuitive than by client.
+**Print report for review** (`GET /collections/action-report`) — one summary line per
+matter (Matter/Oldest Issued/Total Balance/Handling/Confirmed) with that matter's
+individual bills listed in a nested table underneath, always expanded (no JS
+toggle — restructured 2026-08-25 alongside the main page's matter-grouping, but print
+has no interaction model so everything just prints visible), **Print** button and print
+stylesheet, sorted alphabetically by matter `display_number` rather than by
+overdue/balance like the main table (Clio's own "Last, First" convention already sorts
+by last name, so no separate name-parsing is needed), and **deliberately leaves the
+Client column off** — per Ted, every matter today has exactly one client (a 1:1 match),
+so the matter name alone is enough and sorting by it is more intuitive than by client.
 
 **FLARPL and Payment plan — Handling records intent only; confirmation is never set
 from this dashboard (added 2026-08-18, corrected 2026-08-19):** the **Handling** dropdown

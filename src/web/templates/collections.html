@@ -2,16 +2,16 @@
 {% block title %}Collections{% endblock %}
 {% block content %}
 <h1>Collections</h1>
-<p class="subtitle">Bills already sent to clients that haven't been paid yet — money earned for work already done, entirely separate from the <a href="/trust">Trust Monitor</a>'s retainer tracking (that's money held for future, unearned work).</p>
+<p class="subtitle">Bills already sent to clients that haven't been paid yet — money earned for work already done, entirely separate from the <a href="/trust">Trust Monitor</a>'s retainer tracking (that's money held for future, unearned work). One row per matter — click to expand into that matter's individual unpaid bills. Handling and its Clio confirmation are matter-level decisions, set once here rather than repeated on every bill below.</p>
 
 {% if error %}
 <div class="panel"><p class="error-text">{{ error }}</p></div>
 {% endif %}
 
-{% if bills is not none %}
+{% if summaries is not none %}
 <div class="panel" id="results">
   <div class="summary-bar">
-    <div class="summary-stat"><strong>{{ bills|length }}</strong>unpaid bill(s)</div>
+    <div class="summary-stat"><strong>{{ summaries|length }}</strong>matter(s) with unpaid bills</div>
     <div class="summary-stat"><strong>{{ overdue_count }}</strong>past due</div>
     <div class="summary-stat"><strong>${{ total_balance|money }}</strong>total balance</div>
   </div>
@@ -19,40 +19,40 @@
   <div style="display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap;margin-bottom:0.75rem;">
     <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.9rem;">
       <input type="checkbox" id="overdue-only" onchange="filterResults()">
-      Show only past-due bills ({{ overdue_count }})
+      Show only past-due matters ({{ overdue_count }})
     </label>
     <a class="btn secondary" href="/collections/download">Download CSV</a>
     <a class="btn secondary" href="/collections/action-report" target="_blank">Print report for review</a>
   </div>
 
-  {% if bills %}
+  {% if summaries %}
   <div style="overflow-x:auto;">
   <table class="nowrap" id="collections-table">
     <thead><tr>
+      <th></th>
       <th>Status</th>
-      <th class="sortable" data-col-index="1" onclick="sortTable('collections-table', 1, 'text', this)">Matter <span class="sort-icon">&#8645;</span></th>
-      <th>Bill #</th><th>Issued</th><th>Due</th>
-      <th class="sortable" data-col-index="5" onclick="sortTable('collections-table', 5, 'number', this)">Days Overdue <span class="sort-icon">&#8645;</span></th>
-      <th class="sortable" data-col-index="6" onclick="sortTable('collections-table', 6, 'number', this)">Balance <span class="sort-icon">&#8645;</span></th>
+      <th class="sortable" data-col-index="2" onclick="sortTable('collections-table', 2, 'text', this)">Matter <span class="sort-icon">&#8645;</span></th>
+      <th>Bills</th>
+      <th class="sortable" data-col-index="4" onclick="sortTable('collections-table', 4, 'text', this)">Oldest Issued <span class="sort-icon">&#8645;</span></th>
+      <th class="sortable" data-col-index="5" onclick="sortTable('collections-table', 5, 'number', this)">Total Balance <span class="sort-icon">&#8645;</span></th>
       <th>Handling</th>
       <th title="Confirmation from Clio, not something set here — FLARPL shows Clio's own FLARPL Recorded matter field, Payment plan shows Clio's own Payment Plan matter field (both read-only).">Confirmed</th>
     </tr></thead>
     <tbody>
-      {% for b in bills %}
-      <tr data-overdue="{{ 'yes' if b.overdue else 'no' }}">
-        <td>{% if b.overdue %}<span class="badge err">{{ b.days_overdue }}d past due</span>{% else %}<span class="badge ok">Current</span>{% endif %}</td>
-        <td data-sort="{{ b.display_number }}">{{ b.display_number }}</td>
-        <td>{{ b.number }}</td>
-        <td>{{ b.issued_at }}</td>
-        <td>{{ b.due_at or "—" }}</td>
-        <td data-sort="{{ b.days_overdue }}">{{ b.days_overdue }}</td>
-        <td data-sort="{{ b.balance }}">${{ b.balance|money }}</td>
+      {% for s in summaries %}
+      <tr class="summary-row" data-overdue="{{ 'yes' if s.overdue else 'no' }}" data-detail-id="collections-detail-{{ loop.index }}">
+        <td class="expand-icon" style="cursor:pointer;" onclick="toggleDetail('collections-detail-{{ loop.index }}')"><span id="collections-icon-{{ loop.index }}">&#9656;</span></td>
+        <td>{% if s.overdue %}<span class="badge err">{{ s.max_days_overdue }}d past due</span>{% else %}<span class="badge ok">Current</span>{% endif %}</td>
+        <td data-sort="{{ s.display_number }}" style="cursor:pointer;" onclick="toggleDetail('collections-detail-{{ loop.index }}')">{{ s.display_number }}</td>
+        <td>{{ s.bills|length }}</td>
+        <td data-sort="{{ s.oldest_issued_at }}">{{ s.oldest_issued_at or "—" }}</td>
+        <td data-sort="{{ s.total_balance }}">${{ s.total_balance|money }}</td>
         <td>
-          {% if b.matter_id %}
-          <select class="collections-action" data-matter-id="{{ b.matter_id }}" onchange="setAction(this)" style="padding:0.3rem 0.4rem;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text);font-size:0.85rem;">
-            <option value="" {% if not b.action %}selected{% endif %}>—</option>
+          {% if s.matter_id %}
+          <select class="collections-action" data-matter-id="{{ s.matter_id }}" onchange="setAction(this)" style="padding:0.3rem 0.4rem;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text);font-size:0.85rem;">
+            <option value="" {% if not s.action %}selected{% endif %}>—</option>
             {% for opt in actions %}
-            <option value="{{ opt }}" {% if b.action == opt %}selected{% endif %}>{{ opt }}</option>
+            <option value="{{ opt }}" {% if s.action == opt %}selected{% endif %}>{{ opt }}</option>
             {% endfor %}
           </select>
           {% else %}
@@ -60,15 +60,37 @@
           {% endif %}
         </td>
         <td>
-          {% if b.action == "FLARPL" %}
-          {% if b.flarpl_recorded %}<span class="badge ok" title="From Clio's FLARPL Recorded field">Recorded</span>
+          {% if s.action == "FLARPL" %}
+          {% if s.flarpl_recorded %}<span class="badge ok" title="From Clio's FLARPL Recorded field">Recorded</span>
           {% else %}<span class="badge warn" title="From Clio's FLARPL Recorded field — update it in Clio once the lien is actually recorded">Not recorded yet</span>{% endif %}
-          {% elif b.action == "Payment plan" %}
-          {% if b.payment_plan_active %}<span class="badge ok" title="From Clio's Payment Plan field">In place</span>
+          {% elif s.action == "Payment plan" %}
+          {% if s.payment_plan_active %}<span class="badge ok" title="From Clio's Payment Plan field">In place</span>
           {% else %}<span class="badge warn" title="From Clio's Payment Plan field — check it in Clio once the payment plan is actually set up">Not set up yet</span>{% endif %}
           {% else %}
           —
           {% endif %}
+        </td>
+      </tr>
+      <tr id="collections-detail-{{ loop.index }}" class="detail-row hidden">
+        <td colspan="8">
+          <table class="nowrap detail-table">
+            <thead><tr>
+              <th>Status</th><th>Bill #</th><th>Issued</th><th>Due</th>
+              <th>Days Overdue</th><th>Balance</th>
+            </tr></thead>
+            <tbody>
+              {% for b in s.bills %}
+              <tr>
+                <td>{% if b.overdue %}<span class="badge err">{{ b.days_overdue }}d past due</span>{% else %}<span class="badge ok">Current</span>{% endif %}</td>
+                <td>{{ b.number }}</td>
+                <td>{{ b.issued_at }}</td>
+                <td>{{ b.due_at or "—" }}</td>
+                <td>{{ b.days_overdue }}</td>
+                <td>${{ b.balance|money }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
         </td>
       </tr>
       {% endfor %}
@@ -105,10 +127,21 @@ async function setAction(select) {
   }
 }
 
+function toggleDetail(id) {
+  const row = document.getElementById(id);
+  const icon = document.getElementById("collections-icon-" + id.split("-").pop());
+  const expanded = !row.classList.contains("hidden");
+  row.classList.toggle("hidden", expanded);
+  icon.innerHTML = expanded ? "&#9656;" : "&#9662;";
+}
+
 function filterResults() {
   const onlyOverdue = document.getElementById("overdue-only").checked;
-  document.querySelectorAll("#results tbody tr[data-overdue]").forEach((row) => {
-    row.style.display = (onlyOverdue && row.dataset.overdue === "no") ? "none" : "";
+  document.querySelectorAll("#results tbody tr.summary-row[data-overdue]").forEach((row) => {
+    const hide = onlyOverdue && row.dataset.overdue === "no";
+    row.style.display = hide ? "none" : "";
+    const detail = document.getElementById(row.dataset.detailId);
+    if (detail) detail.style.display = hide ? "none" : "";
   });
 }
 filterResults();
@@ -119,19 +152,27 @@ filterResults();
 // the server's default order. Persisted per table in sessionStorage (a
 // same-tab, this-review-session preference, not something worth keeping
 // forever) and reapplied once the page's rows exist again.
+//
+// Each matter is a summary/detail row PAIR — sorting moves both rows
+// together (by their shared data-detail-id) so a matter's expanded detail
+// never gets separated from its own summary row.
 function sortTable(tableId, colIndex, type, headerEl) {
   const table = document.getElementById(tableId);
   const tbody = table.querySelector('tbody');
-  const rows = Array.from(tbody.querySelectorAll('tr'));
+  const summaryRows = Array.from(tbody.querySelectorAll('tr.summary-row'));
   const ascending = headerEl.dataset.dir !== 'asc';
 
-  rows.sort((a, b) => {
+  summaryRows.sort((a, b) => {
     const av = a.children[colIndex].dataset.sort;
     const bv = b.children[colIndex].dataset.sort;
     const cmp = type === 'number' ? (parseFloat(av) - parseFloat(bv)) : av.localeCompare(bv);
     return ascending ? cmp : -cmp;
   });
-  rows.forEach((row) => tbody.appendChild(row));
+  summaryRows.forEach((row) => {
+    tbody.appendChild(row);
+    const detail = document.getElementById(row.dataset.detailId);
+    if (detail) tbody.appendChild(detail);
+  });
 
   table.querySelectorAll('th.sortable').forEach((th) => {
     th.dataset.dir = '';

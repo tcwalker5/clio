@@ -29,6 +29,7 @@ import csv
 import logging
 import os
 import sys
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -166,9 +167,6 @@ class UnpaidBill:
     due_at: str | None
     total: float
     balance: float
-    action: str = ""  # persisted collections_actions.action for this matter, set by the route layer
-    flarpl_recorded: bool = False  # live, read-only from Clio's own FLARPL Recorded custom field, only meaningful when action == "FLARPL"
-    payment_plan_active: bool = False  # live, read-only from Clio's own Payment Plan custom field, only meaningful when action == "Payment plan"
 
     @property
     def days_overdue(self) -> int:
@@ -180,6 +178,66 @@ class UnpaidBill:
     @property
     def overdue(self) -> bool:
         return self.days_overdue > 0
+
+
+@dataclass
+class MatterBillSummary:
+    """One row per matter (or per bill, for the rare bill with no matter
+    linked — see build_matter_summaries) — Handling and its Clio
+    confirmation are matter-level facts (collections_actions is keyed by
+    matter_id, not bill_id), so they live here rather than being repeated
+    identically on every one of that matter's individual bill rows."""
+    matter_id: int | None
+    display_number: str
+    client_name: str
+    bills: list[UnpaidBill]  # this matter's unpaid bills, oldest issued first
+    action: str = ""  # persisted collections_actions.action, set by the route layer
+    flarpl_recorded: bool = False  # live, read-only from Clio's own FLARPL Recorded custom field, only meaningful when action == "FLARPL"
+    payment_plan_active: bool = False  # live, read-only from Clio's own Payment Plan custom field, only meaningful when action == "Payment plan"
+
+    @property
+    def total_balance(self) -> float:
+        return sum(b.balance for b in self.bills)
+
+    @property
+    def oldest_issued_at(self) -> str:
+        return min((b.issued_at for b in self.bills if b.issued_at), default="")
+
+    @property
+    def max_days_overdue(self) -> int:
+        return max((b.days_overdue for b in self.bills), default=0)
+
+    @property
+    def overdue(self) -> bool:
+        return self.max_days_overdue > 0
+
+
+def build_matter_summaries(bills: list[UnpaidBill]) -> list[MatterBillSummary]:
+    """Groups unpaid bills into one summary per matter, sorted the same way
+    the flat bill list used to be (most overdue first, then largest total)
+    — used by both /collections and its print report. A bill with no matter
+    linked can't be grouped with anything, so it becomes its own
+    single-bill summary rather than being dropped or merged incorrectly."""
+    by_matter: dict[int | None, list[UnpaidBill]] = defaultdict(list)
+    next_unlinked_key = -1
+    for b in bills:
+        key = b.matter_id
+        if key is None:
+            key = next_unlinked_key
+            next_unlinked_key -= 1
+        by_matter[key].append(b)
+
+    summaries = [
+        MatterBillSummary(
+            matter_id=matter_bills[0].matter_id,
+            display_number=matter_bills[0].display_number,
+            client_name=matter_bills[0].client_name,
+            bills=sorted(matter_bills, key=lambda b: b.issued_at),
+        )
+        for matter_bills in by_matter.values()
+    ]
+    summaries.sort(key=lambda s: (-s.max_days_overdue, -s.total_balance))
+    return summaries
 
 
 def fetch_unpaid_bills(session: requests.Session) -> list[UnpaidBill]:

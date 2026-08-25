@@ -22,39 +22,40 @@ from web.db import get_connection
 router = APIRouter(prefix="/collections", tags=["collections"])
 
 
-def _attach_actions(bills: list[collections_monitor.UnpaidBill]) -> None:
-    """Sets each bill's `.action` from collections_actions (keyed by matter,
-    not bill — see collections_monitor.SCHEMA's docstring note), plus two
-    live read-only Clio confirmations, each only fetched for matters whose
-    action currently matches: `.flarpl_recorded` for "FLARPL"
-    (collections_flarpl.py) and `.payment_plan_active` for "Payment plan"
-    (collections_payment_plan.py). Clio is the source of truth for both —
-    this dashboard only ever reflects them, never sets them."""
+def _attach_actions(summaries: list[collections_monitor.MatterBillSummary]) -> None:
+    """Sets each matter summary's `.action` from collections_actions (keyed
+    by matter, which is exactly what a MatterBillSummary already is — see
+    collections_monitor.SCHEMA's docstring note), plus two live read-only
+    Clio confirmations, each only fetched for matters whose action
+    currently matches: `.flarpl_recorded` for "FLARPL" (collections_flarpl.py)
+    and `.payment_plan_active` for "Payment plan" (collections_payment_plan.py).
+    Clio is the source of truth for both — this dashboard only ever reflects
+    them, never sets them."""
     conn = get_connection()
     try:
         actions_by_matter = collections_monitor.fetch_actions_by_matter(conn)
     finally:
         conn.close()
-    for b in bills:
-        b.action = actions_by_matter.get(b.matter_id, "") if b.matter_id else ""
+    for s in summaries:
+        s.action = actions_by_matter.get(s.matter_id, "") if s.matter_id else ""
 
     session = None
 
-    flarpl_matter_ids = sorted({b.matter_id for b in bills if b.action == "FLARPL" and b.matter_id})
+    flarpl_matter_ids = sorted({s.matter_id for s in summaries if s.action == "FLARPL" and s.matter_id})
     if flarpl_matter_ids:
         session = session or collections_monitor.build_session()
         recorded_by_matter = collections_flarpl.fetch_recorded_by_matter(session, flarpl_matter_ids)
-        for b in bills:
-            if b.action == "FLARPL" and b.matter_id:
-                b.flarpl_recorded = recorded_by_matter.get(b.matter_id, False)
+        for s in summaries:
+            if s.action == "FLARPL" and s.matter_id:
+                s.flarpl_recorded = recorded_by_matter.get(s.matter_id, False)
 
-    payment_plan_matter_ids = sorted({b.matter_id for b in bills if b.action == "Payment plan" and b.matter_id})
+    payment_plan_matter_ids = sorted({s.matter_id for s in summaries if s.action == "Payment plan" and s.matter_id})
     if payment_plan_matter_ids:
         session = session or collections_monitor.build_session()
         active_by_matter = collections_payment_plan.fetch_active_by_matter(session, payment_plan_matter_ids)
-        for b in bills:
-            if b.action == "Payment plan" and b.matter_id:
-                b.payment_plan_active = active_by_matter.get(b.matter_id, False)
+        for s in summaries:
+            if s.action == "Payment plan" and s.matter_id:
+                s.payment_plan_active = active_by_matter.get(s.matter_id, False)
 
 
 @router.get("", response_class=HTMLResponse)
@@ -64,17 +65,17 @@ async def collections_home(request: Request, _: None = Depends(require_auth)):
     try:
         bills = await run_in_threadpool(collections_monitor.run_pipeline)
     except RuntimeError as e:
-        return render(request, "collections.html", error=str(e), bills=None)
+        return render(request, "collections.html", error=str(e), summaries=None)
 
-    await run_in_threadpool(_attach_actions, bills)
+    summaries = collections_monitor.build_matter_summaries(bills)
+    await run_in_threadpool(_attach_actions, summaries)
 
-    bills_sorted = sorted(bills, key=lambda b: (-b.days_overdue, -b.balance))
-    overdue_count = sum(1 for b in bills_sorted if b.overdue)
-    total_balance = sum(b.balance for b in bills_sorted)
+    overdue_count = sum(1 for s in summaries if s.overdue)
+    total_balance = sum(s.total_balance for s in summaries)
 
     return render(
         request, "collections.html", error=None,
-        bills=bills_sorted, overdue_count=overdue_count, total_balance=total_balance,
+        summaries=summaries, overdue_count=overdue_count, total_balance=total_balance,
         actions=collections_monitor.COLLECTIONS_ACTIONS,
     )
 
@@ -104,15 +105,16 @@ async def action_report(request: Request, _: None = Depends(require_auth)):
     try:
         bills = await run_in_threadpool(collections_monitor.run_pipeline)
     except RuntimeError as e:
-        return render(request, "collections_action_report.html", error=str(e), bills=None)
+        return render(request, "collections_action_report.html", error=str(e), summaries=None)
 
-    await run_in_threadpool(_attach_actions, bills)
+    summaries = collections_monitor.build_matter_summaries(bills)
+    await run_in_threadpool(_attach_actions, summaries)
 
     # Alphabetical by matter display number, which is already "Last, First"
     # by Clio's own convention — no separate last-name parsing needed.
-    bills_sorted = sorted(bills, key=lambda b: b.display_number)
+    summaries_sorted = sorted(summaries, key=lambda s: s.display_number)
 
-    return render(request, "collections_action_report.html", error=None, bills=bills_sorted)
+    return render(request, "collections_action_report.html", error=None, summaries=summaries_sorted)
 
 
 @router.get("/download")

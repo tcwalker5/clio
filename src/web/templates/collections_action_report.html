@@ -2,36 +2,54 @@
 {% block title %}Collections Action Report{% endblock %}
 {% block content %}
 <h1>Collections Action Report</h1>
-<p class="subtitle no-print">Handling decisions for unpaid bills, sorted by matter — client name is left off since each matter has one client today. Set/change a decision on the <a href="/collections">Collections</a> page; this view is for printing/review.</p>
+<p class="subtitle no-print">Handling decisions for unpaid bills, one summary line per matter (client name is left off since each matter has one client today) with that matter's individual unpaid bills listed underneath. Set/change a decision on the <a href="/collections">Collections</a> page; this view is for printing/review.</p>
 
 {% if error %}
 <div class="panel"><p class="error-text">{{ error }}</p></div>
 {% endif %}
 
-{% if bills is not none %}
+{% if summaries is not none %}
 <div class="panel">
   <button type="button" class="btn secondary no-print" onclick="window.print()" style="margin-bottom:0.75rem;">Print</button>
 
-  {% if bills %}
+  {% if summaries %}
   <div style="overflow-x:auto;">
   <table class="nowrap">
     <thead><tr>
-      <th>Matter</th><th>Bill #</th><th>Due</th><th>Days Overdue</th><th>Balance</th><th>Handling</th><th>Confirmed</th>
+      <th>Matter</th><th>Oldest Issued</th><th>Total Balance</th><th>Handling</th><th>Confirmed</th>
     </tr></thead>
     <tbody>
-      {% for b in bills %}
+      {% for s in summaries %}
       <tr>
-        <td>{{ b.display_number }}</td>
-        <td>{{ b.number }}</td>
-        <td>{{ b.due_at or "—" }}</td>
-        <td>{{ b.days_overdue }}</td>
-        <td>${{ b.balance|money }}</td>
-        <td>{{ b.action or "—" }}</td>
+        <td>{{ s.display_number }}</td>
+        <td>{{ s.oldest_issued_at or "—" }}</td>
+        <td>${{ s.total_balance|money }}</td>
+        <td>{{ s.action or "—" }}</td>
         <td>
-          {% if b.action == "FLARPL" %}{{ "Recorded" if b.flarpl_recorded else "Not recorded yet" }}
-          {% elif b.action == "Payment plan" %}{{ "In place" if b.payment_plan_active else "Not set up yet" }}
+          {% if s.action == "FLARPL" %}{{ "Recorded" if s.flarpl_recorded else "Not recorded yet" }}
+          {% elif s.action == "Payment plan" %}{{ "In place" if s.payment_plan_active else "Not set up yet" }}
           {% else %}—
           {% endif %}
+        </td>
+      </tr>
+      <tr>
+        <td colspan="5">
+          <table class="nowrap detail-table">
+            <thead><tr>
+              <th>Bill #</th><th>Issued</th><th>Due</th><th>Days Overdue</th><th>Balance</th>
+            </tr></thead>
+            <tbody>
+              {% for b in s.bills %}
+              <tr>
+                <td>{{ b.number }}</td>
+                <td>{{ b.issued_at }}</td>
+                <td>{{ b.due_at or "—" }}</td>
+                <td>{{ b.days_overdue }}</td>
+                <td>${{ b.balance|money }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
         </td>
       </tr>
       {% endfor %}
