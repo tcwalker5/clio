@@ -20,7 +20,7 @@
     </tr></thead>
     <tbody>
       {% for s in summaries %}
-      <tr>
+      <tr class="matter-row">
         <td>{{ s.display_number }}</td>
         <td>{{ s.oldest_issued_at or "—" }}</td>
         <td>${{ s.total_balance|money }}</td>
@@ -32,7 +32,7 @@
           {% endif %}
         </td>
       </tr>
-      <tr>
+      <tr class="bill-subrow">
         <td colspan="5">
           <table class="nowrap detail-table">
             <thead><tr>
@@ -63,11 +63,19 @@
 {% endif %}
 
 <style>
+/* Differentiate a matter's summary line from its bill sub-table — same on
+   screen (this page is reviewed before it's printed) and on paper. */
+tr.matter-row td { font-weight: 700; border-top: 2px solid var(--border); padding-top: 0.6rem; }
+tr.bill-subrow > td { padding-left: 1.5rem; padding-top: 0; padding-bottom: 0.6rem; border-bottom: none; }
+table.detail-table th, table.detail-table td { color: var(--text-muted); font-weight: 400; }
+
 @media print {
   .no-print, header.topbar { display: none !important; }
   .panel { border: none; padding: 0; }
   body { background: #fff; color: #000; }
   table.nowrap th, table.nowrap td { color: #000; border-color: #ccc; }
+  tr.matter-row td { border-top: 2px solid #000; }
+  table.detail-table th, table.detail-table td { color: #555; }
 }
 </style>
 {% endblock %}
