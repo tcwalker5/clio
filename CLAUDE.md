@@ -1315,6 +1315,37 @@ that don't apply to clean API data) before falling through to
 `output/ringcentral_conflicts_{date}.csv` for manual review. In practice this chain
 resolved all 15 real conflicts found on this account's first run down to 0.
 
+**Multiple numbers on one contact (fixed 2026-08-25):** a single Clio contact can
+carry more than one `phone_numbers` entry — real examples on this account: Kevin
+Metros (two distinct Mobile numbers), Leyla Kabban, Letitia Perez, Robert Tinajero
+(each Work + Mobile). Previously only the `default_number` (or first, if none is
+marked default) ever made it into the directory — anyone calling from their
+non-default number went unresolved by RingCentral's caller-ID lookup, with no error
+or log line indicating a number had been dropped. `fetch_contacts()` now collects
+every *distinct* normalized number per contact (`DirectoryContact.extra_phones`,
+duplicate values under different Clio labels — e.g. one real contact had the same
+number listed as both "Other" and "Mobile" — collapse to one, same as before).
+`_place_extra_phones()` fills the row's still-empty Home/Business/Mobile columns
+from those extras, mapped by Clio's own phone `name` label
+(`PHONE_LABEL_TO_COLUMN`: Mobile/Cell → Mobile Number, Work/Business/Office →
+Business Number, Home → Home Number); an unrecognized label or an already-filled
+column falls through `PHONE_EXTRA_FALLBACK_ORDER` instead of being dropped
+silently. Fax/pager-labeled numbers are excluded from extras entirely — not
+something a caller-ID directory should be dialing.
+
+Only applied to **single-contact rows** — a merged row (Phone dedup, above) already
+represents more than one person, and there's no unambiguous owner to attribute a
+second number to once that's true, so extras are skipped there rather than guessed
+at. An extra number that collides with a number already placed anywhere else in the
+directory (including an unresolved conflict's still-reserved primary number) is
+dropped with a `logging.warning` listing the contact/number/reason, rather than
+silently failing later at RingCentral's own upload-time rejection — same "fail
+loud" rule as everywhere else in this project. `compute_snapshot_hash()` now hashes
+the Home/Business columns too, so an extra-number change is actually detected as a
+change worth re-uploading, not silently treated as a no-op. Live-tested 2026-08-25
+against real data — all 4 known multi-number contacts came through with both
+numbers in separate columns, zero drops.
+
 **Change detection:** RingCentral's import isn't a literal wipe-and-recreate — it
 reconciles by matching key (the `External ID` column, set to the Clio contact ID)
 and only touches what actually differs: new rows get added, rows with no match in

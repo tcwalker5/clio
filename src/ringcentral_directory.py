@@ -93,6 +93,30 @@ RC_COLUMNS = [
     "Home Number", "Business Number", "Mobile Number", "Company Main Number",
     "Source", "External ID",
 ]
+
+# A single Clio contact can carry more than one phone_numbers entry (real
+# example, 2026-08-25: Kevin Metros has two distinct Mobile numbers on file).
+# Only the "default" one used to make it into the directory at all — everyone
+# calling from their non-default number went unresolved by RingCentral's
+# caller-ID lookup. RC's own row format already has separate Home/Business/
+# Mobile columns per contact, so extra numbers get their own column on the
+# SAME row rather than being dropped, mapped by Clio's own phone `name` label.
+# Labels this doesn't recognize (or a slot that's already filled) fall
+# through PHONE_EXTRA_FALLBACK_ORDER instead of being silently discarded.
+PHONE_LABEL_TO_COLUMN = {
+    "mobile": "Mobile Number",
+    "cell": "Mobile Number",
+    "work": "Business Number",
+    "business": "Business Number",
+    "office": "Business Number",
+    "home": "Home Number",
+}
+PHONE_EXTRA_FALLBACK_ORDER = ["Mobile Number", "Business Number", "Home Number"]
+# Fax/pager lines aren't meant to be dialed by a screen-pop/caller-ID directory
+# the way a Mobile/Work/Home number is — excluded from the extra-number columns
+# entirely (the primary-number selection above is unchanged/out of scope here;
+# this only governs whether an *additional* number gets added).
+PHONE_LABELS_EXCLUDED_FROM_EXTRAS = {"fax", "pager"}
 RC_HEADER_PREAMBLE = (
     '"Please follow the instructions carefully and ensure that information is accurate, properly assigned and formatted.",,,,,\r\n'
     '"You will be presented with the error list (if any) and you will have the option to download the file, fix the errors and re-upload.",,,,,\r\n'
@@ -198,8 +222,9 @@ class DirectoryContact:
     is_company: bool
     company_id: int | None
     company_name: str
-    phone: str  # normalized E.164
+    phone: str  # normalized E.164 — the primary/default number
     email_domain: str | None = None  # non-personal domain, if any
+    extra_phones: list[tuple[str, str]] = field(default_factory=list)  # (Clio label lowercased, E.164), any additional distinct numbers beyond the primary
 
 
 def gather_target_contact_ids(session: requests.Session) -> set[int]:
@@ -242,11 +267,19 @@ def fetch_contacts(session: requests.Session, contact_ids: set[int]) -> list[Dir
                 continue
             matched += 1
 
-            phones = c.get("phone_numbers") or []
-            ordered = sorted(phones, key=lambda p: not p.get("default_number", False))
-            phone = next(filter(None, (normalize_phone_e164(p.get("number", "")) for p in ordered)), None)
-            if not phone:
+            phones_raw = c.get("phone_numbers") or []
+            ordered = sorted(phones_raw, key=lambda p: not p.get("default_number", False))
+            seen_numbers: set[str] = set()
+            phones: list[tuple[str, str]] = []  # (Clio label lowercased, E.164), primary first, dedup'd by value
+            for p in ordered:
+                e164 = normalize_phone_e164(p.get("number", ""))
+                if not e164 or e164 in seen_numbers:
+                    continue
+                seen_numbers.add(e164)
+                phones.append(((p.get("name") or "").strip().lower(), e164))
+            if not phones:
                 continue  # no usable phone -> can't go in a phone directory
+            phone = phones[0][1]
 
             is_company = c.get("type") == "Company"
             company = c.get("company") or {}
@@ -262,6 +295,7 @@ def fetch_contacts(session: requests.Session, contact_ids: set[int]) -> list[Dir
                 company_name=sanitize_text((company.get("name") or "").upper()),
                 phone=phone,
                 email_domain=email_domain,
+                extra_phones=phones[1:],
             ))
 
         next_url = (body.get("meta") or {}).get("paging", {}).get("next")
@@ -331,6 +365,39 @@ def _row_for_single(c: DirectoryContact) -> dict:
     }
 
 
+def _place_extra_phones(
+    row: dict, contact: DirectoryContact, used_numbers: set[str], dropped: list[dict],
+) -> None:
+    """Fill any of the row's still-empty Home/Business/Mobile columns from
+    `contact.extra_phones` (distinct numbers beyond the one `_row_for_single`
+    already placed). Only called for single-contact rows — a merged row
+    already represents more than one person, and there's no unambiguous
+    column to attribute a second number to once that's true.
+
+    A number that collides with one already used elsewhere in the directory
+    is skipped rather than written — RingCentral rejects a second row/column
+    carrying a phone value it's already seen outright, and that failure
+    would otherwise only surface at manual-upload time. Skips are collected
+    into `dropped` (surfaced in the run log) instead of disappearing quietly."""
+    for label, number in contact.extra_phones:
+        if label in PHONE_LABELS_EXCLUDED_FROM_EXTRAS:
+            continue
+        if number in used_numbers:
+            dropped.append({"Clio ID": contact.contact_id, "Phone": number, "reason": "duplicate elsewhere in directory"})
+            continue
+        preferred = PHONE_LABEL_TO_COLUMN.get(label)
+        candidates = ([preferred] if preferred else []) + [
+            col for col in PHONE_EXTRA_FALLBACK_ORDER if col != preferred
+        ]
+        for column in candidates:
+            if not row.get(column):
+                row[column] = number
+                used_numbers.add(number)
+                break
+        else:
+            dropped.append({"Clio ID": contact.contact_id, "Phone": number, "reason": "no empty Home/Business/Mobile column left"})
+
+
 def _resolve_by_email_domain(group: list[DirectoryContact]) -> str | None:
     """None unless every contact in the group that has an email agrees on one
     non-personal domain. Prefers an existing Clio Company name from any group
@@ -377,6 +444,14 @@ def build_directory_rows(
     for c in contacts:
         by_phone.setdefault(c.phone, {}).setdefault(c.contact_id, c)
 
+    # Every primary number is reserved up front, whether or not its group
+    # ends up producing a row (an unresolved conflict's number stays
+    # reserved too — a manual knowledge-base resolution could still put it
+    # in the directory later, so an extra number elsewhere shouldn't be
+    # allowed to claim it in the meantime).
+    used_numbers: set[str] = set(by_phone.keys())
+    dropped_extras: list[dict] = []
+
     rows: list[dict] = []
     conflicts: list[dict] = []
 
@@ -384,7 +459,9 @@ def build_directory_rows(
         group = list(by_phone[phone].values())
 
         if len(group) == 1:
-            rows.append(_row_for_single(group[0]))
+            row = _row_for_single(group[0])
+            _place_extra_phones(row, group[0], used_numbers, dropped_extras)
+            rows.append(row)
             continue
 
         company_ids = [c.company_id for c in group]
@@ -433,6 +510,10 @@ def build_directory_rows(
                 "Company": c.company_name,
             })
 
+    if dropped_extras:
+        logging.warning("Dropped %d extra phone number(s) that couldn't be placed: %s",
+                         len(dropped_extras), dropped_extras)
+
     return rows, conflicts
 
 
@@ -460,7 +541,8 @@ def write_conflicts_csv(conflicts: list[dict], path: Path) -> None:
 def compute_snapshot_hash(rows: list[dict]) -> str:
     normalized = sorted(
         (r.get("External ID", ""), r.get("First Name", ""), r.get("Last Name", ""),
-         r.get("Company", ""), r.get("Mobile Number", ""), r.get("Company Main Number", ""))
+         r.get("Company", ""), r.get("Home Number", ""), r.get("Business Number", ""),
+         r.get("Mobile Number", ""), r.get("Company Main Number", ""))
         for r in rows
     )
     blob = json.dumps(normalized, sort_keys=False)
