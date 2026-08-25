@@ -65,14 +65,22 @@ PAGE_SIZE = 200
 # of truth for it. (An earlier version of this feature gave Payment plan a
 # locally-writable "Active" checkbox — removed: a dashboard flag with no
 # external truth behind it is exactly the pattern being avoided for FLARPL.)
+# "Payment from sale of home" (added 2026-08-25) is the same shape as Payment
+# plan — no matching Clio field, so no Confirmed-column indicator — for the
+# common family-law case where the fee balance is expected to be paid out of
+# escrow once the marital home sells rather than billed/collected in the
+# meantime.
+# "Claim as uncollectable" renamed to "...and withdraw" (2026-08-25, Ted) —
+# see the SCHEMA migration below for existing rows using the old text.
 COLLECTIONS_ACTIONS = [
     "Keep billing",
     "Escalate to attorney",
     "Escalate to Heidi",
     "Send to collections agency",
-    "Claim as uncollectable",
+    "Claim as uncollectable and withdraw",
     "FLARPL",
     "Payment plan",
+    "Payment from sale of home",
 ]
 
 # Own schema fragment (see web/db.py's _apply_fragment) rather than added to
@@ -87,6 +95,15 @@ CREATE TABLE IF NOT EXISTS collections_actions (
     action TEXT NOT NULL,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+
+-- One-time rename migration (2026-08-25): "Claim as uncollectable" became
+-- "Claim as uncollectable and withdraw" in COLLECTIONS_ACTIONS. Re-run on
+-- every get_connection() call like everywhere else in this file — cheap,
+-- idempotent no-op once no row still has the old text. Without this, an
+-- existing decision would silently stop matching any <option>, which the
+-- dropdown renders as if nothing had ever been chosen for that matter.
+UPDATE collections_actions SET action = 'Claim as uncollectable and withdraw'
+    WHERE action = 'Claim as uncollectable';
 """
 
 SCHEMA_COLUMNS = []
