@@ -2,7 +2,7 @@
 {% block title %}Collections{% endblock %}
 {% block content %}
 <h1>Collections</h1>
-<p class="subtitle">Bills already sent to clients that haven't been paid yet — money earned for work already done, entirely separate from the <a href="/trust">Trust Monitor</a>'s retainer tracking (that's money held for future, unearned work). One row per matter — click to expand into that matter's individual unpaid bills. Handling and its Clio confirmation are matter-level decisions, set once here rather than repeated on every bill below.</p>
+<p class="subtitle">Bills already sent to clients that haven't been paid yet — money earned for work already done, entirely separate from the <a href="/trust">Trust Monitor</a>'s retainer tracking (that's money held for future, unearned work). One row per matter — click to expand into that matter's individual unpaid bills, listed in the same columns so Balance always lines up. Handling and its Clio confirmation are matter-level decisions, set once here rather than repeated on every bill below.</p>
 
 {% if error %}
 <div class="panel"><p class="error-text">{{ error }}</p></div>
@@ -32,20 +32,23 @@
       <th></th>
       <th>Status</th>
       <th class="sortable" data-col-index="2" onclick="sortTable('collections-table', 2, 'text', this)">Matter <span class="sort-icon">&#8645;</span></th>
-      <th>Bills</th>
-      <th class="sortable" data-col-index="4" onclick="sortTable('collections-table', 4, 'text', this)">Oldest Issued <span class="sort-icon">&#8645;</span></th>
-      <th class="sortable" data-col-index="5" onclick="sortTable('collections-table', 5, 'number', this)">Total Balance <span class="sort-icon">&#8645;</span></th>
+      <th class="sortable" data-col-index="3" onclick="sortTable('collections-table', 3, 'text', this)">Issued <span class="sort-icon">&#8645;</span></th>
+      <th>Due</th>
+      <th>Days Overdue</th>
+      <th class="sortable" data-col-index="6" onclick="sortTable('collections-table', 6, 'number', this)">Balance <span class="sort-icon">&#8645;</span></th>
       <th>Handling</th>
       <th title="Confirmation from Clio, not something set here — FLARPL shows Clio's own FLARPL Recorded matter field, Payment plan shows Clio's own Payment Plan matter field (both read-only).">Confirmed</th>
     </tr></thead>
     <tbody>
       {% for s in summaries %}
-      <tr class="summary-row" data-overdue="{{ 'yes' if s.overdue else 'no' }}" data-detail-id="collections-detail-{{ loop.index }}">
-        <td class="expand-icon" style="cursor:pointer;" onclick="toggleDetail('collections-detail-{{ loop.index }}')"><span id="collections-icon-{{ loop.index }}">&#9656;</span></td>
+      {% set group_id = "collections-group-" ~ loop.index %}
+      <tr class="summary-row" data-overdue="{{ 'yes' if s.overdue else 'no' }}" data-group="{{ group_id }}">
+        <td class="expand-icon" style="cursor:pointer;" onclick="toggleDetail('{{ group_id }}')"><span id="collections-icon-{{ loop.index }}">&#9656;</span></td>
         <td>{% if s.overdue %}<span class="badge err">{{ s.max_days_overdue }}d past due</span>{% else %}<span class="badge ok">Current</span>{% endif %}</td>
-        <td data-sort="{{ s.display_number }}" style="cursor:pointer;" onclick="toggleDetail('collections-detail-{{ loop.index }}')">{{ s.display_number }}</td>
-        <td>{{ s.bills|length }}</td>
+        <td data-sort="{{ s.display_number }}" style="cursor:pointer;" onclick="toggleDetail('{{ group_id }}')">{{ s.display_number }} <span style="color:var(--text-muted);font-size:0.8rem;">({{ s.bills|length }} bill{{ "s" if s.bills|length != 1 else "" }})</span></td>
         <td data-sort="{{ s.oldest_issued_at }}">{{ s.oldest_issued_at or "—" }}</td>
+        <td>—</td>
+        <td>{{ s.max_days_overdue }}</td>
         <td data-sort="{{ s.total_balance }}">${{ s.total_balance|money }}</td>
         <td>
           {% if s.matter_id %}
@@ -71,28 +74,19 @@
           {% endif %}
         </td>
       </tr>
-      <tr id="collections-detail-{{ loop.index }}" class="detail-row hidden">
-        <td colspan="8">
-          <table class="nowrap detail-table">
-            <thead><tr>
-              <th>Status</th><th>Bill #</th><th>Issued</th><th>Due</th>
-              <th>Days Overdue</th><th>Balance</th>
-            </tr></thead>
-            <tbody>
-              {% for b in s.bills %}
-              <tr>
-                <td>{% if b.overdue %}<span class="badge err">{{ b.days_overdue }}d past due</span>{% else %}<span class="badge ok">Current</span>{% endif %}</td>
-                <td>{{ b.number }}</td>
-                <td>{{ b.issued_at }}</td>
-                <td>{{ b.due_at or "—" }}</td>
-                <td>{{ b.days_overdue }}</td>
-                <td>${{ b.balance|money }}</td>
-              </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </td>
+      {% for b in s.bills %}
+      <tr class="bill-row hidden" data-group="{{ group_id }}">
+        <td></td>
+        <td>{% if b.overdue %}<span class="badge err">{{ b.days_overdue }}d past due</span>{% else %}<span class="badge ok">Current</span>{% endif %}</td>
+        <td class="bill-number">Bill #{{ b.number }}</td>
+        <td>{{ b.issued_at }}</td>
+        <td>{{ b.due_at or "—" }}</td>
+        <td>{{ b.days_overdue }}</td>
+        <td>${{ b.balance|money }}</td>
+        <td></td>
+        <td></td>
       </tr>
+      {% endfor %}
       {% endfor %}
     </tbody>
   </table>
@@ -127,11 +121,16 @@ async function setAction(select) {
   }
 }
 
-function toggleDetail(id) {
-  const row = document.getElementById(id);
-  const icon = document.getElementById("collections-icon-" + id.split("-").pop());
-  const expanded = !row.classList.contains("hidden");
-  row.classList.toggle("hidden", expanded);
+// A matter's detail is one <tr class="bill-row"> per bill (not one row
+// wrapping a nested table) — every cell lines up with the summary row's own
+// columns, notably Balance, instead of just approximately matching column
+// widths. All bill-rows sharing a group toggle together.
+function toggleDetail(groupId) {
+  const rows = document.querySelectorAll(`tr.bill-row[data-group="${groupId}"]`);
+  if (!rows.length) return;
+  const expanded = !rows[0].classList.contains("hidden");
+  rows.forEach((r) => r.classList.toggle("hidden", expanded));
+  const icon = document.getElementById("collections-icon-" + groupId.split("-").pop());
   icon.innerHTML = expanded ? "&#9656;" : "&#9662;";
 }
 
@@ -140,8 +139,9 @@ function filterResults() {
   document.querySelectorAll("#results tbody tr.summary-row[data-overdue]").forEach((row) => {
     const hide = onlyOverdue && row.dataset.overdue === "no";
     row.style.display = hide ? "none" : "";
-    const detail = document.getElementById(row.dataset.detailId);
-    if (detail) detail.style.display = hide ? "none" : "";
+    document.querySelectorAll(`tr.bill-row[data-group="${row.dataset.group}"]`).forEach((d) => {
+      d.style.display = hide ? "none" : "";
+    });
   });
 }
 filterResults();
@@ -153,9 +153,11 @@ filterResults();
 // same-tab, this-review-session preference, not something worth keeping
 // forever) and reapplied once the page's rows exist again.
 //
-// Each matter is a summary/detail row PAIR — sorting moves both rows
-// together (by their shared data-detail-id) so a matter's expanded detail
-// never gets separated from its own summary row.
+// A matter's summary row and its bill-rows all share one data-group value —
+// sorting moves the whole group together (re-queried fresh from the tbody
+// each time, so it always finds whatever bill-rows currently belong to that
+// group) so an expanded matter's detail never gets separated from its own
+// summary row.
 function sortTable(tableId, colIndex, type, headerEl) {
   const table = document.getElementById(tableId);
   const tbody = table.querySelector('tbody');
@@ -170,8 +172,7 @@ function sortTable(tableId, colIndex, type, headerEl) {
   });
   summaryRows.forEach((row) => {
     tbody.appendChild(row);
-    const detail = document.getElementById(row.dataset.detailId);
-    if (detail) tbody.appendChild(detail);
+    tbody.querySelectorAll(`tr.bill-row[data-group="${row.dataset.group}"]`).forEach((d) => tbody.appendChild(d));
   });
 
   table.querySelectorAll('th.sortable').forEach((th) => {
