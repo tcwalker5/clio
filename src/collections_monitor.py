@@ -57,14 +57,18 @@ PAGE_SIZE = 200
 # neither dropdown value means the thing has actually happened. FLARPL has
 # a real, separate confirmation source: Clio's own "FLARPL Recorded" matter
 # custom field, read-only from here (collections_flarpl.py) since recording
-# a lien is an external act this dashboard doesn't perform. Payment plan has
-# no equivalent Clio field (confirmed live — searched "Payment Plan",
-# "Payment", "Installment", "Plan", "Schedule": nothing), so there is
-# nothing here for it to reflect; it stays a plain dropdown option with no
-# second-stage indicator until a real field exists in Clio to be the source
-# of truth for it. (An earlier version of this feature gave Payment plan a
-# locally-writable "Active" checkbox — removed: a dashboard flag with no
-# external truth behind it is exactly the pattern being avoided for FLARPL.)
+# a lien is an external act this dashboard doesn't perform. Payment plan
+# didn't have an equivalent field when this was first built (confirmed live
+# 2026-08-19 — searched "Payment Plan", "Payment", "Installment", "Plan",
+# "Schedule": nothing existed yet), so it stayed a plain dropdown option
+# with no second-stage indicator. (An earlier version of this feature gave
+# it a locally-writable "Active" checkbox instead — removed: a dashboard
+# flag with no external truth behind it is exactly the pattern being
+# avoided for FLARPL.) **Corrected 2026-08-25:** Ted added a real "Payment
+# Plan" matter custom field (id 19347918, checkbox) — there's still no Clio
+# API for payment plans themselves, but this field is now the same kind of
+# confirmation source FLARPL already has, read-only from here
+# (collections_payment_plan.py), same reasoning throughout.
 # "Payment from sale of home" (added 2026-08-25) is the same shape as Payment
 # plan — no matching Clio field, so no Confirmed-column indicator — for the
 # common family-law case where the fee balance is expected to be paid out of
@@ -164,6 +168,7 @@ class UnpaidBill:
     balance: float
     action: str = ""  # persisted collections_actions.action for this matter, set by the route layer
     flarpl_recorded: bool = False  # live, read-only from Clio's own FLARPL Recorded custom field, only meaningful when action == "FLARPL"
+    payment_plan_active: bool = False  # live, read-only from Clio's own Payment Plan custom field, only meaningful when action == "Payment plan"
 
     @property
     def days_overdue(self) -> int:

@@ -29,7 +29,7 @@
         <td>{{ b.action or "—" }}</td>
         <td>
           {% if b.action == "FLARPL" %}{{ "Recorded" if b.flarpl_recorded else "Not recorded yet" }}
-          {% elif b.action == "Payment plan" %}Not tracked in Clio
+          {% elif b.action == "Payment plan" %}{{ "In place" if b.payment_plan_active else "Not set up yet" }}
           {% else %}—
           {% endif %}
         </td>

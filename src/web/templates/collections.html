@@ -35,7 +35,7 @@
       <th class="sortable" data-col-index="5" onclick="sortTable('collections-table', 5, 'number', this)">Days Overdue <span class="sort-icon">&#8645;</span></th>
       <th class="sortable" data-col-index="6" onclick="sortTable('collections-table', 6, 'number', this)">Balance <span class="sort-icon">&#8645;</span></th>
       <th>Handling</th>
-      <th title="Confirmation from Clio, not something set here — FLARPL shows Clio's own FLARPL Recorded matter field (read-only). Payment plan has no matching Clio field yet, so there's nothing to confirm here.">Confirmed</th>
+      <th title="Confirmation from Clio, not something set here — FLARPL shows Clio's own FLARPL Recorded matter field, Payment plan shows Clio's own Payment Plan matter field (both read-only).">Confirmed</th>
     </tr></thead>
     <tbody>
       {% for b in bills %}
@@ -64,7 +64,8 @@
           {% if b.flarpl_recorded %}<span class="badge ok" title="From Clio's FLARPL Recorded field">Recorded</span>
           {% else %}<span class="badge warn" title="From Clio's FLARPL Recorded field — update it in Clio once the lien is actually recorded">Not recorded yet</span>{% endif %}
           {% elif b.action == "Payment plan" %}
-          <span class="badge warn" title="No Clio field exists to confirm this from yet">Not tracked in Clio</span>
+          {% if b.payment_plan_active %}<span class="badge ok" title="From Clio's Payment Plan field">In place</span>
+          {% else %}<span class="badge warn" title="From Clio's Payment Plan field — check it in Clio once the payment plan is actually set up">Not set up yet</span>{% endif %}
           {% else %}
           —
           {% endif %}

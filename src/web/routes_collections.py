@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 import collections_flarpl
 import collections_monitor
+import collections_payment_plan
 from web.auth import require_auth
 from web.db import get_connection
 
@@ -23,11 +24,12 @@ router = APIRouter(prefix="/collections", tags=["collections"])
 
 def _attach_actions(bills: list[collections_monitor.UnpaidBill]) -> None:
     """Sets each bill's `.action` from collections_actions (keyed by matter,
-    not bill — see collections_monitor.SCHEMA's docstring note) and
-    `.flarpl_recorded` live from Clio for whichever matters currently have
-    "FLARPL" selected (collections_flarpl.py — read-only: Clio is the
-    source of truth for whether a FLARPL has actually been recorded, this
-    dashboard only ever reflects it, never sets it)."""
+    not bill — see collections_monitor.SCHEMA's docstring note), plus two
+    live read-only Clio confirmations, each only fetched for matters whose
+    action currently matches: `.flarpl_recorded` for "FLARPL"
+    (collections_flarpl.py) and `.payment_plan_active` for "Payment plan"
+    (collections_payment_plan.py). Clio is the source of truth for both —
+    this dashboard only ever reflects them, never sets them."""
     conn = get_connection()
     try:
         actions_by_matter = collections_monitor.fetch_actions_by_matter(conn)
@@ -36,13 +38,23 @@ def _attach_actions(bills: list[collections_monitor.UnpaidBill]) -> None:
     for b in bills:
         b.action = actions_by_matter.get(b.matter_id, "") if b.matter_id else ""
 
+    session = None
+
     flarpl_matter_ids = sorted({b.matter_id for b in bills if b.action == "FLARPL" and b.matter_id})
     if flarpl_matter_ids:
-        session = collections_monitor.build_session()
+        session = session or collections_monitor.build_session()
         recorded_by_matter = collections_flarpl.fetch_recorded_by_matter(session, flarpl_matter_ids)
         for b in bills:
             if b.action == "FLARPL" and b.matter_id:
                 b.flarpl_recorded = recorded_by_matter.get(b.matter_id, False)
+
+    payment_plan_matter_ids = sorted({b.matter_id for b in bills if b.action == "Payment plan" and b.matter_id})
+    if payment_plan_matter_ids:
+        session = session or collections_monitor.build_session()
+        active_by_matter = collections_payment_plan.fetch_active_by_matter(session, payment_plan_matter_ids)
+        for b in bills:
+            if b.action == "Payment plan" and b.matter_id:
+                b.payment_plan_active = active_by_matter.get(b.matter_id, False)
 
 
 @router.get("", response_class=HTMLResponse)

@@ -1625,16 +1625,29 @@ a checkbox here. Current design:
   write path was removed) against the designated test matter (DOE, JANE): set true,
   confirmed true via a direct Clio read, reverted to false, confirmed reverted — see
   "Designated test matter" above for why that matter specifically.
-- **Payment plan** — no matching Clio custom field exists (confirmed live, searched
-  "Payment Plan", "Payment", "Installment", "Plan", "Schedule" — nothing). Since there's
-  nothing external to confirm against, it has **no Confirmed-column indicator at all**
-  rather than a dashboard-only flag standing in for one — a first version gave it a
-  locally-writable "Active" checkbox (`collections_actions.payment_plan_active`),
-  removed same day as the FLARPL fix for exactly the same reason: a checkbox with no
-  external truth behind it is the pattern being avoided, not a narrower exception to it.
-  If a real confirmation source is wanted later, it needs an actual Clio custom field
-  first (a one-time manual step in Clio's Settings, like Court Case Number's field
-  already is) — nothing to wire up here until one exists.
+- **Payment plan** — at first (2026-08-19) had no matching Clio custom field (confirmed
+  live, searched "Payment Plan", "Payment", "Installment", "Plan", "Schedule" —
+  nothing), so it had **no Confirmed-column indicator at all** rather than a
+  dashboard-only flag standing in for one; a first version gave it a locally-writable
+  "Active" checkbox (a `collections_actions` DB column, also named `payment_plan_active`
+  — coincidentally the same name the field below reuses, but a different, unrelated
+  thing), removed same day as the FLARPL fix for exactly the same reason: a checkbox
+  with no external truth behind it is the pattern being avoided, not a narrower
+  exception to it.
+
+  **Ted added a real "Payment Plan" matter custom field 2026-08-25** (id `19347918`,
+  `field_type: checkbox`) — Clio has no API for payment plans themselves, but this
+  field is now the same kind of confirmation source FLARPL already has. Wired up the
+  same way: `collections_payment_plan.py` (read-only, no write function, same
+  reasoning as `collections_flarpl.py`), `UnpaidBill.payment_plan_active`, batch-fetched
+  only for matters currently showing "Payment plan". Live-tested 2026-08-25 against
+  the designated test matter (DOE, JANE): set true, confirmed true via a direct Clio
+  read, reverted to false, confirmed reverted. Hit the same "already exists" gotcha
+  Moore/Marsden's date fields hit (see that section) — DOE, JANE already had an
+  auto-created empty `CustomFieldValue` record for this field once the first PATCH
+  ran, so the revert PATCH had to target that record's own id
+  (`{"id": "checkbox-1122682188", "value": false}`) rather than re-using the
+  `custom_field: {id}` create-shape a second time.
 
 ## Workflow
 ```powershell
