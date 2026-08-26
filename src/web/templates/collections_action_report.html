@@ -14,7 +14,7 @@
 
   {% if summaries %}
   <div style="overflow-x:auto;">
-  <table class="nowrap">
+  <table class="nowrap" id="report-table">
     <thead><tr>
       <th>Matter</th><th>Oldest Issued</th><th>Total Balance</th><th>Handling</th><th>Confirmed</th>
     </tr></thead>
@@ -68,6 +68,16 @@
 tr.matter-row td { font-weight: 700; border-top: 2px solid var(--border); padding-top: 0.6rem; }
 tr.bill-subrow > td { padding-left: 1.5rem; padding-top: 0; padding-bottom: 0.6rem; border-bottom: none; }
 table.detail-table th, table.detail-table td { color: var(--text-muted); font-weight: 400; }
+
+/* Handling/Confirmed can carry longer text ("Send to collections agency",
+   "Payment from sale of home") — real bug hit 2026-08-25: table.nowrap's
+   white-space:nowrap plus a printed page's fixed width doesn't wrap, it
+   just gets silently cut off ("Claim as uncollectable and withdraw" ->
+   "Claim as uncollectable and w" on paper, no visible sign anything was
+   truncated). Scoped to #report-table only — the bill sub-table's own
+   columns are all short and stay nowrap. */
+#report-table th:nth-child(4), #report-table td:nth-child(4),
+#report-table th:nth-child(5), #report-table td:nth-child(5) { white-space: normal; }
 
 @media print {
   .no-print, header.topbar { display: none !important; }

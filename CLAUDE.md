@@ -1611,7 +1611,7 @@ Nothing here writes to Clio at all.
 **Handling decisions (added 2026-08-18, Ted):** a **Handling** column on `/collections`
 lets staff record how each matter's collections situation is being handled, from a fixed
 dropdown (`collections_monitor.COLLECTIONS_ACTIONS`): Keep billing, Escalate to attorney,
-Escalate to Heidi, Send to collections agency, Claim as uncollectable — a closed list
+Escalate to Heidi, Send to collections agency, Uncollectible and Withdraw — a closed list
 rather than freeform text, so the review report reads consistently across every matter,
 same reasoning as this project's other explicit-mapping constants. Persisted in its own
 `collections_actions` table (own schema fragment, see `web/db.py`'s `_apply_fragment`),
@@ -1636,6 +1636,25 @@ overdue/balance like the main table (Clio's own "Last, First" convention already
 by last name, so no separate name-parsing is needed), and **deliberately leaves the
 Client column off** — per Ted, every matter today has exactly one client (a 1:1 match),
 so the matter name alone is enough and sorting by it is more intuitive than by client.
+
+**Matter row vs. bill sub-table are visually differentiated (added 2026-08-25, Ted):**
+matter rows are bold with a top border separating each matter's group; the bill
+sub-table underneath is indented and muted gray — both on screen (this page is reviewed
+before it's printed) and in the print stylesheet, `tr.matter-row`/`tr.bill-subrow`.
+Before this they read identically, with no visual separation between one matter's block
+and the next.
+
+**Long Handling text was getting silently cut off on paper (fixed 2026-08-25) —**
+`table.nowrap`'s `white-space: nowrap` plus a printed page's fixed width doesn't wrap
+overflow text, it just clips it with no visible sign anything was truncated: "Claim as
+uncollectable and withdraw" printed as "Claim as uncollectable and w". Fixed two ways —
+that option was shortened to **"Uncollectible and Withdraw"** (`COLLECTIONS_ACTIONS`,
+with a SCHEMA rename migration covering both of its prior names for existing rows,
+same pattern as the FLARPL/Payment plan rename migrations elsewhere in this file), and
+`#report-table`'s Handling/Confirmed columns now get `white-space: normal` specifically
+(scoped by id so the bill sub-table's own short columns stay `nowrap`) so any other
+long value (`"Payment from sale of home"`, `"Send to collections agency"`) wraps
+instead of clipping if this ever comes up again.
 
 **FLARPL and Payment plan — Handling records intent only; confirmation is never set
 from this dashboard (added 2026-08-18, corrected 2026-08-19):** the **Handling** dropdown
