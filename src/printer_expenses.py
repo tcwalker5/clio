@@ -58,6 +58,11 @@ MANUAL_MATTER_MAP: dict[str, int] = {
     "COLTON": 1787620173,
     # Joint client (mediation) — both clients billed; applied to Jennifer's matter
     "KRIDER, JENNIFER & JOHNATHAN": 1786834383,
+    # Missing space vs Clio's display_number
+    "ALMAGHAZAJI, RUSUL": 1786820883,  # Clio: AL MAGHAZAJI, RUSUL
+    # Bare last name shared by two open matters (DONOVAN, BROOKE / DONOVAN, MEGAN)
+    # — confirmed with Ted 2026-08-19 this was Megan's printing
+    "DONOVAN": 1786827108,  # Clio: DONOVAN, MEGAN
 }
 
 # ---------------------------------------------------------------------------
