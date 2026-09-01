@@ -74,7 +74,7 @@ import os
 import re
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 
@@ -216,6 +216,25 @@ class ParsedInvoice:
     note_text: str           # human-readable service description for the Clio note
     statement_amount: float | None  # looked up from the Statement pages
     is_firm_overhead: bool
+
+
+@dataclass
+class ParsedStatement:
+    """Output of the OCR pass alone — the expensive, re-run-avoidable part of
+    the pipeline. Cached by routes_legs.py across every exception-resolution
+    click within one upload session, so fixing an exception never re-OCRs."""
+    stem: str
+    statement_amounts: dict[str, float]
+    invoices: list[ParsedInvoice]
+
+
+@dataclass
+class MatterData:
+    """Output of the live Clio matters fetch — also cached across resolution
+    clicks within one session, same reasoning as ParsedStatement above."""
+    matters_raw: list[dict]
+    matters: dict[str, int | None]
+    opposing_party_by_last_name: dict[str, int | None]
 
 
 # ---------------------------------------------------------------------------
@@ -448,6 +467,51 @@ def parse_invoice_page(page: pdfplumber.page.Page, page_number: int, body_text: 
     )
 
 
+def apply_manual_overrides(
+    invoices: list[ParsedInvoice], statement_amounts: dict[str, float],
+    invoice_number_overrides: dict[int, str],
+    amount_overrides: dict[int, float],
+) -> list[ParsedInvoice]:
+    """Corrects a page's OCR'd invoice number and/or dollar amount — no new
+    OCR needed, since both the invoices and the Statement were already
+    parsed. Both dicts are page_number -> value, staff-entered from the
+    dashboard after checking the page's thumbnail against the real scan.
+
+    The Statement is a cross-reference for reconciliation, not the sole
+    authority on what's billable (per-firm decision, 2026-09-01) — an
+    invoice-number correction alone re-looks-up the amount from the
+    Statement as before, but `amount_overrides` lets staff assert the real
+    per-invoice dollar amount directly when the Statement's own OCR doesn't
+    have it at all (confirmed real case: a page's invoice number was read
+    correctly off the scan but genuinely wasn't a Statement line item).
+    `amount_overrides` always wins when both are given for the same page.
+
+    Deliberately session-scoped (kept in routes_legs.py's PREVIEWS, not a
+    persistent file like MANUAL_MATTER_MAP) — this is scan-specific
+    correction for one statement, not a recurring client-name issue that
+    would apply to next month's statement too.
+
+    Returns a new list; `invoices` itself is untouched so the full overrides
+    can be freely re-applied from scratch (e.g. after a correction is
+    edited) without compounding onto a previous correction."""
+    if not invoice_number_overrides and not amount_overrides:
+        return invoices
+    out = []
+    for inv in invoices:
+        number = inv.invoice_number
+        amount = inv.statement_amount
+        if inv.page_number in invoice_number_overrides:
+            number = _normalize_invoice_number(invoice_number_overrides[inv.page_number]) or number
+            amount = statement_amounts.get(number)
+        if inv.page_number in amount_overrides:
+            amount = amount_overrides[inv.page_number]
+        if number != inv.invoice_number or amount != inv.statement_amount:
+            out.append(replace(inv, invoice_number=number, statement_amount=amount))
+        else:
+            out.append(inv)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Fuzzy suggestions for unmatched names — same approach as bradford_invoice.py
 # ---------------------------------------------------------------------------
@@ -595,7 +659,12 @@ def build_payloads(
             "matter": {"id": matter_id},
             "quantity": 1,
             "price": inv.statement_amount,
-            "note": f"Legs Legal Support — Invoice L{inv.invoice_number}: {inv.note_text}",
+            # 2026-09-01, at Ted's request: the OCR'd service-description
+            # body (inv.note_text) wasn't coming through cleanly enough to
+            # be worth including on the actual Clio expense — date and
+            # amount are already correct via the fields above regardless,
+            # so the note is now just vendor + invoice number for traceability.
+            "note": f"Legs Legal Support — Invoice L{inv.invoice_number}",
         }
         # page is a sibling key, never sent to Clio (see post_entry, which
         # POSTs payload["data"] alone) — dashboard-only, so a matched row
@@ -705,22 +774,22 @@ class RunResult:
     all_matters: list[dict] = field(default_factory=list)  # [{"id":, "name":}], for the dashboard's matter-name search
 
 
-def run_pipeline(
-    input_path: Path,
-    dry_run: bool,
-    matter_filter: str = "",
-    output_dir: Path = Path("output"),
-) -> RunResult:
-    """
-    OCR the Legs statement PDF, match invoices to Clio matters, write
-    payload/exception output files, and (unless dry_run) POST expense
-    entries.
+def build_session() -> requests.Session:
+    session = requests.Session()
+    session.headers.update({
+        "Authorization": f"Bearer {ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    })
+    return session
 
-    Raises FileNotFoundError / RuntimeError on hard failures instead of
-    exiting the process, so it's safe to call from a long-running server.
-    """
-    if not ACCESS_TOKEN:
-        raise RuntimeError("CLIO_ACCESS_TOKEN not set in .env")
+
+def parse_statement_pdf(input_path: Path, output_dir: Path = Path("output")) -> ParsedStatement:
+    """The expensive, OCR-only phase — no Clio calls, no matching. Split out
+    of run_pipeline (2026-09-01) so routes_legs.py can run this exactly once
+    per upload and cache the result: re-running the full pipeline on every
+    single exception resolution was re-OCRing the whole statement (full-page
+    OCR + a second header-crop OCR per invoice page + thumbnail regeneration)
+    just to apply one name->matter fix, which is why "Save" felt slow."""
     if not input_path.exists():
         raise FileNotFoundError(f"PDF not found: {input_path}")
     ensure_tesseract()
@@ -760,7 +829,32 @@ def run_pipeline(
             save_page_thumbnail(page, thumbnails_dir / f"page_{i + 1}.jpg")
 
     logging.info("Parsed %d invoice page(s)", len(invoices))
+    return ParsedStatement(stem=stem, statement_amounts=statement_amounts, invoices=invoices)
 
+
+def fetch_matter_data(session: requests.Session) -> MatterData:
+    """The other expensive, cacheable phase — a live Clio matters fetch, same
+    reasoning as parse_statement_pdf above (paginated, not worth repeating on
+    every exception resolution within one upload session)."""
+    matters_raw = fetch_open_matters(session, fields=MATTERS_FIELDS_WITH_OP)
+    matters = index_by_last_name(matters_raw)
+    opposing_party_by_last_name = index_opposing_party_by_last_name(matters_raw)
+    return MatterData(matters_raw=matters_raw, matters=matters,
+                       opposing_party_by_last_name=opposing_party_by_last_name)
+
+
+def build_result(
+    stem: str,
+    invoices: list[ParsedInvoice],
+    statement_amounts: dict[str, float],
+    matter_data: MatterData,
+    output_dir: Path = Path("output"),
+    matter_filter: str = "",
+) -> RunResult:
+    """The cheap, re-run-many-times phase: matching + reconciliation + output
+    files. No OCR, no Clio API call — safe (and fast) to call again after
+    every exception resolution, using cached parse_statement_pdf/
+    fetch_matter_data output."""
     if matter_filter:
         f = matter_filter.upper()
         invoices = [inv for inv in invoices if inv.client_raw and f in inv.client_raw.upper()]
@@ -774,24 +868,15 @@ def run_pipeline(
     else:
         logging.warning("Reconciliation MISMATCH: %s", reconciliation_note)
 
-    session = requests.Session()
-    session.headers.update({
-        "Authorization": f"Bearer {ACCESS_TOKEN}",
-        "Content-Type": "application/json",
-    })
-
-    matters_raw = fetch_open_matters(session, fields=MATTERS_FIELDS_WITH_OP)
-    matters = index_by_last_name(matters_raw)
-    opposing_party_by_last_name = index_opposing_party_by_last_name(matters_raw)
     payloads, exceptions, firm_overhead = build_payloads(
-        invoices, matters, effective_manual_matter_map(), opposing_party_by_last_name,
+        invoices, matter_data.matters, effective_manual_matter_map(), matter_data.opposing_party_by_last_name,
     )
 
-    matter_names = {mid: name for name, mid in matters.items() if mid}
+    matter_names = {mid: name for name, mid in matter_data.matters.items() if mid}
     all_matters = sorted(
         (
             {"id": int(m["id"]), "name": m["display_number"]}
-            for m in matters_raw if m.get("display_number")
+            for m in matter_data.matters_raw if m.get("display_number")
         ),
         key=lambda m: m["name"],
     )
@@ -801,6 +886,7 @@ def run_pipeline(
         total_entries=len(invoices), matter_names=matter_names, all_matters=all_matters,
     )
 
+    output_dir.mkdir(exist_ok=True)
     result.payloads_path = output_dir / f"{stem}_payloads.json"
     with open(result.payloads_path, "w", encoding="utf-8") as f:
         json.dump(payloads, f, indent=2)
@@ -822,13 +908,42 @@ def run_pipeline(
         "Summary: %d invoices / %d payloads / %d exceptions / %d firm overhead  |  $%.2f total",
         len(invoices), len(payloads), len(exceptions), len(firm_overhead), total_amount,
     )
+    return result
 
-    if not payloads or dry_run:
-        if dry_run and payloads:
+
+def run_pipeline(
+    input_path: Path,
+    dry_run: bool,
+    matter_filter: str = "",
+    output_dir: Path = Path("output"),
+) -> RunResult:
+    """
+    OCR the Legs statement PDF, match invoices to Clio matters, write
+    payload/exception output files, and (unless dry_run) POST expense
+    entries. CLI entry point — runs the full parse -> fetch -> build ->
+    (optionally) post sequence once, start to finish. The dashboard's
+    resolve-exception flow calls parse_statement_pdf/fetch_matter_data/
+    build_result directly instead, so it can cache and skip the expensive
+    first two steps on every re-match — see those functions' docstrings.
+
+    Raises FileNotFoundError / RuntimeError on hard failures instead of
+    exiting the process, so it's safe to call from a long-running server.
+    """
+    if not ACCESS_TOKEN:
+        raise RuntimeError("CLIO_ACCESS_TOKEN not set in .env")
+
+    parsed = parse_statement_pdf(input_path, output_dir)
+    session = build_session()
+    matter_data = fetch_matter_data(session)
+    result = build_result(parsed.stem, parsed.invoices, parsed.statement_amounts,
+                           matter_data, output_dir, matter_filter)
+
+    if not result.payloads or dry_run:
+        if dry_run and result.payloads:
             logging.info("--- DRY RUN: no entries posted ---")
         return result
 
-    for payload in payloads:
+    for payload in result.payloads:
         if post_entry(session, payload):
             result.posted += 1
         else:

@@ -264,6 +264,19 @@ surfaces as a loud warning in both the log and the dashboard (a red banner) rath
 silently under- or over-billing a client. This is a stronger check than Bradford gets,
 because Legs' own statement happens to give an independent total to check against.
 
+**The Statement is a cross-reference, not the sole authority (corrected 2026-09-01):**
+originally the Statement was the *only* source `build_payloads()` would accept a dollar
+amount from — deliberate, since the per-page Total field tested unreliable (see the
+module docstring). In practice this meant a page whose invoice number the Statement's
+own OCR didn't have — even when the page's own Total was perfectly legible — became a
+permanently stuck exception with no way to resolve it from the dashboard at all (the
+firm's actual invoice is what's billable; the Statement is Legs' own internal summary,
+useful for catching a missed/misread page but not the final word). `/legs/resolve-amount`
+now lets staff assert the amount directly, read off the invoice page's own thumbnail —
+see "Fixing an OCR'd invoice number" below. The reconciliation warning still fires for a
+manually-asserted amount that doesn't match anything on the Statement — that's useful
+context, not a reason to block the row.
+
 **Page thumbnails:** each invoice page also gets a small JPEG (100dpi, ~64KB,
 `save_page_thumbnail()`) saved to `output/{stem}_thumbnails/page_N.jpg`, served via the
 auth-gated `GET /legs/thumbnail/{stem}/{page}` route and shown as a clickable column in
@@ -272,7 +285,47 @@ Given OCR is a real, expected error source here (unlike Bradford's clean text
 extraction), this lets staff visually spot-check a row against the actual scan before
 confirming.
 
-**Billing rule:** `price = <Legs' invoice total from the Statement>`, `quantity = 1` —
+**Parse-once, match-many architecture (added 2026-09-01):** every exception resolution
+used to re-run the entire pipeline, which for Legs means re-OCRing the whole statement
+(full-page OCR + a second header-crop OCR per invoice page + regenerating every
+thumbnail) just to apply one fix — confirmed to take ~45-50s per Save on a real 26-page
+statement. `run_pipeline()` is now split into three functions: `parse_statement_pdf()`
+(the OCR-only phase, ~46s), `fetch_matter_data()` (the live Clio matters fetch, ~3s),
+and `build_result()` (matching + reconciliation + output files, ~10ms — no I/O besides
+writing the local JSON/CSV). `routes_legs.py` runs the first two exactly once per
+upload and caches their output in `PREVIEWS[token]`; every subsequent exception
+resolution calls `build_result()` alone. The CLI's `run_pipeline()` still runs all
+three in sequence for a single end-to-end call — this split is transparent to it.
+
+**Fixing an OCR'd invoice number and/or amount, not just a client match:** some
+exceptions aren't a client-matching problem at all — `build_payloads()` raises "Could
+not read invoice number/amount from statement — OCR mismatch" *before* client matching
+even runs, whenever a page's invoice number couldn't be read (`UNKNOWN-pN`) or doesn't
+appear on the Statement. Resolving a matter for one of these does nothing, since there's
+still no dollar amount to bill. These rows get an **Invoice #/Amount correction form**
+(`/legs/resolve-amount`) instead of the matter-search box — both fields are optional,
+at least one required:
+- **Invoice # only** — the preferred fix when the real invoice number just wasn't OCR'd
+  correctly (`UNKNOWN-pN`) or was misread on the *Statement* side. Staff check the
+  page's thumbnail, type the correct number, and `apply_manual_overrides()`
+  re-looks-up the dollar amount from the already-parsed Statement data (no new OCR).
+  Confirmed against a real case: two pages whose header-crop OCR failed entirely turned
+  out to exactly match the statement's two "orphaned" invoice amounts once corrected by
+  eye.
+- **Amount (with or without an invoice # correction)** — for the case an invoice-number
+  fix alone can't solve: the page's own invoice number was read correctly (or gets
+  corrected) but still isn't a Statement line item at all. Staff read the dollar amount
+  straight off the invoice page's own thumbnail and enter it directly — this always wins
+  over whatever the Statement lookup would have produced. This is the firm's actual
+  invoice; the Statement is a cross-reference, not a gate on what's billable (see above).
+
+Deliberately session-scoped (`PREVIEWS[token]["invoice_number_overrides"]` /
+`["amount_overrides"]`, not a persistent file like `legs_manual_matter_map.csv`) — this
+is scan-specific correction for one statement, not a recurring client-name issue that'd
+apply to next month's statement too.
+
+**Billing rule:** `price = <Legs' invoice total from the Statement, or a staff-asserted
+amount override>`, `quantity = 1` —
 at cost, no markup (firm decision). `payload["data"]` is the only thing ever POSTed to
 Clio (`post_entry` sends `{"data": payload["data"]}` explicitly) — `page` is a sibling
 key on the payload dict, present for the dashboard's thumbnail links but never part of

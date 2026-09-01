@@ -57,6 +57,18 @@
         <td>
           {% if token %}
           <div style="display:flex; align-items:center; gap:1.25rem; flex-wrap:wrap;">
+          {% if 'OCR mismatch' in e.reason %}
+          <form method="post" action="/legs/resolve-amount" style="display:flex; align-items:center; gap:0.4rem; flex-wrap:wrap; flex-shrink:0;">
+            <input type="hidden" name="token" value="{{ token }}">
+            <input type="hidden" name="page" value="{{ e.page }}">
+            <input type="text" name="invoice_number"
+                   placeholder="Invoice # (check thumbnail)"
+                   value="{{ '' if e.invoice_number.startswith('UNKNOWN') else e.invoice_number }}"
+                   style="width:13rem;">
+            <input type="text" name="amount" placeholder="Amount $ (from invoice page)" style="width:11rem;">
+            <button type="submit">Save</button>
+          </form>
+          {% else %}
           {% if e.suggested_matter_id %}
           <form method="post" action="/legs/resolve-exception" style="display:flex; flex-shrink:0;">
             <input type="hidden" name="token" value="{{ token }}">
@@ -76,6 +88,7 @@
             </div>
             <button type="submit">Save</button>
           </form>
+          {% endif %}
           </div>
           {% endif %}
         </td>

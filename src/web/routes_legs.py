@@ -2,10 +2,19 @@
 routes_legs.py — Drag-and-drop UI for legs_expenses.py.
 
 Upload -> dry-run preview (payloads + exceptions + firm overhead) -> confirm
--> live post. Wraps legs_expenses.run_pipeline(); no matching/posting/OCR
-logic lives here — same shape as routes_bradford.py.
+-> live post. No matching/posting/OCR logic lives here.
+
+Unlike routes_bradford.py's shape, this doesn't just wrap one run_pipeline()
+call: the OCR pass (parse_statement_pdf) and the live Clio matters fetch
+(fetch_matter_data) are each run exactly once, on upload, and their output
+is cached in PREVIEWS — every exception resolution after that calls the
+cheap build_result() alone. Re-running the whole pipeline (including OCR)
+on every single Save was confirmed to take ~45-50s per click on a real
+statement — see "Parse-once, match-many architecture" in
+reference/invoices.md.
 """
 
+import logging
 import re
 import time
 import uuid
@@ -33,6 +42,52 @@ _SAFE_STEM_RE = re.compile(r"^[\w\-]+$")
 
 def _safe_filename(name: str) -> str:
     return Path(name).name
+
+
+def _parse_and_build(dest: Path):
+    """Runs the two expensive, one-time steps (OCR the whole statement, fetch
+    Clio matters) and the cheap matching step, all at once — this is only
+    ever called on the initial upload. Returns (parsed, matter_data, result);
+    the caller caches the first two in PREVIEWS so every later exception
+    resolution can skip straight to the cheap _rebuild() below."""
+    if not legs_expenses.ACCESS_TOKEN:
+        raise RuntimeError("CLIO_ACCESS_TOKEN not set in .env")
+    parsed = legs_expenses.parse_statement_pdf(dest)
+    matter_data = legs_expenses.fetch_matter_data(legs_expenses.build_session())
+    result = legs_expenses.build_result(
+        parsed.stem, parsed.invoices, parsed.statement_amounts, matter_data,
+    )
+    return parsed, matter_data, result
+
+
+def _rebuild(entry: dict) -> legs_expenses.RunResult:
+    """Re-matches against cached OCR/Clio data — no OCR, no Clio API call.
+    Called after every exception resolution (matter override, invoice-number
+    correction, or amount override) so "Save" stays fast regardless of how
+    many pages the statement has."""
+    parsed = entry["parsed"]
+    invoices = legs_expenses.apply_manual_overrides(
+        parsed.invoices, parsed.statement_amounts,
+        entry["invoice_number_overrides"], entry["amount_overrides"],
+    )
+    return legs_expenses.build_result(
+        parsed.stem, invoices, parsed.statement_amounts, entry["matter_data"],
+    )
+
+
+def _confirm_and_post(entry: dict) -> legs_expenses.RunResult:
+    result = _rebuild(entry)
+    if not result.payloads:
+        return result
+    session = legs_expenses.build_session()
+    for payload in result.payloads:
+        if legs_expenses.post_entry(session, payload):
+            result.posted += 1
+        else:
+            result.failed += 1
+        time.sleep(legs_expenses.POST_DELAY)
+    logging.info("Done: %d posted, %d failed", result.posted, result.failed)
+    return result
 
 
 def _write_upload(dest: Path, content: bytes) -> None:
@@ -88,9 +143,13 @@ async def legs_preview(
     token = None
     try:
         _write_upload(dest, content)
-        result = await run_in_threadpool(legs_expenses.run_pipeline, dest, dry_run=True)
+        parsed, matter_data, result = await run_in_threadpool(_parse_and_build, dest)
         token = uuid.uuid4().hex
-        PREVIEWS[token] = {"input_path": dest}
+        PREVIEWS[token] = {
+            "input_path": dest, "parsed": parsed, "matter_data": matter_data,
+            "invoice_number_overrides": {},  # page_number -> corrected invoice number, this session only
+            "amount_overrides": {},          # page_number -> corrected dollar amount, this session only
+        }
     except (FileNotFoundError, RuntimeError) as e:
         error = str(e)
     except PermissionError:
@@ -111,9 +170,10 @@ async def legs_resolve_exception(
     _: None = Depends(require_auth),
 ):
     """Persists one name -> matter_id override (data/legs_manual_matter_map.csv,
-    survives future imports) and re-runs the dry-run preview in place, so a
-    resolved exception disappears from the exceptions table and shows up as a
-    matched entry instead — same token, same "Confirm & Post" step at the end."""
+    survives future imports) and re-matches against the cached OCR/Clio data
+    (see _rebuild) — no re-OCR, no re-fetch — so a resolved exception
+    disappears from the exceptions table and shows up as a matched entry
+    instead, same token, same "Confirm & Post" step at the end."""
     from web.app import render
 
     entry = PREVIEWS.get(token)
@@ -124,9 +184,62 @@ async def legs_resolve_exception(
     else:
         legs_expenses.save_persisted_override(name, matter_id, note)
         try:
-            result = await run_in_threadpool(legs_expenses.run_pipeline, entry["input_path"], dry_run=True)
+            result = await run_in_threadpool(_rebuild, entry)
         except (FileNotFoundError, RuntimeError) as e:
             error = str(e)
+
+    return render(request, "legs.html", result=result, token=token if entry else None,
+                  error=error, live=False, filename=entry["input_path"].name if entry else "")
+
+
+@router.post("/resolve-amount", response_class=HTMLResponse)
+async def legs_resolve_amount(
+    request: Request,
+    token: str = Form(...),
+    page: int = Form(...),
+    invoice_number: str = Form(""),
+    amount: str = Form(""),
+    _: None = Depends(require_auth),
+):
+    """Corrects one page's OCR'd invoice number and/or its dollar amount —
+    see legs_expenses.apply_manual_overrides for the full reasoning. Both
+    fields are optional but at least one must be filled in:
+      - invoice_number alone re-looks-up the amount from the already-parsed
+        Statement data (no new OCR) — the preferred fix when the Statement
+        does have the real invoice.
+      - amount (with or without invoice_number) asserts the dollar amount
+        directly, straight off the invoice page itself — the per-invoice
+        page is the actual authority here, the Statement is only a
+        cross-reference for the reconciliation warning, not a hard
+        requirement for a page to be billable (2026-09-01 correction).
+    Scoped to this upload session only (kept in PREVIEWS, not a persistent
+    file) since this is scan-specific correction, not a recurring
+    client-name issue that would apply to next month's statement too."""
+    from web.app import render
+
+    entry = PREVIEWS.get(token)
+    result = None
+    error = None
+    if not entry:
+        error = "This preview has expired — please upload the file again."
+    elif not invoice_number.strip() and not amount.strip():
+        error = "Enter an invoice number and/or an amount before saving."
+    else:
+        parsed_amount: float | None = None
+        if amount.strip():
+            try:
+                parsed_amount = float(amount.strip().replace("$", "").replace(",", ""))
+            except ValueError:
+                error = f"'{amount}' isn't a valid dollar amount."
+        if not error:
+            if invoice_number.strip():
+                entry["invoice_number_overrides"][page] = invoice_number.strip()
+            if parsed_amount is not None:
+                entry["amount_overrides"][page] = parsed_amount
+            try:
+                result = await run_in_threadpool(_rebuild, entry)
+            except (FileNotFoundError, RuntimeError) as e:
+                error = str(e)
 
     return render(request, "legs.html", result=result, token=token if entry else None,
                   error=error, live=False, filename=entry["input_path"].name if entry else "")
@@ -147,7 +260,7 @@ async def legs_confirm(
         error = "This preview has expired — please upload the file again."
     else:
         try:
-            result = await run_in_threadpool(legs_expenses.run_pipeline, entry["input_path"], dry_run=False)
+            result = await run_in_threadpool(_confirm_and_post, entry)
         except (FileNotFoundError, RuntimeError) as e:
             error = str(e)
 
