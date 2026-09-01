@@ -121,6 +121,7 @@ from web.routes_collections import router as collections_router  # noqa: E402
 from web.routes_equalizer import router as equalizer_router  # noqa: E402
 from web.routes_legs import router as legs_router  # noqa: E402
 from web.routes_moore_marsden import router as moore_marsden_router  # noqa: E402
+from web.routes_papercut import router as papercut_router  # noqa: E402
 from web.routes_printer import router as printer_router  # noqa: E402
 from web.routes_ringcentral import router as ringcentral_router  # noqa: E402
 from web.routes_staff_unbilled import router as staff_unbilled_router  # noqa: E402
@@ -132,6 +133,7 @@ app.include_router(collections_router)
 app.include_router(equalizer_router)
 app.include_router(legs_router)
 app.include_router(moore_marsden_router)
+app.include_router(papercut_router)
 app.include_router(printer_router)
 app.include_router(ringcentral_router)
 app.include_router(staff_unbilled_router)
