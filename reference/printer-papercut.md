@@ -18,7 +18,27 @@
 
 **Grouping:** All PRINT + SCAN + COPY aggregated into one ExpenseEntry per matter.
 
-**Date:** Extracted from the report header comment ("To date = ...").
+**Date:** Extracted from the report header's From/To range — the billing month is
+whichever calendar month has the majority of days inside that range, not just the
+"To date" month's own (`extract_report_date()`, fixed 2026-09-01). Papercut's export
+window doesn't reliably land on a clean calendar-month boundary — real case that
+mislabeled a whole month's expenses: "From date = Aug 2, 2026 ..., To date = Sep 1,
+2026" was actually August's usage (30 of its 31 days), not September; taking "To date"
+alone would have posted it as "Sep 2026".
+
+**Report period sanity check (added 2026-09-01):** `check_report_period()` separately
+flags anything other than the full prior calendar month as a banner in the dashboard
+preview (`period_ok`/`period_note` on `RunResult`) — this import always represents last
+month's usage, run early the following month, so a partial pull, the wrong month, or a
+stale re-upload of an old file is worth catching loudly before posting rather than
+silently billing the wrong period. Separate from `extract_report_date()`'s own tolerant
+fallback (which still produces a best-guess date even from an odd range) — this is
+purely an FYI check on top of that, same relationship Legs' reconciliation check has to
+its own posting logic.
+
+**Note text (changed 2026-09-01):** now `"Prints/Copies/Scans — <month>: N pages
+(...)"`, was `"Copies/Printing — ..."` — if grepping old logs/Clio notes for the prior
+wording, check both.
 
 **Outputs:**
 - `output/expenses_YYYY-MM.json` — API payloads (always written)
@@ -46,6 +66,18 @@ uv run src/printer_expenses.py --dry-run
 # 4. Live run
 uv run src/printer_expenses.py
 ```
+
+## Dashboard exception resolution (added 2026-09-01)
+Exceptions previously had no resolution path except editing `MANUAL_MATTER_MAP` in
+source — unlike Bradford/Legs. `/printer` now has the same persisted-override pattern:
+each exception row gets a type-to-filter matter-name search
+(`static/matter_search.js`, same client-side no-per-keystroke-network-call pattern as
+Bradford/Legs — see `reference/invoices.md`) and a Save button that POSTs to
+`/printer/resolve-exception`. That calls `save_persisted_override()`, appending one row
+to `data/printer_manual_matter_map.csv`, then re-runs the dry-run in place so the
+resolved name drops out of the exceptions table. `effective_manual_matter_map()` merges
+that persisted CSV with the in-source `MANUAL_MATTER_MAP` at run time — the code
+constant wins on conflict, since it's the deliberately-reviewed one.
 
 ## Exception types
 - **No matching open matter** — client name not found among live open Clio matters
