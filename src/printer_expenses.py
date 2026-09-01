@@ -20,6 +20,7 @@ Options:
 """
 
 import argparse
+import calendar
 import csv
 import json
 import logging
@@ -28,7 +29,7 @@ import re
 import sys
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import requests
@@ -37,6 +38,13 @@ from dotenv import load_dotenv
 from matter_matching import fetch_open_matters, index_by_display_name, normalize_name
 
 load_dotenv()
+
+# Overrides added live from the dashboard (matter-search "Save" button) — a
+# data file rather than editing this source file from a web request, same
+# pattern as data/bradford_manual_matter_map.csv / legs_manual_matter_map.csv.
+# Merged with MANUAL_MATTER_MAP at run time; the code constant wins on
+# conflict since it's the deliberately-reviewed one.
+PERSISTED_MATTER_MAP_PATH = Path("data") / "printer_manual_matter_map.csv"
 
 # ---------------------------------------------------------------------------
 # Configuration — edit these as needed
@@ -65,6 +73,43 @@ MANUAL_MATTER_MAP: dict[str, int] = {
     "DONOVAN": 1786827108,  # Clio: DONOVAN, MEGAN
 }
 
+
+def load_persisted_matter_map(path: Path = PERSISTED_MATTER_MAP_PATH) -> dict[str, int]:
+    if not path.exists():
+        return {}
+    out: dict[str, int] = {}
+    with open(path, encoding="utf-8-sig") as f:
+        for row in csv.DictReader(f):
+            name = (row.get("name") or "").strip().upper()
+            matter_id = (row.get("matter_id") or "").strip()
+            if name and matter_id.isdigit():
+                out[name] = int(matter_id)
+    return out
+
+
+def save_persisted_override(name: str, matter_id: int, note: str = "",
+                             path: Path = PERSISTED_MATTER_MAP_PATH) -> None:
+    """Appends one override row, writing a header (and BOM, for Excel) only if
+    the file doesn't exist yet — utf-8-sig on every open() would otherwise
+    write a fresh BOM into the middle of the file on each append."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    is_new = not path.exists()
+    with open(path, "a", newline="", encoding="utf-8") as f:
+        if is_new:
+            f.write("﻿")
+            csv.writer(f).writerow(["name", "matter_id", "note", "added_at"])
+        csv.writer(f).writerow([
+            name.strip().upper(), matter_id, note,
+            datetime.now().isoformat(timespec="seconds"),
+        ])
+    logging.info("Persisted override: %s -> matter %s", name.strip().upper(), matter_id)
+
+
+def effective_manual_matter_map() -> dict[str, int]:
+    combined = load_persisted_matter_map()
+    combined.update(MANUAL_MATTER_MAP)
+    return combined
+
 # ---------------------------------------------------------------------------
 # Clio API
 # ---------------------------------------------------------------------------
@@ -80,19 +125,79 @@ ACTIVITIES_ENDPOINT = f"{BASE_URL}/api/v4/activities.json"
 
 def extract_report_date(header_line: str) -> str:
     """
-    Parse the Papercut comment line to extract the report end date as ISO-8601.
-    Expected format: '# From date = May 31, 2026 ..., To date = Jun 30, 2026 ...'
-    Returns e.g. '2026-06-30'. Falls back to today if not parseable.
+    Parse the Papercut comment line's From/To date range and return the
+    ISO-8601 last day of whichever month has the most days inside that
+    range — the billing month.
+
+    Not simply the "To date"'s own month: Papercut's export window doesn't
+    reliably land on a clean calendar-month boundary. Real example that
+    mislabeled a whole month's expenses: 'From date = Aug 2, 2026 ...,
+    To date = Sep 1, 2026 ...' — the report was pulled one day into
+    September, but 30 of its 31 days are August's. Taking "To date" alone
+    would post it as "Sep 2026". Comparing how many days of the range fall
+    in each month picks August here, while still correctly picking June for
+    a cleanly-aligned range like 'From date = May 31 ..., To date = Jun 30'
+    (1 day in May, 30 in June).
     """
-    match = re.search(r"To date\s*=\s*([A-Za-z]+\s+\d+,\s*\d{4})", header_line)
+    match = re.search(
+        r"From date\s*=\s*([A-Za-z]+\s+\d+,\s*\d{4}).*?To date\s*=\s*([A-Za-z]+\s+\d+,\s*\d{4})",
+        header_line,
+    )
     if match:
         try:
-            dt = datetime.strptime(match.group(1).strip(), "%b %d, %Y")
-            return dt.strftime("%Y-%m-%d")
+            from_dt = datetime.strptime(match.group(1).strip(), "%b %d, %Y")
+            to_dt = datetime.strptime(match.group(2).strip(), "%b %d, %Y")
         except ValueError:
             pass
+        else:
+            month_end_from = datetime(from_dt.year, from_dt.month,
+                                       calendar.monthrange(from_dt.year, from_dt.month)[1])
+            days_in_from_month = (min(to_dt, month_end_from) - from_dt).days + 1
+            month_start_to = datetime(to_dt.year, to_dt.month, 1)
+            days_in_to_month = (to_dt - max(from_dt, month_start_to)).days + 1
+            anchor = from_dt if days_in_from_month >= days_in_to_month else to_dt
+            last_day = calendar.monthrange(anchor.year, anchor.month)[1]
+            return datetime(anchor.year, anchor.month, last_day).strftime("%Y-%m-%d")
     logging.warning("Could not parse report date from header; using today.")
     return datetime.today().strftime("%Y-%m-%d")
+
+
+def check_report_period(header_line: str) -> tuple[bool, str]:
+    """Sanity-checks the header's From/To range against the full prior
+    calendar month — this import always represents last month's usage, run
+    early the following month, so anything else (a partial pull, the wrong
+    month, a stale re-upload of an old file) is worth flagging loudly before
+    posting rather than silently billing the wrong period. Separate from
+    extract_report_date()'s own tolerant fallback (which still produces a
+    best-guess date even from an odd range) — this is purely an FYI check on
+    top of that, same relationship as Legs' reconciliation check."""
+    today = datetime.today()
+    first_of_this_month = datetime(today.year, today.month, 1)
+    last_of_prev_month = first_of_this_month - timedelta(days=1)
+    first_of_prev_month = datetime(last_of_prev_month.year, last_of_prev_month.month, 1)
+    expected_label = first_of_prev_month.strftime("%b %Y")
+
+    match = re.search(
+        r"From date\s*=\s*([A-Za-z]+\s+\d+,\s*\d{4}).*?To date\s*=\s*([A-Za-z]+\s+\d+,\s*\d{4})",
+        header_line,
+    )
+    if not match:
+        return False, f"Could not read the report period from the file header — expected {expected_label}."
+
+    try:
+        from_dt = datetime.strptime(match.group(1).strip(), "%b %d, %Y")
+        to_dt = datetime.strptime(match.group(2).strip(), "%b %d, %Y")
+    except ValueError:
+        return False, f"Could not read the report period from the file header — expected {expected_label}."
+
+    if from_dt != first_of_prev_month or to_dt != last_of_prev_month:
+        return False, (
+            f"Report period is {from_dt.strftime('%b %d, %Y')} to {to_dt.strftime('%b %d, %Y')} — "
+            f"expected the full prior month, {first_of_prev_month.strftime('%b %d')} to "
+            f"{last_of_prev_month.strftime('%b %d, %Y')}. Double-check this is the right file "
+            f"before posting."
+        )
+    return True, f"Report period matches the expected prior month ({expected_label})."
 
 
 def setup_logging(log_dir: Path) -> None:
@@ -114,15 +219,17 @@ def setup_logging(log_dir: Path) -> None:
 # Parse printer report
 # ---------------------------------------------------------------------------
 
-def parse_printer_report(csv_path: Path) -> tuple[str, dict[str, dict]]:
+def parse_printer_report(csv_path: Path) -> tuple[str, bool, str, dict[str, dict]]:
     """
-    Returns (report_date_iso, aggregated) where aggregated is:
+    Returns (report_date_iso, period_ok, period_note, aggregated) where
+    aggregated is:
       { normalized_name: { "print": int, "scan": int, "copy": int, "total": int } }
     """
     if not csv_path.exists():
         raise FileNotFoundError(f"Printer CSV not found: {csv_path}")
 
     report_date = datetime.today().strftime("%Y-%m-%d")
+    period_ok, period_note = False, "Could not read the report period from the file header."
     aggregated: dict[str, dict] = {}
 
     with open(csv_path, encoding="utf-8-sig") as f:
@@ -132,6 +239,7 @@ def parse_printer_report(csv_path: Path) -> tuple[str, dict[str, dict]]:
     for line in lines[:2]:
         if "To date" in line:
             report_date = extract_report_date(line)
+            period_ok, period_note = check_report_period(line)
 
     # Find the header row — skip comment lines (may be bare or quoted with #)
     data_lines = [l for l in lines if not l.strip().lstrip('"').lstrip("'").startswith("#")]
@@ -162,7 +270,11 @@ def parse_printer_report(csv_path: Path) -> tuple[str, dict[str, dict]]:
         "Parsed %d client entries from %s (report date: %s)",
         len(aggregated), csv_path, report_date,
     )
-    return report_date, aggregated
+    if period_ok:
+        logging.info("Report period OK: %s", period_note)
+    else:
+        logging.warning("Report period MISMATCH: %s", period_note)
+    return report_date, period_ok, period_note, aggregated
 
 
 # ---------------------------------------------------------------------------
@@ -179,19 +291,21 @@ def build_note(name: str, data: dict, report_date: str) -> str:
     if data["copy"]:
         parts.append(f"Copy: {data['copy']}")
     breakdown = ", ".join(parts)
-    return f"Copies/Printing — {month_label}: {data['total']} pages ({breakdown})"
+    return f"Prints/Copies/Scans — {month_label}: {data['total']} pages ({breakdown})"
 
 
 def match_and_build(
     aggregated: dict,
     report_date: str,
     matters: dict[str, int | None],
+    manual_map: dict[str, int] | None = None,
 ) -> tuple[list[dict], list[dict]]:
     """
     Returns (payloads, exceptions).
     payloads: list of Clio API request body dicts
     exceptions: list of dicts describing unresolved names
     """
+    manual_map = MANUAL_MATTER_MAP if manual_map is None else manual_map
     payloads: list[dict] = []
     exceptions: list[dict] = []
 
@@ -201,8 +315,8 @@ def match_and_build(
             continue
 
         # Manual override takes precedence
-        if name in MANUAL_MATTER_MAP:
-            matter_id = MANUAL_MATTER_MAP[name]
+        if name in manual_map:
+            matter_id = manual_map[name]
             logging.info("%-35s  %4d pages  manual override -> matter %s", name, total, matter_id)
         elif " & " in name:
             exceptions.append({
@@ -298,12 +412,15 @@ class RunResult:
     period: str
     payloads: list[dict] = field(default_factory=list)
     exceptions: list[dict] = field(default_factory=list)
+    period_ok: bool = True
+    period_note: str = ""
     total_clients: int = 0
     posted: int = 0
     failed: int = 0
     payloads_path: Path | None = None
     exceptions_path: Path | None = None
     matter_names: dict[int, str] = field(default_factory=dict)  # matter_id -> display name, for UI
+    all_matters: list[dict] = field(default_factory=list)  # [{"id":, "name":}], for the dashboard's matter-name search
 
 
 def run_pipeline(
@@ -328,7 +445,7 @@ def run_pipeline(
         "Content-Type": "application/json",
     })
 
-    report_date, aggregated = parse_printer_report(input_path)
+    report_date, period_ok, period_note, aggregated = parse_printer_report(input_path)
 
     if matter_filter:
         filter_key = matter_filter.upper()
@@ -337,15 +454,24 @@ def run_pipeline(
             raise RuntimeError(f"--matter filter '{matter_filter}' matched no entries")
         logging.info("--matter filter '%s' matched %d entry/entries", matter_filter, len(aggregated))
 
-    matters = index_by_display_name(fetch_open_matters(session))
-    payloads, exceptions = match_and_build(aggregated, report_date, matters)
+    matters_raw = fetch_open_matters(session)
+    matters = index_by_display_name(matters_raw)
+    payloads, exceptions = match_and_build(aggregated, report_date, matters, effective_manual_matter_map())
 
     output_dir.mkdir(exist_ok=True)
     period = report_date[:7]  # YYYY-MM
     matter_names = {mid: name for name, mid in matters.items() if mid}
+    all_matters = sorted(
+        (
+            {"id": int(m["id"]), "name": m["display_number"]}
+            for m in matters_raw if m.get("display_number")
+        ),
+        key=lambda m: m["name"],
+    )
     result = RunResult(report_date=report_date, period=period, payloads=payloads,
-                        exceptions=exceptions, total_clients=len(aggregated),
-                        matter_names=matter_names)
+                        exceptions=exceptions, period_ok=period_ok, period_note=period_note,
+                        total_clients=len(aggregated),
+                        matter_names=matter_names, all_matters=all_matters)
 
     result.payloads_path = output_dir / f"expenses_{period}.json"
     with open(result.payloads_path, "w", encoding="utf-8") as f:

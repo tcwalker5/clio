@@ -32,13 +32,35 @@
   </div>
   {% endif %}
 
+  {% if not result.period_ok %}
+  <p class="error-text">Report period mismatch — {{ result.period_note }}</p>
+  {% else %}
+  <p class="subtitle">{{ result.period_note }}</p>
+  {% endif %}
+
   {% if result.exceptions %}
   <h3>Exceptions <span class="badge warn">needs manual resolution</span></h3>
   <table>
-    <thead><tr><th>Name</th><th>Pages</th><th>Cost</th><th>Reason</th></tr></thead>
+    <thead><tr><th>Name</th><th>Pages</th><th>Cost</th><th>Reason</th><th>Resolve</th></tr></thead>
     <tbody>
       {% for e in result.exceptions %}
-      <tr><td>{{ e.name }}</td><td>{{ e.total_pages }}</td><td>${{ e.cost }}</td><td>{{ e.reason }}</td></tr>
+      <tr>
+        <td>{{ e.name }}</td><td>{{ e.total_pages }}</td><td>${{ e.cost }}</td><td>{{ e.reason }}</td>
+        <td>
+          {% if token %}
+          <form method="post" action="/printer/resolve-exception" style="display:flex; align-items:center; gap:0.4rem; flex-shrink:0;">
+            <input type="hidden" name="token" value="{{ token }}">
+            <input type="hidden" name="name" value="{{ e.name }}">
+            <input type="hidden" name="matter_id" class="matter-search-id" required>
+            <div class="matter-search">
+              <input type="text" class="matter-search-input" placeholder="Search matter name…" autocomplete="off">
+              <div class="matter-search-results"></div>
+            </div>
+            <button type="submit">Save</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
       {% endfor %}
     </tbody>
   </table>
@@ -73,4 +95,8 @@
 
 <script src="/static/dropzone.js"></script>
 <script>initDropzone('dropzone', 'file-input', 'upload-form');</script>
+{% if result and result.exceptions and token %}
+<script src="/static/matter_search.js"></script>
+<script>initMatterSearch({{ result.all_matters | tojson | safe }});</script>
+{% endif %}
 {% endblock %}
