@@ -180,8 +180,11 @@ def parse_invoice_date(s: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 # Description field pattern: NAME[-; ] DATE [-] ACTIVITY
+# NAME case varies by invoice — some are ALL CAPS ("CASTANEDA"), others Title
+# Case ("Castaneda") — the contractor isn't consistent, so both must match;
+# _parse_desc() uppercases the captured name afterward either way.
 _DESC_RE = re.compile(
-    r'^([A-Z][A-Z ]*?)\s*[;,\-]?\s*(\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4})\s*[-]?\s*(.+)$',
+    r'^([A-Za-z][A-Za-z ]*?)\s*[;,\-]?\s*(\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4})\s*[-]?\s*(.+)$',
     re.DOTALL,
 )
 
