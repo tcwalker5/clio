@@ -99,6 +99,19 @@ Without `conn`, the pipeline still runs and still tags the invoice number into
 every note — it just can't check or record what's already been posted, logged as
 a one-line warning so this isn't a silent gap.
 
+## Reconciling against Clio
+
+Added 2026-09-01, same session as the dedupe log above. The dry-run/live results
+page shows a "Reconcile against Clio" panel: the invoice's date range (earliest to
+latest entry, across every parsed line, not just matched ones) and a breakdown of
+hours — this run's matched total, hours already posted on an earlier run,
+the combined invoice total, and hours still stuck in unresolved exceptions. Staff
+use it as a manual check: filter Clio's own Activities by `User = Pamela Bradford`
+and that date range, sum Duration, and compare against the totals shown. All hours
+are post-rounding (0.1h increments) to match what Clio itself records. On the live
+(posted) page, if any entries failed to post, a warning notes that the hours total
+still includes the failed attempts, not just what actually succeeded.
+
 ## Manual overrides
 Invoice uses only last names. When auto-match fails or is ambiguous, add to
 `MANUAL_MATTER_MAP` at the top of the script:

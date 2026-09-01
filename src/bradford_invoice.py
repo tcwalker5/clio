@@ -707,6 +707,12 @@ class RunResult:
     exceptions_path: Path | None = None
     matter_names: dict[int, str] = field(default_factory=dict)  # matter_id -> last name, for UI
     invoice_number: str | None = None
+    # Reconciliation helpers — see "Reconciling against Clio" in reference/invoices.md.
+    # Hours are all post-rounding (0.1h increments), matching what Clio itself records.
+    matched_hours: float = 0.0       # payloads, this run's own to-post total
+    already_posted_hours: float = 0.0  # skipped — posted on an earlier run of this invoice
+    exception_hours: float = 0.0     # unresolved — not posted, needs a matter match first
+    date_range: tuple[str, str] | None = None  # (earliest, latest) date across every parsed entry
 
 
 def run_pipeline(
@@ -761,6 +767,9 @@ def run_pipeline(
         if not all_entries:
             raise RuntimeError(f"No entries matched --matter '{matter_filter}'")
 
+    dates = [e.date for e in all_entries]
+    date_range = (min(dates), max(dates)) if dates else None
+
     session = requests.Session()
     session.headers.update({
         "Authorization": f"Bearer {ACCESS_TOKEN}",
@@ -779,12 +788,18 @@ def run_pipeline(
     if skipped:
         logging.info("Skipped %d entries already posted from invoice %s", len(skipped), invoice_number)
 
+    matched_hours = sum(p["data"]["quantity"] / 3600 for p in payloads)
+    already_posted_hours = sum(s["hours"] for s in skipped)
+    exception_hours = sum(e["hours"] for e in exceptions)
+
     output_dir.mkdir(exist_ok=True)
     stem = re.sub(r"[^\w\-]", "_", input_path.stem)
     matter_names = {mid: name for name, mid in matters.items() if mid}
     result = RunResult(stem=stem, payloads=payloads, exceptions=exceptions, skipped=skipped,
                         total_entries=len(all_entries), matter_names=matter_names,
-                        invoice_number=invoice_number)
+                        invoice_number=invoice_number, matched_hours=matched_hours,
+                        already_posted_hours=already_posted_hours, exception_hours=exception_hours,
+                        date_range=date_range)
 
     result.payloads_path = output_dir / f"{stem}_payloads.json"
     with open(result.payloads_path, "w", encoding="utf-8") as f:
@@ -802,10 +817,11 @@ def run_pipeline(
             w.writerows(exceptions)
         logging.warning("Wrote %d exceptions -> %s", len(exceptions), result.exceptions_path)
 
-    total_hrs = sum(p["data"]["quantity"] / 3600 for p in payloads)
     logging.info(
-        "Summary: %d entries / %d payloads / %d skipped (already posted) / %d exceptions  |  %.2f total hours",
-        len(all_entries), len(payloads), len(skipped), len(exceptions), total_hrs,
+        "Summary: %d entries / %d payloads / %d skipped (already posted) / %d exceptions  |  "
+        "%.2f matched hours  |  date range %s",
+        len(all_entries), len(payloads), len(skipped), len(exceptions), matched_hours,
+        f"{date_range[0]} to {date_range[1]}" if date_range else "n/a",
     )
 
     if not payloads or dry_run:

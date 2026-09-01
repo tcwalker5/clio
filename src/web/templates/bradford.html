@@ -33,6 +33,32 @@
   </div>
   {% endif %}
 
+  {% if result.date_range %}
+  <div class="panel" style="margin-top:1rem;">
+    <h3>Reconcile against Clio</h3>
+    <p>In Clio: <strong>Activities</strong> &rarr; filter <strong>User = Pamela Bradford</strong>,
+      <strong>Date {{ result.date_range[0] }} to {{ result.date_range[1] }}</strong> &rarr; sum Duration,
+      and compare against the totals below.</p>
+    <div class="summary-bar">
+      <div class="summary-stat">
+        <strong>{{ "%.2f"|format(result.matched_hours) }}</strong>
+        {{ "hours posted this run" if live else "hours to post" }}
+      </div>
+      {% if result.already_posted_hours %}
+      <div class="summary-stat"><strong>{{ "%.2f"|format(result.already_posted_hours) }}</strong>hours already posted (earlier run)</div>
+      <div class="summary-stat"><strong>{{ "%.2f"|format(result.matched_hours + result.already_posted_hours) }}</strong>total for this invoice in Clio</div>
+      {% endif %}
+      {% if result.exception_hours %}
+      <div class="summary-stat"><strong>{{ "%.2f"|format(result.exception_hours) }}</strong>hours in unresolved exceptions (not posted)</div>
+      {% endif %}
+    </div>
+    {% if live and result.failed %}
+    <p class="error-text">{{ result.failed }} entries failed to post — the hours total above includes
+      the attempted amount, not just what actually succeeded. Check the log before reconciling.</p>
+    {% endif %}
+  </div>
+  {% endif %}
+
   {% if result.skipped %}
   <h3>Already posted <span class="badge ok">skipped — no duplicate will be sent</span></h3>
   <table>
