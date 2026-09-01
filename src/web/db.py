@@ -27,8 +27,10 @@ import logging
 import sqlite3
 from pathlib import Path
 
+import bradford_invoice
 import collections_monitor
 import equalizer.store as equalizer_store
+import generate_papercut_accounts
 import moore_marsden.store as moore_marsden_store
 
 DB_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "clio_dashboard.db"
@@ -198,6 +200,8 @@ _FRAGMENTS = [
     ("equalizer", equalizer_store.SCHEMA, equalizer_store.SCHEMA_COLUMNS),
     ("moore_marsden", moore_marsden_store.SCHEMA, moore_marsden_store.SCHEMA_COLUMNS),
     ("collections", collections_monitor.SCHEMA, collections_monitor.SCHEMA_COLUMNS),
+    ("papercut", generate_papercut_accounts.SCHEMA, generate_papercut_accounts.SCHEMA_COLUMNS),
+    ("bradford", bradford_invoice.SCHEMA, bradford_invoice.SCHEMA_COLUMNS),
 ]
 
 

@@ -59,6 +59,46 @@ to Clio (matches Clio's own billing increment; avoids post-upload surprises).
 - `output/{stem}_exceptions.csv` — unmatched client names (if any)
 - `logs/bradford_invoice_YYYYMMDD.log`
 
+## Dedupe — re-importing the same invoice never double-posts
+
+Added 2026-09-01, after a real question about what happens if the same PDF (or a
+corrected reprint of it) gets run through twice. `parse_invoice_number()` reads
+Bradford's own "Invoice # NNNNNN" off page 1 (not the filename — a saved-as name
+could drift without the invoice number itself changing) and `run_pipeline()`
+**hard-fails if it can't find one**, since both dedupe and the note-tagging below
+depend on it.
+
+Every line that's actually posted to Clio is logged to `bradford_posted_entries`
+(`data/clio_dashboard.db`, own schema fragment — see `web/db.py`'s `_FRAGMENTS`),
+keyed by a SHA-256 hash of `(invoice_number, matter_id, date, hours, source, raw
+activity note)`. On the next run of the same invoice, any line whose key is
+already in the log shows up in a separate "Already posted" table in the dry-run
+preview and is silently excluded from what gets posted — not an exception, since
+it isn't a problem to resolve. Hashing per LINE rather than flagging the whole
+invoice as "already imported" means:
+- a partial import (crash/failure/closed browser tab halfway through) only
+  re-posts the lines that never actually succeeded on retry
+- a corrected/resent invoice under the same invoice number still recognizes every
+  *unchanged* line as already-posted — only the actually-different line looks new
+  and gets posted (it does **not** overwrite/replace the old wrong entry in Clio —
+  no such update mechanism exists here or anywhere else in this project; a
+  correction still needs a human to fix the old entry directly in Clio)
+
+Every posted note also gets `" [Inv NNNNNN]"` appended (e.g. `"Telephone call with
+client [Inv 400288]"`) — a separate, simpler feature from the dedupe log itself:
+lets staff trace any Clio time entry back to its source invoice by eye, without
+needing to check the database. The dedupe hash is computed on the *raw* (untagged)
+description so it stays stable regardless of this suffix.
+
+**Dashboard-only, by design — matches `collections_monitor.py`'s action-log
+pattern:** `run_pipeline()` takes an optional `conn: sqlite3.Connection | None`;
+`routes_bradford.py` supplies one (opened on the same worker thread `run_pipeline`
+executes on — see `web/CLAUDE.md`'s Concurrency section on why the connection
+can't be created on the event-loop thread and handed in), the plain CLI does not.
+Without `conn`, the pipeline still runs and still tags the invoice number into
+every note — it just can't check or record what's already been posted, logged as
+a one-line warning so this isn't a silent gap.
+
 ## Manual overrides
 Invoice uses only last names. When auto-match fails or is ambiguous, add to
 `MANUAL_MATTER_MAP` at the top of the script:

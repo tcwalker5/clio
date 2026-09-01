@@ -14,6 +14,7 @@ from fastapi.responses import HTMLResponse
 
 import bradford_invoice
 from web.auth import require_auth
+from web.db import get_connection
 from web.preview_store import PREVIEWS
 
 router = APIRouter(prefix="/bradford", tags=["bradford"])
@@ -23,6 +24,18 @@ DATA_DIR = Path("data")
 
 def _safe_filename(name: str) -> str:
     return Path(name).name
+
+
+def _run_pipeline_with_conn(input_path: Path, dry_run: bool) -> bradford_invoice.RunResult:
+    """Opens the sqlite connection on the SAME thread run_pipeline runs on
+    (called inside run_in_threadpool below) — sqlite3 connections aren't
+    valid across threads, so this can't be created on the event-loop thread
+    and handed in, see web/CLAUDE.md's Concurrency section."""
+    conn = get_connection()
+    try:
+        return bradford_invoice.run_pipeline(input_path, dry_run=dry_run, conn=conn)
+    finally:
+        conn.close()
 
 
 @router.get("", response_class=HTMLResponse)
@@ -48,7 +61,7 @@ async def bradford_preview(
     error = None
     token = None
     try:
-        result = await run_in_threadpool(bradford_invoice.run_pipeline, dest, dry_run=True)
+        result = await run_in_threadpool(_run_pipeline_with_conn, dest, True)
         token = uuid.uuid4().hex
         PREVIEWS[token] = {"input_path": dest}
     except (FileNotFoundError, RuntimeError) as e:
@@ -81,7 +94,7 @@ async def bradford_resolve_exception(
     else:
         bradford_invoice.save_persisted_override(name, matter_id, note)
         try:
-            result = await run_in_threadpool(bradford_invoice.run_pipeline, entry["input_path"], dry_run=True)
+            result = await run_in_threadpool(_run_pipeline_with_conn, entry["input_path"], True)
         except (FileNotFoundError, RuntimeError) as e:
             error = str(e)
 
@@ -104,7 +117,7 @@ async def bradford_confirm(
         error = "This preview has expired — please upload the file again."
     else:
         try:
-            result = await run_in_threadpool(bradford_invoice.run_pipeline, entry["input_path"], dry_run=False)
+            result = await run_in_threadpool(_run_pipeline_with_conn, entry["input_path"], False)
         except (FileNotFoundError, RuntimeError) as e:
             error = str(e)
 

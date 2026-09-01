@@ -23,10 +23,12 @@ Usage:
 import argparse
 import csv
 import difflib
+import hashlib
 import json
 import logging
 import os
 import re
+import sqlite3
 import sys
 import time
 from dataclasses import dataclass, field
@@ -122,6 +124,70 @@ def effective_manual_matter_map() -> dict[str, int]:
 
 
 # ---------------------------------------------------------------------------
+# Dedupe — posted-entry log
+#
+# Own schema fragment (see web/db.py's _apply_fragment), keyed by a content
+# hash of (invoice_number, matter_id, date, hours, source, raw activity note)
+# rather than an invoice-level "already imported" flag — a hash per LINE, not
+# per invoice, so a partial import (crash/failure halfway through) only
+# re-posts the lines that never actually succeeded, and a corrected/resent
+# invoice under the same number still recognizes every unchanged line as
+# already-posted (only the actually-different line looks new).
+#
+# Dashboard-only: the connection is supplied by routes_bradford.py, same
+# pattern as collections_monitor.py's action log — see web/db.py's
+# _FRAGMENTS. The plain CLI (`uv run src/bradford_invoice.py`) still works
+# standalone without one, it just runs without duplicate-entry protection
+# (see run_pipeline's `conn` parameter).
+# ---------------------------------------------------------------------------
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS bradford_posted_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    invoice_number TEXT NOT NULL,
+    entry_key TEXT NOT NULL UNIQUE,
+    matter_id INTEGER NOT NULL,
+    date TEXT NOT NULL,
+    hours REAL NOT NULL,
+    source TEXT NOT NULL,
+    note TEXT NOT NULL,
+    clio_activity_id INTEGER,
+    posted_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_bradford_posted_invoice ON bradford_posted_entries(invoice_number);
+"""
+SCHEMA_COLUMNS = []
+
+
+def _entry_key(invoice_number: str, matter_id: int, date: str, hours: float, source: str, note: str) -> str:
+    raw = "|".join([invoice_number, str(matter_id), date, f"{hours:.2f}", source, note])
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def load_posted_keys(conn: sqlite3.Connection, invoice_number: str) -> set[str]:
+    rows = conn.execute(
+        "SELECT entry_key FROM bradford_posted_entries WHERE invoice_number = ?",
+        (invoice_number,),
+    ).fetchall()
+    return {r[0] for r in rows}
+
+
+def record_posted_entry(
+    conn: sqlite3.Connection, invoice_number: str, matter_id: int, date: str,
+    hours: float, source: str, note: str, clio_activity_id: int | None,
+) -> None:
+    conn.execute(
+        "INSERT OR IGNORE INTO bradford_posted_entries "
+        "(invoice_number, entry_key, matter_id, date, hours, source, note, clio_activity_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (invoice_number, _entry_key(invoice_number, matter_id, date, hours, source, note),
+         matter_id, date, hours, source, note, clio_activity_id),
+    )
+    conn.commit()
+
+
+# ---------------------------------------------------------------------------
 # Data model
 # ---------------------------------------------------------------------------
 
@@ -170,6 +236,20 @@ def parse_invoice_date(s: str) -> str | None:
         except ValueError:
             pass
     return None
+
+
+# "Law Office of Heidi D. Collier, APC Invoice # 400288" — page 1 header.
+_INVOICE_NUM_RE = re.compile(r'Invoice\s*#\s*(\S+)')
+
+
+def parse_invoice_number(pdf: pdfplumber.PDF) -> str | None:
+    """Bradford's own invoice number, printed once on page 1. This is the key
+    every dedupe/posted-entry record is anchored to — extracted from the PDF
+    text itself, not the filename, since a saved-as name could be typo'd or
+    changed without the invoice number itself changing."""
+    text = pdf.pages[0].extract_text() or ""
+    m = _INVOICE_NUM_RE.search(text)
+    return m.group(1).strip() if m else None
 
 
 # ---------------------------------------------------------------------------
@@ -462,11 +542,15 @@ def build_payloads(
     manual_map: dict[str, int] | None = None,
     pam_rates: dict[int, float] | None = None,
     pam_standard_rate: float | None = None,
-) -> tuple[list[dict], list[dict]]:
+    invoice_number: str | None = None,
+    posted_keys: set[str] | None = None,
+) -> tuple[list[dict], list[dict], list[dict]]:
     manual_map = MANUAL_MATTER_MAP if manual_map is None else manual_map
     pam_rates = pam_rates or {}
+    posted_keys = posted_keys or set()
     payloads: list[dict] = []
     exceptions: list[dict] = []
+    skipped: list[dict] = []
 
     for e in entries:
         name = e.client_name
@@ -510,13 +594,27 @@ def build_payloads(
         if hours_billed != e.hours:
             logging.info("Rounded %s %s: %.4fh -> %.1fh", e.client_name, e.date, e.hours, hours_billed)
 
+        # Dedupe check — keyed on the raw (untagged) description, so a byte-
+        # identical line from a re-uploaded or resent invoice is recognized
+        # as already-posted regardless of what tag gets appended to the note
+        # below. See "Dedupe — posted-entry log" above.
+        if invoice_number:
+            key = _entry_key(invoice_number, matter_id, e.date, hours_billed, e.source, e.description)
+            if key in posted_keys:
+                skipped.append({"name": name, "date": e.date, "hours": hours_billed,
+                                 "source": e.source, "note": e.description})
+                logging.info("[%-10s] %-14s %s  %.2fh  ALREADY POSTED (invoice %s) — skipped",
+                             e.source, name, e.date, hours_billed, invoice_number)
+                continue
+
+        note = f"{e.description} [Inv {invoice_number}]" if invoice_number else e.description
         data: dict = {
             "type":     "TimeEntry",
             "date":     e.date,
             "matter":   {"id": matter_id},
             "user":     {"id": pam_user_id},
             "quantity": round(hours_billed * 3600),  # Clio API v4: seconds
-            "note":     e.description,
+            "note":     note,
         }
         # Attorney entries: omit price — Clio applies PAM's matter rate
         # Paralegal entries: explicit $150/hr
@@ -538,16 +636,30 @@ def build_payloads(
             matter_rate = pam_rates.get(matter_id)
             display_rate = matter_rate if matter_rate is not None else pam_standard_rate
 
-        payloads.append({"data": data, "display_rate": display_rate, "posted_by": PAM_INITIALS})
+        # _dedupe is dashboard-only bookkeeping, like display_rate/posted_by —
+        # never sent to Clio. Carries what record_posted_entry() needs to log
+        # this line once post_entry() confirms it actually succeeded; the raw
+        # (untagged) note is kept here so its hash matches what was checked
+        # against posted_keys above, not the "[Inv ...]"-tagged note in `data`.
+        payloads.append({
+            "data": data, "display_rate": display_rate, "posted_by": PAM_INITIALS,
+            "_dedupe": {
+                "invoice_number": invoice_number, "matter_id": matter_id, "date": e.date,
+                "hours": hours_billed, "source": e.source, "note": e.description,
+            } if invoice_number else None,
+        })
 
-    return payloads, exceptions
+    return payloads, exceptions, skipped
 
 
 # ---------------------------------------------------------------------------
 # Post to Clio
 # ---------------------------------------------------------------------------
 
-def post_entry(session: requests.Session, payload: dict) -> bool:
+def post_entry(session: requests.Session, payload: dict) -> int | None:
+    """Returns the new Clio activity ID on success, None on failure — the ID
+    is recorded into bradford_posted_entries by the caller (run_pipeline),
+    since this function only knows about one HTTP call, not the dedupe log."""
     d            = payload["data"]
     matter_id    = d["matter"]["id"]
     note_preview = d["note"][:50]
@@ -557,10 +669,10 @@ def post_entry(session: requests.Session, payload: dict) -> bool:
         # for the dashboard, which must never reach Clio's API.
         resp = session.post(ACTIVITIES_URL, json={"data": d})
         if resp.status_code in (200, 201):
-            activity_id = resp.json().get("data", {}).get("id", "?")
+            activity_id = resp.json().get("data", {}).get("id")
             logging.info("POSTED  matter=%s  activity=%s  %s",
-                         matter_id, activity_id, note_preview)
-            return True
+                         matter_id, activity_id or "?", note_preview)
+            return activity_id
         elif resp.status_code == 429:
             wait = 60
             m = re.search(r"Retry in (\d+) seconds", resp.text)
@@ -572,10 +684,10 @@ def post_entry(session: requests.Session, payload: dict) -> bool:
         else:
             logging.error("FAILED  matter=%s  status=%s  body=%s",
                           matter_id, resp.status_code, resp.text[:300])
-            return False
+            return None
 
     logging.error("FAILED  matter=%s  gave up after 2 attempts", matter_id)
-    return False
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -587,12 +699,14 @@ class RunResult:
     stem: str
     payloads: list[dict] = field(default_factory=list)
     exceptions: list[dict] = field(default_factory=list)
+    skipped: list[dict] = field(default_factory=list)  # already posted on a prior run of this invoice
     total_entries: int = 0
     posted: int = 0
     failed: int = 0
     payloads_path: Path | None = None
     exceptions_path: Path | None = None
     matter_names: dict[int, str] = field(default_factory=dict)  # matter_id -> last name, for UI
+    invoice_number: str | None = None
 
 
 def run_pipeline(
@@ -600,10 +714,16 @@ def run_pipeline(
     dry_run: bool,
     matter_filter: str = "",
     output_dir: Path = Path("output"),
+    conn: sqlite3.Connection | None = None,
 ) -> RunResult:
     """
     Parse the Bradford invoice PDF, match to Clio matters, write
     payload/exception output files, and (unless dry_run) POST time entries.
+
+    `conn` enables duplicate-entry protection (see "Dedupe — posted-entry
+    log" above) — supplied by routes_bradford.py when called from the
+    dashboard. Without it (plain CLI use), the pipeline still runs, it just
+    can't check or record what's already been posted.
 
     Raises FileNotFoundError / RuntimeError on hard failures instead of
     exiting the process, so it's safe to call from a long-running server.
@@ -614,9 +734,19 @@ def run_pipeline(
         raise RuntimeError("USER_ID_PAM not set in .env")
     if not input_path.exists():
         raise FileNotFoundError(f"PDF not found: {input_path}")
+    if conn is None:
+        logging.warning("No database connection — duplicate-entry protection is unavailable "
+                         "outside the dashboard (invoice number is still tagged into each note).")
 
     logging.info("Reading %s", input_path)
     with pdfplumber.open(input_path) as pdf:
+        invoice_number = parse_invoice_number(pdf)
+        if not invoice_number:
+            raise RuntimeError(
+                f"Could not find 'Invoice #' on page 1 of {input_path.name} — refusing to "
+                "run, since duplicate-entry protection and note-tagging both depend on it."
+            )
+        logging.info("Invoice number: %s", invoice_number)
         attorney_entries = parse_main_invoice(pdf)
         paralegal_entries = parse_paralegal_pages(pdf)
 
@@ -641,15 +771,20 @@ def run_pipeline(
     matters = index_by_last_name(matters_raw)
     pam_rates = index_pam_rate_by_matter_id(matters_raw, PAM_USER_ID)
     pam_standard_rate = fetch_pam_standard_rate(session, PAM_USER_ID)
-    payloads, exceptions = build_payloads(
-        all_entries, matters, PAM_USER_ID, effective_manual_matter_map(), pam_rates, pam_standard_rate
+    posted_keys = load_posted_keys(conn, invoice_number) if conn else set()
+    payloads, exceptions, skipped = build_payloads(
+        all_entries, matters, PAM_USER_ID, effective_manual_matter_map(), pam_rates, pam_standard_rate,
+        invoice_number, posted_keys,
     )
+    if skipped:
+        logging.info("Skipped %d entries already posted from invoice %s", len(skipped), invoice_number)
 
     output_dir.mkdir(exist_ok=True)
     stem = re.sub(r"[^\w\-]", "_", input_path.stem)
     matter_names = {mid: name for name, mid in matters.items() if mid}
-    result = RunResult(stem=stem, payloads=payloads, exceptions=exceptions,
-                        total_entries=len(all_entries), matter_names=matter_names)
+    result = RunResult(stem=stem, payloads=payloads, exceptions=exceptions, skipped=skipped,
+                        total_entries=len(all_entries), matter_names=matter_names,
+                        invoice_number=invoice_number)
 
     result.payloads_path = output_dir / f"{stem}_payloads.json"
     with open(result.payloads_path, "w", encoding="utf-8") as f:
@@ -669,8 +804,8 @@ def run_pipeline(
 
     total_hrs = sum(p["data"]["quantity"] / 3600 for p in payloads)
     logging.info(
-        "Summary: %d entries / %d payloads / %d exceptions  |  %.2f total hours",
-        len(all_entries), len(payloads), len(exceptions), total_hrs,
+        "Summary: %d entries / %d payloads / %d skipped (already posted) / %d exceptions  |  %.2f total hours",
+        len(all_entries), len(payloads), len(skipped), len(exceptions), total_hrs,
     )
 
     if not payloads or dry_run:
@@ -679,8 +814,13 @@ def run_pipeline(
         return result
 
     for payload in payloads:
-        if post_entry(session, payload):
+        activity_id = post_entry(session, payload)
+        if activity_id:
             result.posted += 1
+            dd = payload.get("_dedupe")
+            if conn and dd:
+                record_posted_entry(conn, dd["invoice_number"], dd["matter_id"], dd["date"],
+                                     dd["hours"], dd["source"], dd["note"], activity_id)
         else:
             result.failed += 1
         time.sleep(POST_DELAY)

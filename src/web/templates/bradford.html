@@ -24,12 +24,27 @@
     <div class="summary-stat"><strong>{{ result.failed }}</strong>failed</div>
   </div>
   {% else %}
-  <h2>Dry-run preview — {{ filename }}</h2>
+  <h2>Dry-run preview — {{ filename }}{% if result.invoice_number %} <span class="badge ok">Invoice #{{ result.invoice_number }}</span>{% endif %}</h2>
   <div class="summary-bar">
     <div class="summary-stat"><strong>{{ result.total_entries }}</strong>entries parsed</div>
     <div class="summary-stat"><strong>{{ result.payloads|length }}</strong>matched</div>
+    <div class="summary-stat"><strong>{{ result.skipped|length }}</strong>already posted</div>
     <div class="summary-stat"><strong>{{ result.exceptions|length }}</strong>exceptions</div>
   </div>
+  {% endif %}
+
+  {% if result.skipped %}
+  <h3>Already posted <span class="badge ok">skipped — no duplicate will be sent</span></h3>
+  <table>
+    <thead><tr><th>Client</th><th>Date</th><th>Hours</th><th>Source</th><th>Note</th></tr></thead>
+    <tbody>
+      {% for s in result.skipped %}
+      <tr>
+        <td>{{ s.name }}</td><td>{{ s.date }}</td><td>{{ s.hours }}</td><td>{{ s.source }}</td><td>{{ s.note }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
   {% endif %}
 
   {% if result.exceptions %}
