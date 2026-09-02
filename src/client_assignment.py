@@ -33,6 +33,7 @@ import logging
 import os
 import sys
 import time
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -170,6 +171,38 @@ def fetch_matters_for_assignment(session: requests.Session) -> list[MatterAssign
         ))
     result.sort(key=lambda x: (-x.missing_count, x.display_number))
     return result
+
+
+def _counts_by_name(matters: list[MatterAssignment], name_attr: str, roster_names: list[str]) -> list[tuple[str, int]]:
+    """Case count per person for one field, in roster order, with an
+    "Unassigned" bucket appended if any open matter lacks it — the same
+    kind of gap this whole page exists to surface, not dropped just
+    because this is a summary. Fails loud (not a silent drop) if a matter
+    is assigned to someone outside the fixed roster — see this module's
+    docstring on why the roster is fixed rather than "everyone with
+    subscription_type X"; a name showing up here that isn't in the roster
+    means Clio's data and this list have drifted apart."""
+    seen = Counter(getattr(m, name_attr) for m in matters)
+    unassigned = seen.pop("", 0)
+    unknown = set(seen) - set(roster_names)
+    if unknown:
+        raise RuntimeError(f"Matter(s) assigned to unexpected name(s) not in the fixed roster: {sorted(unknown)}")
+    result = [(name, seen.get(name, 0)) for name in roster_names]
+    if unassigned:
+        result.append(("Unassigned", unassigned))
+    return result
+
+
+def build_caseload(matters: list[MatterAssignment]) -> tuple[list[tuple[str, int]], list[tuple[str, int]]]:
+    """Case count per person for the two roles Ted asked to chart
+    (2026-09-03): Responsible Attorney and Responsible Staff. Originating
+    Attorney is deliberately left out of this — confirmed live it's almost
+    exclusively Heidi Collier in practice (163 of 226 open matters, vs. 3
+    for Dahann Bowers and 59 unset), so a chart of it wouldn't tell staff
+    anything they don't already know."""
+    attorney_counts = _counts_by_name(matters, "responsible_attorney_name", ATTORNEY_NAMES)
+    paralegal_counts = _counts_by_name(matters, "responsible_staff_name", PARALEGAL_NAMES)
+    return attorney_counts, paralegal_counts
 
 
 def update_matter_field(session: requests.Session, matter_id: int, field: str, user_id: int) -> str:

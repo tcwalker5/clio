@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Case Load{% endblock %}
+{% block content %}
+<h1>Case Load</h1>
+<p class="subtitle no-print">Open matters per person, by Responsible Attorney and Responsible Staff. Originating Attorney is left out — it's almost exclusively Heidi Collier in practice, so a chart of it wouldn't tell you anything new. Set/change an assignment on the <a href="/assignments">Client Assignment</a> page.</p>
+
+{% if error %}
+<div class="panel"><p class="error-text">{{ error }}</p></div>
+{% endif %}
+
+{% if attorney_chart is not none %}
+<div class="panel">
+  <button type="button" class="btn secondary no-print" onclick="window.print()" style="margin-bottom:0.75rem;">Print</button>
+
+  <div class="caseload-grid">
+    <div class="caseload-chart">
+      <h3>Attorneys <span class="caseload-subtitle">Responsible Attorney &middot; {{ attorney_chart.total }} matter{{ "s" if attorney_chart.total != 1 else "" }}</span></h3>
+      <svg viewBox="0 0 200 200" width="220" height="220" role="img" aria-label="Case load by Responsible Attorney">
+        {% for s in attorney_chart.slices %}
+        <path d="{{ s.path }}" fill="{{ s.color }}" stroke="var(--panel)" stroke-width="2"><title>{{ s.name }}: {{ s.count }} ({{ s.percent }}%)</title></path>
+        {% endfor %}
+      </svg>
+      <ul class="caseload-legend">
+        {% for row in attorney_chart.legend %}
+        <li><span class="swatch" style="background:{{ row.color }};"></span><span class="caseload-name">{{ row.name }}</span><span class="caseload-count">{{ row.count }}</span><span class="caseload-percent">{{ row.percent }}%</span></li>
+        {% endfor %}
+      </ul>
+    </div>
+
+    <div class="caseload-chart">
+      <h3>Paralegals <span class="caseload-subtitle">Responsible Staff &middot; {{ paralegal_chart.total }} matter{{ "s" if paralegal_chart.total != 1 else "" }}</span></h3>
+      <svg viewBox="0 0 200 200" width="220" height="220" role="img" aria-label="Case load by Responsible Staff">
+        {% for s in paralegal_chart.slices %}
+        <path d="{{ s.path }}" fill="{{ s.color }}" stroke="var(--panel)" stroke-width="2"><title>{{ s.name }}: {{ s.count }} ({{ s.percent }}%)</title></path>
+        {% endfor %}
+      </svg>
+      <ul class="caseload-legend">
+        {% for row in paralegal_chart.legend %}
+        <li><span class="swatch" style="background:{{ row.color }};"></span><span class="caseload-name">{{ row.name }}</span><span class="caseload-count">{{ row.count }}</span><span class="caseload-percent">{{ row.percent }}%</span></li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+</div>
+
+<style>
+.caseload-grid { display: flex; gap: 2.5rem; flex-wrap: wrap; }
+.caseload-chart { min-width: 240px; }
+.caseload-chart h3 { margin: 0 0 0.9rem; font-size: 1rem; }
+.caseload-subtitle { display: block; margin-top: 0.15rem; font-size: 0.8rem; font-weight: 400; color: var(--text-muted); }
+.caseload-legend { list-style: none; margin: 1rem 0 0; padding: 0; font-size: 0.9rem; max-width: 220px; }
+.caseload-legend li { display: flex; align-items: center; gap: 0.5rem; padding: 0.25rem 0; border-bottom: 1px solid var(--border); }
+.caseload-legend li:last-child { border-bottom: none; }
+.caseload-legend .swatch { width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0; }
+.caseload-legend .caseload-name { flex: 1; }
+.caseload-legend .caseload-count { font-weight: 600; }
+.caseload-legend .caseload-percent { color: var(--text-muted); font-size: 0.8rem; width: 2.5rem; text-align: right; }
+
+@media print {
+  .no-print, header.topbar { display: none !important; }
+  .panel { border: none; padding: 0; }
+  body { background: #fff; color: #000; }
+  .caseload-legend li { border-color: #ccc; }
+}
+</style>
+{% endif %}
+{% endblock %}
