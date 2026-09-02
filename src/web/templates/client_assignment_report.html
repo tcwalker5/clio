@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Client Assignment Report{% endblock %}
+{% block content %}
+<h1>Client Assignment Report</h1>
+<p class="subtitle no-print">{% if view == "missing" %}Open matters still missing at least one assignment.{% else %}Every open matter, with its current assignments.{% endif %} Set/change an assignment on the <a href="/assignments">Client Assignment</a> page; this view is for printing/review.</p>
+
+{% if error %}
+<div class="panel"><p class="error-text">{{ error }}</p></div>
+{% endif %}
+
+{% if matters is not none %}
+<div class="panel">
+  <button type="button" class="btn secondary no-print" onclick="window.print()" style="margin-bottom:0.75rem;">Print</button>
+
+  {% if matters %}
+  <div style="overflow-x:auto;">
+  <table class="nowrap" id="report-table">
+    <thead><tr>
+      <th>Matter</th><th>Client</th><th>Responsible Attorney</th><th>Originating Attorney</th><th>Responsible Staff</th>
+    </tr></thead>
+    <tbody>
+      {% for m in matters %}
+      <tr>
+        <td>{{ m.display_number }}</td>
+        <td>{{ m.client_name }}</td>
+        <td>{{ m.responsible_attorney_name or "—" }}</td>
+        <td>{{ m.originating_attorney_name or "—" }}</td>
+        <td>{{ m.responsible_staff_name or "—" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="subtitle">{% if view == "missing" %}Nothing missing an assignment right now.{% else %}No open matters.{% endif %}</p>
+  {% endif %}
+</div>
+
+<style>
+@media print {
+  .no-print, header.topbar { display: none !important; }
+  .panel { border: none; padding: 0; }
+  body { background: #fff; color: #000; }
+  table.nowrap th, table.nowrap td { color: #000; border-color: #ccc; }
+}
+</style>
+{% endif %}
+{% endblock %}

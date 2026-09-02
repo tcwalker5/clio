@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block title %}Client Assignment{% endblock %}
+{% block content %}
+<h1>Client Assignment</h1>
+<p class="subtitle">Open matters missing a Responsible Attorney, Originating Attorney, or Responsible Staff assignment. Pick a name from any dropdown to save it immediately to Clio — note that a field can be reassigned later.</p>
+
+{% if error %}
+<div class="panel"><p class="error-text">{{ error }}</p></div>
+{% endif %}
+
+{% if matters is not none %}
+<div class="panel" id="results">
+  <div class="summary-bar">
+    <div class="summary-stat"><strong>{{ matters|length }}</strong>open matter(s)</div>
+    <div class="summary-stat" id="missing-stat"><strong>{{ missing_count }}</strong>missing an assignment</div>
+  </div>
+
+  <div style="display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap;margin-bottom:0.75rem;">
+    <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.9rem;">
+      <input type="checkbox" id="missing-only" checked onchange="filterResults()">
+      Show only matters missing an assignment
+    </label>
+    <a class="btn secondary" href="/assignments/report?view=missing" target="_blank">Print unassigned only</a>
+    <a class="btn secondary" href="/assignments/report?view=all" target="_blank">Print full list</a>
+  </div>
+
+  {% if matters %}
+  <div style="overflow-x:auto;">
+  <table class="nowrap" id="assignments-table">
+    <thead><tr>
+      <th>Matter</th>
+      <th>Client</th>
+      <th>Responsible Attorney</th>
+      <th>Originating Attorney</th>
+      <th>Responsible Staff</th>
+      <th>Status</th>
+    </tr></thead>
+    <tbody>
+      {% for m in matters %}
+      <tr data-missing="{{ 'yes' if m.missing_any else 'no' }}">
+        <td>{{ m.display_number }}</td>
+        <td>{{ m.client_name }}</td>
+        <td>
+          <select class="assign-select" data-matter-id="{{ m.matter_id }}" data-field="responsible_attorney" onchange="setAssignment(this)" style="padding:0.3rem 0.4rem;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text);font-size:0.85rem;">
+            <option value="" {% if not m.responsible_attorney_id %}selected{% endif %} disabled>— Select —</option>
+            {% for a in attorneys %}
+            <option value="{{ a.id }}" {% if a.id == m.responsible_attorney_id %}selected{% endif %}>{{ a.name }}</option>
+            {% endfor %}
+          </select>
+        </td>
+        <td>
+          <select class="assign-select" data-matter-id="{{ m.matter_id }}" data-field="originating_attorney" onchange="setAssignment(this)" style="padding:0.3rem 0.4rem;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text);font-size:0.85rem;">
+            <option value="" {% if not m.originating_attorney_id %}selected{% endif %} disabled>— Select —</option>
+            {% for a in attorneys %}
+            <option value="{{ a.id }}" {% if a.id == m.originating_attorney_id %}selected{% endif %}>{{ a.name }}</option>
+            {% endfor %}
+          </select>
+        </td>
+        <td>
+          <select class="assign-select" data-matter-id="{{ m.matter_id }}" data-field="responsible_staff" onchange="setAssignment(this)" style="padding:0.3rem 0.4rem;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text);font-size:0.85rem;">
+            <option value="" {% if not m.responsible_staff_id %}selected{% endif %} disabled>— Select —</option>
+            {% for p in paralegals %}
+            <option value="{{ p.id }}" {% if p.id == m.responsible_staff_id %}selected{% endif %}>{{ p.name }}</option>
+            {% endfor %}
+          </select>
+        </td>
+        <td class="status-cell">
+          {% if m.missing_any %}<span class="badge warn">{{ m.missing_count }} missing</span>
+          {% else %}<span class="badge ok">Complete</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="subtitle">No open matters.</p>
+  {% endif %}
+</div>
+<script>
+async function setAssignment(select) {
+  const matterId = select.dataset.matterId;
+  const field = select.dataset.field;
+  const userId = select.value;
+  if (!userId) return;
+  select.disabled = true;
+  try {
+    const resp = await fetch("/assignments/set", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: `matter_id=${encodeURIComponent(matterId)}&field=${encodeURIComponent(field)}&user_id=${encodeURIComponent(userId)}`,
+    });
+    const body = await resp.json();
+    select.disabled = false;
+    if (resp.ok && body.success) {
+      updateRowStatus(select.closest("tr"));
+    } else {
+      alert(body.error || "Couldn't save — try again.");
+    }
+  } catch (e) {
+    select.disabled = false;
+    alert("Couldn't save — try again.");
+  }
+}
+
+// No server round-trip needed to know a row's new status — every field that
+// can go missing lives right there in the row's own <select> elements.
+function updateRowStatus(row) {
+  const selects = row.querySelectorAll("select.assign-select");
+  let missing = 0;
+  selects.forEach((s) => { if (!s.value) missing += 1; });
+  const wasMissing = row.dataset.missing === "yes";
+  row.dataset.missing = missing === 0 ? "no" : "yes";
+  row.querySelector(".status-cell").innerHTML = missing === 0
+    ? '<span class="badge ok">Complete</span>'
+    : `<span class="badge warn">${missing} missing</span>`;
+
+  if (wasMissing !== (missing > 0)) {
+    const stat = document.querySelector("#missing-stat strong");
+    const delta = missing > 0 ? 0 : -1;  // a row only ever moves missing -> complete here (fields can't be cleared once set)
+    stat.textContent = String(parseInt(stat.textContent, 10) + delta);
+  }
+  filterResults();
+}
+
+function filterResults() {
+  const onlyMissing = document.getElementById("missing-only").checked;
+  document.querySelectorAll("#assignments-table tbody tr[data-missing]").forEach((row) => {
+    row.style.display = (onlyMissing && row.dataset.missing === "no") ? "none" : "";
+  });
+}
+filterResults();
+</script>
+{% endif %}
+{% endblock %}
