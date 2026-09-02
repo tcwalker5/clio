@@ -44,7 +44,7 @@ BASE_URL = os.getenv("CLIO_BASE_URL", "https://app.clio.com").rstrip("/")
 ACCESS_TOKEN = os.getenv("CLIO_ACCESS_TOKEN", "")
 
 BILLS_ENDPOINT = f"{BASE_URL}/api/v4/bills.json"
-BILLS_FIELDS = "id,number,issued_at,due_at,total,balance,client{id,name},matters{id,display_number}"
+BILLS_FIELDS = "id,number,issued_at,due_at,total,balance,kind,client{id,name},matters{id,display_number}"
 BILL_STATE = "awaiting_payment"
 
 PAGE_SIZE = 200
@@ -173,6 +173,37 @@ class UnpaidBill:
     due_at: str | None
     total: float
     balance: float
+    kind: str = ""  # Clio's own Bill.kind — "trust_kind" for a trust deposit/replenishment request, "revenue_kind" for billed work
+
+    @property
+    def is_trust_request(self) -> bool:
+        """A trust_kind Bill isn't payment for work already done — it's a
+        request for money to be held for FUTURE work, the same category
+        trust_monitor.py's (currently blocked) TrustRequest covers. Ted,
+        2026-09-02: a trust_kind bill with no matter is typically a new
+        client's initial deposit and isn't subject to collections at all;
+        one tied to a matter is typically a replenishment request. Either
+        way it must never be treated as overdue AR — see `overdue` below."""
+        return self.kind == "trust_kind"
+
+    @property
+    def trust_label(self) -> str | None:
+        if not self.is_trust_request:
+            return None
+        return "New client retainer" if self.matter_id is None else "Trust replenishment request"
+
+    @property
+    def category(self) -> str:
+        """The three buckets Ted actually cares about (2026-09-02), most to
+        least urgent: "earned" (billed work, real AR — the whole point of
+        this page), "replenishment" (a matter's trust top-up — money we
+        care about getting but haven't earned yet), "new_trust" (a brand
+        new client's initial retainer deposit — not subject to collections
+        at all). Computed per BILL, not per matter, since one matter can
+        carry both an earned invoice and a trust top-up bill at once."""
+        if not self.is_trust_request:
+            return "earned"
+        return "new_trust" if self.matter_id is None else "replenishment"
 
     @property
     def days_overdue(self) -> int:
@@ -183,6 +214,8 @@ class UnpaidBill:
 
     @property
     def overdue(self) -> bool:
+        if self.is_trust_request:
+            return False
         return self.days_overdue > 0
 
 
@@ -206,12 +239,36 @@ class MatterBillSummary:
         return sum(b.balance for b in self.bills)
 
     @property
+    def earned_balance(self) -> float:
+        """The only figure that's actually collections AR — see UnpaidBill.category.
+        A matter with both an earned invoice and a trust top-up bill splits
+        across this and replenishment_balance/new_trust_balance below rather
+        than being reported as one blended total_balance."""
+        return sum(b.balance for b in self.bills if b.category == "earned")
+
+    @property
+    def replenishment_balance(self) -> float:
+        return sum(b.balance for b in self.bills if b.category == "replenishment")
+
+    @property
+    def new_trust_balance(self) -> float:
+        return sum(b.balance for b in self.bills if b.category == "new_trust")
+
+    @property
     def oldest_issued_at(self) -> str:
         return min((b.issued_at for b in self.bills if b.issued_at), default="")
 
     @property
     def max_days_overdue(self) -> int:
-        return max((b.days_overdue for b in self.bills), default=0)
+        return max((b.days_overdue for b in self.bills if b.overdue), default=0)
+
+    @property
+    def all_trust(self) -> bool:
+        """True if every one of this matter's/client's unpaid bills is a
+        trust request rather than billed work — see UnpaidBill.is_trust_request.
+        Used to badge the whole summary row as a trust request instead of
+        past-due/current, and to keep it out of the collections $ totals."""
+        return all(b.is_trust_request for b in self.bills)
 
     @property
     def overdue(self) -> bool:
@@ -278,6 +335,7 @@ def fetch_unpaid_bills(session: requests.Session) -> list[UnpaidBill]:
                 due_at=b.get("due_at"),
                 total=float(b.get("total") or 0),
                 balance=float(b.get("balance") or 0),
+                kind=b.get("kind", ""),
             ))
         next_url = (body.get("meta") or {}).get("paging", {}).get("next")
         logging.info("Fetched unpaid bills page %d (%d so far)", page, len(bills))
@@ -291,11 +349,11 @@ def write_report_csv(bills: list[UnpaidBill], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["Matter", "Client", "Bill #", "Issued", "Due", "Days Overdue", "Balance"])
+        writer.writerow(["Matter", "Client", "Bill #", "Type", "Issued", "Due", "Days Overdue", "Balance"])
         for b in sorted(bills, key=lambda b: (-b.days_overdue, -b.balance)):
             writer.writerow([
-                b.display_number, b.client_name, b.number, b.issued_at, b.due_at or "",
-                b.days_overdue, f"{b.balance:.2f}",
+                b.display_number, b.client_name, b.number, b.trust_label or "Bill", b.issued_at, b.due_at or "",
+                b.days_overdue if not b.is_trust_request else "", f"{b.balance:.2f}",
             ])
 
 

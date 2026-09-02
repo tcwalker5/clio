@@ -238,6 +238,40 @@ before it's printed) and in the print stylesheet, `tr.matter-row`/`tr.bill-subro
 Before this they read identically, with no visual separation between one matter's block
 and the next.
 
+**Three bill categories, not one flat "unpaid bill" list (added 2026-09-02, Ted):**
+a real Clio quirk surfaced while investigating a bill with no matter shown (JENNIFER
+ROOF, bill #30285, $5,000) — it had no matter linked, but Clio's `Bill.kind` field
+(`revenue_kind` vs `trust_kind`) and `type` (`MatterBill` vs `ClientBill`) reveal it's
+not billed work at all, it's a trust request. Confirmed live across all 233 current
+unpaid bills: 219 are `revenue_kind` (billed work, always `MatterBill`), 14 are
+`trust_kind` — 10 tied to a matter (`MatterBill`, a trust replenishment on an existing
+matter) and 4 with no matter (`ClientBill`, a brand new client's initial retainer).
+`UnpaidBill.category` (`"earned"` / `"replenishment"` / `"new_trust"`) and
+`UnpaidBill.overdue` (always `False` for a trust-kind bill, regardless of `due_at`) are
+computed **per bill, not per matter** — a matter can carry both an earned invoice and a
+trust top-up bill at once (confirmed live: SUAREZ/RANDS/DONOVAN/STLUKA all had exactly
+this mix), so grouping by matter alone couldn't separate them.
+
+Nothing is dropped from the table — same show-everything-and-badge convention as the
+rest of this doc — but the three categories are kept out of each other's totals:
+- **Earned** (billed work with a balance due) — the actual collections AR, this page's
+  "earned & owed" headline figure and the only thing that drives `overdue`/the past-due
+  badge/the overdue-only filter.
+- **Replenishment** — a trust top-up request on an *existing* matter. Care about it, but
+  it isn't earned yet, so it's excluded from the earned total and never shown as past due.
+- **New client retainer** — a brand new client's initial deposit (no matter yet). Not
+  subject to collections at all, per Ted.
+
+The header's summary bar (`/collections`) is now exactly three dollar figures (earned &
+owed / replenishment / new client retainers) — the older matter-count/past-due-count
+stats were removed 2026-09-02 at Ted's request ("we do not need a summary"). A
+matter/client row whose bills are entirely one non-earned category gets a "Trust
+request" badge instead of a past-due/current pill (tooltip distinguishes the two
+subtypes); a mixed matter keeps its normal overdue badge (driven by the earned portion)
+and splits its Balance column into an earned figure plus muted "+ $X replenishment" /
+"+ $X new client retainer" lines rather than one blended total. Same three-way split
+applies to the print report's Total Balance column and the CSV's per-bill "Type" column.
+
 **Long Handling text was getting silently cut off on paper (fixed 2026-08-25) —**
 `table.nowrap`'s `white-space: nowrap` plus a printed page's fixed width doesn't wrap
 overflow text, it just clips it with no visible sign anything was truncated: "Claim as

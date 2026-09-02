@@ -71,11 +71,22 @@ async def collections_home(request: Request, _: None = Depends(require_auth)):
     await run_in_threadpool(_attach_actions, summaries)
 
     overdue_count = sum(1 for s in summaries if s.overdue)
-    total_balance = sum(s.total_balance for s in summaries)
+    # Three categories, most to least urgent (Ted, 2026-09-02) — computed per
+    # BILL via UnpaidBill.category, not per matter, since one matter can carry
+    # both an earned invoice and a trust top-up bill at once: "earned" (billed
+    # work — the actual collections AR, this page's headline $ figure),
+    # "replenishment" (a matter's trust top-up — care about it, but it isn't
+    # earned yet), "new_trust" (a brand new client's initial retainer — not
+    # subject to collections at all). None are dropped from the table, just
+    # kept out of each other's totals so the headline number means one thing.
+    total_balance = sum(b.balance for b in bills if b.category == "earned")
+    replenishment_balance = sum(b.balance for b in bills if b.category == "replenishment")
+    new_trust_balance = sum(b.balance for b in bills if b.category == "new_trust")
 
     return render(
         request, "collections.html", error=None,
         summaries=summaries, overdue_count=overdue_count, total_balance=total_balance,
+        replenishment_balance=replenishment_balance, new_trust_balance=new_trust_balance,
         actions=collections_monitor.COLLECTIONS_ACTIONS,
     )
 

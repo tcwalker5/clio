@@ -11,9 +11,9 @@
 {% if summaries is not none %}
 <div class="panel" id="results">
   <div class="summary-bar">
-    <div class="summary-stat"><strong>{{ summaries|length }}</strong>matter(s) with unpaid bills</div>
-    <div class="summary-stat"><strong>{{ overdue_count }}</strong>past due</div>
-    <div class="summary-stat"><strong>${{ total_balance|money }}</strong>total balance</div>
+    <div class="summary-stat" title="Billed work with a balance due — the actual collections AR"><strong>${{ total_balance|money }}</strong>earned &amp; owed</div>
+    <div class="summary-stat" title="Trust top-up requests on existing matters — we care about these, but they aren't earned yet"><strong>${{ replenishment_balance|money }}</strong>replenishment</div>
+    <div class="summary-stat" title="New clients' initial retainers — not subject to collections"><strong>${{ new_trust_balance|money }}</strong>new client retainers</div>
   </div>
 
   <div style="display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap;margin-bottom:0.75rem;">
@@ -44,12 +44,17 @@
       {% set group_id = "collections-group-" ~ loop.index %}
       <tr class="summary-row" data-overdue="{{ 'yes' if s.overdue else 'no' }}" data-group="{{ group_id }}">
         <td class="expand-icon" style="cursor:pointer;" onclick="toggleDetail('{{ group_id }}')"><span id="collections-icon-{{ loop.index }}">&#9656;</span></td>
-        <td>{% if s.overdue %}<span class="badge err">{{ s.max_days_overdue }}d past due</span>{% else %}<span class="badge ok">Current</span>{% endif %}</td>
-        <td data-sort="{{ s.display_number }}" style="cursor:pointer;" onclick="toggleDetail('{{ group_id }}')">{{ s.display_number }} <span style="color:var(--text-muted);font-size:0.8rem;">({{ s.bills|length }} bill{{ "s" if s.bills|length != 1 else "" }})</span></td>
+        <td>{% if s.all_trust %}<span class="badge warn" title="{{ 'New client retainer — not subject to collections' if s.matter_id is none else 'Trust replenishment request' }}">Trust request</span>{% elif s.overdue %}<span class="badge err">{{ s.max_days_overdue }}d past due</span>{% else %}<span class="badge ok">Current</span>{% endif %}</td>
+        <td data-sort="{{ s.display_number or s.client_name }}" style="cursor:pointer;" onclick="toggleDetail('{{ group_id }}')">{% if s.display_number %}{{ s.display_number }}{% else %}<span title="No matter linked to this bill in Clio — showing the client name instead">{{ s.client_name }}</span>{% endif %} <span style="color:var(--text-muted);font-size:0.8rem;">({{ s.bills|length }} bill{{ "s" if s.bills|length != 1 else "" }})</span></td>
         <td data-sort="{{ s.oldest_issued_at }}">{{ s.oldest_issued_at or "—" }}</td>
         <td>—</td>
         <td>{{ s.max_days_overdue }}</td>
-        <td data-sort="{{ s.total_balance }}">${{ s.total_balance|money }}</td>
+        <td data-sort="{{ s.earned_balance }}">
+          {% if s.earned_balance %}${{ s.earned_balance|money }}{% endif %}
+          {% if s.replenishment_balance %}<div style="color:var(--text-muted);font-size:0.8rem;">{{ "+ " if s.earned_balance else "" }}${{ s.replenishment_balance|money }} replenishment</div>{% endif %}
+          {% if s.new_trust_balance %}<div style="color:var(--text-muted);font-size:0.8rem;">{{ "+ " if s.earned_balance or s.replenishment_balance else "" }}${{ s.new_trust_balance|money }} new client retainer</div>{% endif %}
+          {% if not s.earned_balance and not s.replenishment_balance and not s.new_trust_balance %}$0.00{% endif %}
+        </td>
         <td>
           {% if s.matter_id %}
           <select class="collections-action" data-matter-id="{{ s.matter_id }}" onchange="setAction(this)" style="padding:0.3rem 0.4rem;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text);font-size:0.85rem;">
@@ -77,11 +82,11 @@
       {% for b in s.bills %}
       <tr class="bill-row hidden" data-group="{{ group_id }}">
         <td></td>
-        <td>{% if b.overdue %}<span class="badge err">{{ b.days_overdue }}d past due</span>{% else %}<span class="badge ok">Current</span>{% endif %}</td>
+        <td>{% if b.is_trust_request %}<span class="badge warn" title="{{ b.trust_label }} — not treated as past due">Trust request</span>{% elif b.overdue %}<span class="badge err">{{ b.days_overdue }}d past due</span>{% else %}<span class="badge ok">Current</span>{% endif %}</td>
         <td class="bill-number">Bill #{{ b.number }}</td>
         <td>{{ b.issued_at }}</td>
         <td>{{ b.due_at or "—" }}</td>
-        <td>{{ b.days_overdue }}</td>
+        <td>{{ "—" if b.is_trust_request else b.days_overdue }}</td>
         <td>${{ b.balance|money }}</td>
         <td></td>
         <td></td>

@@ -21,9 +21,14 @@
     <tbody>
       {% for s in summaries %}
       <tr class="matter-row">
-        <td>{{ s.display_number }}</td>
+        <td>{% if s.display_number %}{{ s.display_number }}{% else %}<span title="No matter linked to this bill in Clio — showing the client name instead">{{ s.client_name }}</span>{% endif %}{% if s.all_trust %} <span class="badge warn" title="{{ 'New client retainer — not subject to collections' if s.matter_id is none else 'Trust replenishment request' }}">Trust request</span>{% endif %}</td>
         <td>{{ s.oldest_issued_at or "—" }}</td>
-        <td>${{ s.total_balance|money }}</td>
+        <td>
+          {% if s.earned_balance %}${{ s.earned_balance|money }}{% endif %}
+          {% if s.replenishment_balance %}<div style="color:#555;font-size:0.85em;">{{ "+ " if s.earned_balance else "" }}${{ s.replenishment_balance|money }} replenishment</div>{% endif %}
+          {% if s.new_trust_balance %}<div style="color:#555;font-size:0.85em;">{{ "+ " if s.earned_balance or s.replenishment_balance else "" }}${{ s.new_trust_balance|money }} new client retainer</div>{% endif %}
+          {% if not s.earned_balance and not s.replenishment_balance and not s.new_trust_balance %}$0.00{% endif %}
+        </td>
         <td>{{ s.action or "—" }}</td>
         <td>
           {% if s.action == "FLARPL" %}{{ "Recorded" if s.flarpl_recorded else "Not recorded yet" }}
@@ -44,7 +49,7 @@
                 <td>{{ b.number }}</td>
                 <td>{{ b.issued_at }}</td>
                 <td>{{ b.due_at or "—" }}</td>
-                <td>{{ b.days_overdue }}</td>
+                <td>{{ "Trust request" if b.is_trust_request else b.days_overdue }}</td>
                 <td>${{ b.balance|money }}</td>
               </tr>
               {% endfor %}
@@ -78,6 +83,11 @@ table.detail-table th, table.detail-table td { color: var(--text-muted); font-we
    columns are all short and stay nowrap. */
 #report-table th:nth-child(4), #report-table td:nth-child(4),
 #report-table th:nth-child(5), #report-table td:nth-child(5) { white-space: normal; }
+
+/* "Trust request" (replacing a numeric Days Overdue) is short enough to fit
+   nowrap today, but scope this the same way as above so a longer label
+   later doesn't silently clip on paper again. */
+table.detail-table td:nth-child(4) { white-space: normal; }
 
 @media print {
   .no-print, header.topbar { display: none !important; }
