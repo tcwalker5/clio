@@ -111,6 +111,7 @@ clio/
 │   ├── collections_flarpl.py     # Collections helper             → reference/billing-monitors.md
 │   ├── collections_payment_plan.py  # Collections helper          → reference/billing-monitors.md
 │   ├── staff_unbilled_monitor.py # Staff Unbilled Report — unbilled activity by staff member (read-only) → reference/billing-monitors.md
+│   ├── client_assignment.py      # Client Assignment — Responsible/Originating Attorney, Responsible Staff → reference/client-assignment.md
 │   ├── outlook_auth.py           # Outlook Calendar Migration (OAuth) → src/outlook_calendar/CLAUDE.md
 │   ├── outlook_migration.py      # Outlook Calendar Migration     → src/outlook_calendar/CLAUDE.md
 │   ├── outlook_migration_tag.py  # Outlook Calendar Migration     → src/outlook_calendar/CLAUDE.md
@@ -156,7 +157,7 @@ clio/
 │       ├── preview_store.py      #   in-memory dry-run-preview -> confirm-and-post handoff
 │       ├── routes_*.py           #   one router per app (bradford/printer/calendar/legs/
 │       │                         #   ringcentral/papercut/trust/collections/staff_unbilled/
-│       │                         #   equalizer/moore_marsden)
+│       │                         #   client_assignment/equalizer/moore_marsden)
 │       ├── templates/            #   Jinja2 templates
 │       └── static/                #   CSS + drag-and-drop JS
 ├── start-dashboard.bat            # Launches the dashboard (uv sync + uvicorn)
@@ -195,6 +196,7 @@ The web dashboard (`src/web/app.py`) wraps every other subproject with a browser
 | Printer Expenses, PaperCut Shared Account Sync | `src/printer_expenses.py`, `src/generate_papercut_accounts.py`, `src/papercut_balance_migration.py` | `reference/printer-papercut.md` | No — open manually |
 | RingCentral Directory Sync | `src/ringcentral_directory.py` | `reference/ringcentral.md` | No — open manually |
 | Trust Monitor, Collections, Staff Unbilled Report | `src/trust_monitor.py`, `src/collections_*.py`, `src/staff_unbilled_monitor.py` | `reference/billing-monitors.md` | No — open manually |
+| Client Assignment | `src/client_assignment.py` | `reference/client-assignment.md` | No — open manually |
 | Clio API — full permission table, pagination gotcha | — | `reference/clio-api.md` | No — open manually, occasional reference |
 
 Court Rules Automation is cancelled — see `src/outlook_calendar/CLAUDE.md` for why (it's

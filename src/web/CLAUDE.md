@@ -16,10 +16,16 @@ Automation Platform") — this dashboard *is* the platform, not a separate thing
 happens to share its name; what that section still describes as unbuilt is the
 automated Windows Service + Scheduler layer on top of it.
 
-**Purpose:** Browser UI for the whole repo — a home page linking to drag-and-drop
-versions of Printer Expenses, Bradford Invoice Import, and Legs Expenses, plus Court
-Calendar Sync, RingCentral Directory Sync, and Trust Monitor & Replenishment
-Requests. Wraps each script's existing `run_pipeline()` function; does not duplicate
+**Purpose:** Browser UI for the whole repo — a home page (channel grid) linking to
+every subproject's dashboard page. **Corrected 2026-09-03** — this line had drifted
+stale, naming only the first few subprojects built (Printer Expenses, Bradford
+Invoice Import, Legs Expenses, Court Calendar Sync, RingCentral Directory Sync, Trust
+Monitor) and silently omitting everything added since (Collections, Staff Unbilled
+Report, PaperCut Accounts, Equalizer, Moore/Marsden, Client Assignment). Left as a
+general description rather than re-enumerated, specifically so it can't drift stale
+the same way again — see root `CLAUDE.md`'s Project Structure tree or
+`dashboard.html`'s channel grid for the current, authoritative list of what's wrapped.
+Wraps each script's existing `run_pipeline()` function; does not duplicate
 matching/posting logic.
 
 **Run:**
