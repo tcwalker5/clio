@@ -164,3 +164,58 @@ toggleable per the "App permissions" table in `reference/clio-api.md`.
 
 ---
 
+## RingCentral REST API reference (general — not Clio-specific)
+
+Captured 2026-09-03 for future RingCentral integration work of any kind, not just
+this subproject. **Not exercised anywhere in this repo** — this repo makes zero
+RingCentral API calls at all (see "RingCentral has no REST API for the company-wide
+directory" above); everything below is from RingCentral's own published docs, not
+confirmed live against this account. Verify live before relying on specifics if this
+is ever actually used.
+
+### Update User Contact(s) — personal contacts only, not the company directory
+`PUT /restapi/v1.0/account/{accountId}/extension/{extensionId}/address-book/contact/{contactId}`
+— full source: https://developers.ringcentral.com/api-reference/External-Contacts/updateContact
+
+**This is the per-user "personal contacts" API confirmed absent for the shared
+company directory above** — it updates one user's own address book entries, which is
+a different resource than the shared directory office phones dial from. Relevant if a
+future project needs to sync into an individual's personal RingCentral contacts
+(e.g. a personal-assistant-style integration), not for anything company-directory-shaped.
+
+- **Auth requirements:** `Contacts` app scope, `EditPersonalContacts` feature flag on
+  the app. Usage plan group **Heavy** (RingCentral's stricter, lower-throughput rate
+  tier — budget for this if calling it in a loop over many contacts).
+- **Bulk syntax:** `contactId` accepts a comma-separated list to update several
+  contacts' full resource in one call.
+- **`accountId`/`extensionId` can both be `"~"`** to mean "the account/extension tied
+  to the current auth session" — no separate lookup call needed if operating on the
+  authenticated user's own contacts.
+- **Full resource update (PUT, not PATCH)** — the body replaces the whole contact;
+  fields you don't include aren't preserved implicitly (verify this against the docs'
+  own PATCH-vs-PUT semantics before assuming partial-update behavior).
+- **Fields:** name fields (`firstName`/`lastName`/`middleName`/`nickName`), `company`,
+  `jobTitle`, up to 3 emails, `birthday`, `webPage`, `notes`, `ringtoneIndex` (max 64
+  chars), `appInfo` (source tag, max 64 chars, useful for marking records written by
+  an integration), and a wide set of phone numbers (`homePhone`/`homePhone2`,
+  `businessPhone`/`businessPhone2`, `mobilePhone`, `businessFax`, `companyPhone`,
+  `assistantPhone`, `carPhone`, `otherPhone`, `otherFax`, `callbackPhone`) **all in
+  e.164 format (with the leading `+`)** — same convention this repo's own directory
+  CSV already follows for the company-directory side. Three address blocks
+  (`homeAddress`/`businessAddress`/`otherAddress`), each `{street, city, country,
+  state, zip}`.
+- **Response** mirrors the request plus `uri` (canonical resource URL), `id`, and
+  `availability` (an enum meaningful only for Address Book Sync — e.g. a contact
+  showing as `Deleted` — always `Alive` for a plain read/write here).
+- **Phone-number-specific error codes** (relevant to any integration writing numbers
+  through this API, given how much of this repo's own RingCentral code is phone-
+  format handling — see "Phone dedup" above): `PAB-102` failed to parse a phone
+  number, `PAB-104` numbers starting with `*` aren't supported, `PAB-105` extensions
+  longer than 10 digits aren't supported. Generic ones: `CMN-100` missing required
+  param, `CMN-101` invalid param value, `CMN-409` a string param exceeded its max
+  length, `CMN-102` resource not found (404), `CMN-301` rate limit exceeded (429),
+  `CMN-211` service overloaded (503) — same retry-on-429 posture this project already
+  applies to Clio calls would apply here too.
+
+---
+
