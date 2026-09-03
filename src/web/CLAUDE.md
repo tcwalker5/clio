@@ -13,8 +13,10 @@ Platform (CAP)** — dark ink/brass visual identity, channel-grid home page (eac
 subproject shown as a "channel" with its data flow, e.g. `PDF -> Clio`). This is
 step one of the bigger "CAP" vision described later in this doc (see "CAP — Collier
 Automation Platform") — this dashboard *is* the platform, not a separate thing that
-happens to share its name; what that section still describes as unbuilt is the
-automated Windows Service + Scheduler layer on top of it.
+happens to share its name. What that section covers on top of it: keeping the
+dashboard itself always running (Windows Task Scheduler, not a custom service) and a
+per-feature pattern for unattended/scheduled subproject runs — see that section for
+the 2026-09-03 architecture decision.
 
 **Purpose:** Browser UI for the whole repo — a home page (channel grid) linking to
 every subproject's dashboard page. **Corrected 2026-09-03** — this line had drifted
@@ -105,26 +107,77 @@ CLIO_DASHBOARD_PASSPHRASE   # shared login passphrase
 ---
 
 
-# CAP — Collier Automation Platform (dashboard is step one; Service + Scheduler not started)
+# CAP — Collier Automation Platform (dashboard always-on + per-feature scheduling)
 
 **Resolved 2026-07-30:** the web dashboard (`src/web/`, rebranded 2026-07-29 — see "Web
 Dashboard" above) is **step one of this vision, not a separate thing.** It already
 delivers the core goal below — one branded UI wrapping every subproject's
-`run_pipeline()`, instead of scattered one-off scripts — for on-demand/manual use. What's
-still not built is the automated half described in this section: a Windows Service +
-Scheduler layer for unattended/scheduled runs (e.g. Court Calendar Sync's still-planned
-morning run) that don't require a human to open the dashboard.
+`run_pipeline()`, instead of scattered one-off scripts — for on-demand/manual use.
 
-Idea from 2026-07-27, expanded 2026-07-28: rather than keep adding one-off scripts for
-each new Clio-adjacent integration, consolidate them into one maintainable platform —
-**CAP (Collier Automation Platform)**, chosen over narrower names like "Clio Automation
-Service" because the intent is for this to eventually be the integration layer for the
-whole practice, not just a Clio-facing tool. One platform to maintain, not many one-offs.
+**Architecture decided 2026-09-03 (Ted)** for the remaining unattended/automated piece
+— explicitly **not** the single custom "Windows Service + Scheduler with plug-in
+modules and one internal API client" originally sketched here (kept below, struck
+through in spirit, as design history — see "Rejected direction"). The requirement
+driving this decision: the mechanism must not need editing every time a new subproject
+ships, since this repo adds new subprojects often (six shipped in the single week this
+was decided). A shared scheduler process or a shared internal API client is exactly the
+kind of central thing a fast-moving repo like this one tends to break while adding
+feature N+1. Two independent, native-Windows mechanisms instead:
 
-**Architecture direction for the remaining (unattended/scheduled) piece:** a Windows
-Service + Scheduler, with each integration as a plug-in module rather than its own
-standalone script — sitting alongside the dashboard (not replacing it) for the runs
-that shouldn't need a human at the keyboard:
+1. **Dashboard uptime — Windows Task Scheduler, not a custom service.**
+   `start-dashboard-service.bat` (no `pause`, unlike `start-dashboard.bat` — Task
+   Scheduler has no console to send a keypress to, so a `pause` here would hang the
+   task forever after any crash instead of exiting with a real code) +
+   `start-dashboard-service.vbs` (hides the console window; unlike
+   `start-dashboard-silent.vbs`'s fire-and-forget `WshShell.Run(..., False)` used for
+   the desktop shortcut, this one runs with `True` — it must block until uvicorn
+   exits, or Task Scheduler would mark the task "finished" the instant it launched the
+   batch file while uvicorn kept running detached underneath it, breaking both
+   "restart on failure" and "don't start a duplicate instance"). Registered as a
+   Scheduled Task, trigger **At log on** (not At startup — avoids ever storing a
+   Windows account password in Task Scheduler; if this ever needs to survive a reboot
+   with nobody logged in, that's the tradeoff to revisit), Settings: restart on
+   failure (a few attempts, short interval), don't start a new instance if one's
+   already running. This intentionally is *not* full service supervision (no
+   services.msc entry, no true process-health monitoring if uvicorn hangs without
+   exiting) — accepted tradeoff for zero new dependencies and reusing a pattern this
+   repo already trusts (see #2). **Registered and live-tested 2026-09-03** — the
+   `Register-ScheduledTask` principal needed the fully-qualified `COMPUTERNAME\TEDMINI`
+   form for `-UserId`; a bare `"TEDMINI"` fails registration with "The parameter is
+   incorrect." `ExecutionTimeLimit` must be explicitly zeroed out
+   (`New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero)`) — Task
+   Scheduler's own default kills any task still running after 72 hours, which would
+   silently take the whole dashboard down after 3 days of uptime otherwise. **Deploying
+   a code change to the running service is still a manual step** — Python files aren't
+   hot-reloaded (only Jinja2 templates are, unchanged from before), and this was a
+   deliberate choice over a file-watcher auto-restart: a watcher would bounce the live
+   LAN service mid-edit during a multi-file change, serving a half-finished state to
+   whoever's using it at that moment. After a deploy, restart with:
+   ```powershell
+   Stop-ScheduledTask -TaskName "CAP Dashboard"
+   Start-ScheduledTask -TaskName "CAP Dashboard"
+   ```
+   (`Start-ScheduledTask` runs the task's action immediately — it doesn't wait for
+   another logon.)
+
+2. **Scheduled/unattended jobs — per-feature Windows Scheduled Tasks, not a shared
+   scheduler.** Generalizes RingCentral's own pattern below, which predates this
+   decision and was the direct precedent for it: one small `.bat` (`uv run
+   src/<feature>.py`, nothing else) + one Task Scheduler entry, per subproject that
+   needs unattended runs. A new feature's schedule is entirely self-contained — adding
+   one never touches another feature's `.bat`, task, or any shared "scheduler" code,
+   and one job misbehaving can't take another down. The registration itself (the
+   `schtasks`/`Register-ScheduledTask` call) is a one-time, per-machine setup step —
+   **not tracked in this repo**, same as `cap.lan`'s DNS entry — because it's
+   machine/network configuration, not application code; only the `.bat` each task
+   runs lives in git.
+
+**Rejected direction (2026-07-27 through 2026-09-02, superseded above):** a single
+Windows Service + Scheduler with each integration as a plug-in module, all talking to
+Clio through one internal API client (diagram and reasoning kept below as design
+history). Revisit only if the per-feature-tasks approach demonstrably breaks down at
+higher volume (e.g. dozens of scheduled jobs making per-machine task sprawl genuinely
+hard to audit) — not before.
 ```
                 Clio
                   │
@@ -138,23 +191,21 @@ that shouldn't need a human at the keyboard:
  │PaperCut│RingCentral│Outlook │Accounting│Reporting  │
  └────────┴──────────┴─────────┴──────────┴───────────┘
 ```
-Every module talks to Clio through **one internal API client**, not directly — a future
-Clio API change (or a repeat of this repo's own custom-field/nested-selector gotchas)
-gets fixed in one place instead of N scripts each needing the same fix separately.
 
-**Modules to fold in — status as of 2026-07-30:**
-- PaperCut account synchronization — still just an idea, not started (see PaperCut
-  Shared Account Sync in `reference/printer-papercut.md`)
+**Modules to fold in — status as of 2026-09-03:**
+- PaperCut account synchronization — built (see PaperCut Shared Account Sync in
+  `reference/printer-papercut.md`), dashboard page only, no unattended schedule yet
 - RingCentral contact synchronization — built, has a dashboard page (`/ringcentral`)
-  *and* its own standalone daily Windows Scheduled Task (`sync-ringcentral.bat`), so
-  it already achieves "unattended scheduled run" per-subproject, just not through a
-  unified CAP service — worth noting as a pattern (one `.bat` + `schtasks` per
-  subproject) that could cover a lot of this section without a full service ever
-  getting built
+  *and* its own standalone daily Windows Scheduled Task (`sync-ringcentral.bat`) — the
+  precedent that became the decided pattern above (#2)
 - Matter-based print cost exports — built as Printer Expenses, dashboard page only,
   no scheduling yet
+- Client Assignment — built (see `reference/client-assignment.md`), dashboard page
+  only, not a candidate for unattended scheduling (it's an interactive assign-from-
+  dropdown tool, not a sync)
 - Court Calendar Sync — dashboard page only (on-demand); the scheduled-morning-run-
-  with-emailed-report upgrade is still not built
+  with-emailed-report upgrade is still not built (still blocked on no email
+  infrastructure existing anywhere in this repo — see Trust Monitor's own note on this)
 
 **Explicitly not needed:** pushing Clio contacts out to individual staff phones
 (iPhone/Android). RingCentral already resolves caller name via CallerID off the
@@ -220,12 +271,12 @@ committed work yet:**
 - **AI matter assistant** — auto-generated per-matter summary: last hearing, upcoming
   deadlines, outstanding discovery, balance due, last client contact
 
-**Not decided yet:** whether this becomes a new top-level module wrapping the existing
-scripts' logic, a rewrite, or a scheduler that just orchestrates the existing CLI entry
-points unchanged — revisit when this is actually picked up. Bradford Invoice Import and
-Legs Expenses stay as their own document-import tools rather than CAP modules — they
-parse a contractor's PDF invoice, which isn't the "keep an external system synced with
-Clio" pattern the rest of this platform is built around.
+**Decided 2026-09-03** (see above): neither a rewrite nor a unified scheduler — each
+subproject keeps its own CLI entry point unchanged, and any that need unattended runs
+get their own `.bat` + Scheduled Task, orchestrated by nothing shared. Bradford Invoice
+Import and Legs Expenses stay as their own document-import tools rather than CAP
+modules — they parse a contractor's PDF invoice, which isn't the "keep an external
+system synced with Clio" pattern the rest of this platform is built around.
 
 ---
 

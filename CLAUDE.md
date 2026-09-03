@@ -160,8 +160,10 @@ clio/
 │       │                         #   client_assignment/equalizer/moore_marsden)
 │       ├── templates/            #   Jinja2 templates
 │       └── static/                #   CSS + drag-and-drop JS
-├── start-dashboard.bat            # Launches the dashboard (uv sync + uvicorn)
-├── start-dashboard-silent.vbs     # Same, without a visible console window
+├── start-dashboard.bat            # Launches the dashboard (uv sync + uvicorn), for manual use
+├── start-dashboard-silent.vbs     # Same, hidden window, fire-and-forget — desktop shortcut
+├── start-dashboard-service.bat    # Unattended variant (no pause, dated log file) — Scheduled Task use
+├── start-dashboard-service.vbs    # Hidden window, BLOCKS until it exits — see src/web/CLAUDE.md's CAP section
 ├── CAP Dashboard.url              # Desktop shortcut to http://cap.lan:8421/, for staff
 ├── .env                # Credentials (gitignored)
 ├── .env.example
