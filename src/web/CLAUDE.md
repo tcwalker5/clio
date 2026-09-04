@@ -160,6 +160,23 @@ feature N+1. Two independent, native-Windows mechanisms instead:
    (`Start-ScheduledTask` runs the task's action immediately — it doesn't wait for
    another logon.)
 
+   **Real bug found live 2026-09-04 — `Stop-ScheduledTask` didn't actually kill the
+   dashboard, and Task Scheduler never noticed.** `start-dashboard-service.vbs`
+   called `WshShell.Run(...)` but never did anything with its return value — VBScript
+   only propagates a launched process's exit code if something explicitly acts on it
+   (`WScript.Quit(exitCode)`); without that, `wscript.exe` always exits `0` no matter
+   what the batch/uvicorn underneath it actually did. Confirmed live: after a
+   `Stop`/`Start-ScheduledTask` cycle, the *old* process was still holding port 8421
+   (an orphan `Stop-ScheduledTask` never actually reached), so the fresh instance
+   failed immediately with `WinError 10048` (port already in use, exit code 3) — but
+   `Get-ScheduledTaskInfo` reported `LastTaskResult: 0` (success) anyway, so the
+   "restart on failure" setting never even tried, and `/date-calculator` 404'd against
+   the stale process for the rest of that session. Fixed by adding
+   `WScript.Quit(WshShell.Run(...))` so the real exit code reaches Task Scheduler.
+   **This means the crash-restart safety net was silently non-functional from
+   registration (2026-09-03) until this fix (2026-09-04)** — worth remembering if a
+   past "it restarted fine" observation from that window gets second-guessed.
+
 2. **Scheduled/unattended jobs — per-feature Windows Scheduled Tasks, not a shared
    scheduler.** Generalizes RingCentral's own pattern below, which predates this
    decision and was the direct precedent for it: one small `.bat` (`uv run
