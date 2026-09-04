@@ -192,7 +192,7 @@ hard to audit) — not before.
  └────────┴──────────┴─────────┴──────────┴───────────┘
 ```
 
-**Modules to fold in — status as of 2026-09-03:**
+**Modules to fold in — status as of 2026-09-04:**
 - PaperCut account synchronization — built (see PaperCut Shared Account Sync in
   `reference/printer-papercut.md`), dashboard page only, no unattended schedule yet
 - RingCentral contact synchronization — built, has a dashboard page (`/ringcentral`)
@@ -206,6 +206,13 @@ hard to audit) — not before.
 - Court Calendar Sync — dashboard page only (on-demand); the scheduled-morning-run-
   with-emailed-report upgrade is still not built (still blocked on no email
   infrastructure existing anywhere in this repo — see Trust Monitor's own note on this)
+- Date Calculator — built (see `reference/date-calculator.md`), dashboard page +
+  a daily background sync (`sync-length-of-marriage.bat`) that (re)writes a matter's
+  "Length of Marriage" field wherever both Date of Marriage and Date of Separation
+  are set — the second real per-feature Scheduled Task after RingCentral's, and the
+  first candidate that was actually considered for a Clio webhook instead (rejected:
+  webhooks need a public HTTPS endpoint, which this LAN-only dashboard doesn't have —
+  see that reference doc for the full reasoning)
 
 **Explicitly not needed:** pushing Clio contacts out to individual staff phones
 (iPhone/Android). RingCentral already resolves caller name via CallerID off the

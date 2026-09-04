@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% block title %}Date Calculator{% endblock %}
+{% block content %}
+<h1>Date Calculator</h1>
+<p class="subtitle">Calculate the time between two dates — years, months, and days. Optionally attach it to a matter to save the result as that matter's "Length of Marriage" field in Clio.</p>
+
+{% if error %}
+<div class="panel"><p class="error-text">{{ error }}</p></div>
+{% endif %}
+
+<div class="panel">
+  <h2>Attach to a matter (optional)</h2>
+  <p class="subtitle">Auto-fills Date of Marriage/Separation if already set in Clio, and lets you save the result back. Leave this blank to just use the calculator on its own — nothing here is saved unless you click Save below.</p>
+  <form method="get" action="/date-calculator" style="display:flex; align-items:flex-end; gap:0.75rem;">
+    <input type="hidden" name="matter_id" class="matter-search-id" value="{{ matter.id if matter else '' }}">
+    <div class="matter-search">
+      <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Matter</label>
+      <input type="text" name="matter_name" class="matter-search-input" placeholder="Search matter name…" autocomplete="off" style="width:20rem;" value="{{ matter.name if matter else '' }}">
+      <div class="matter-search-results"></div>
+    </div>
+    <button type="submit">Load Matter</button>
+    {% if matter %}<a class="btn secondary" href="/date-calculator">Clear</a>{% endif %}
+  </form>
+</div>
+
+<div class="panel">
+  <h2>Calculate</h2>
+  {% if matter %}
+  <p class="subtitle">
+    <strong>{{ matter.name }}</strong> —
+    {% if matter.date_of_marriage and matter.date_of_separation %}
+      Date of Marriage and Date of Separation are both set in Clio, prefilled below.
+    {% else %}
+      Date of Marriage/Separation {{ "isn't" if not matter.date_of_marriage and not matter.date_of_separation else "aren't both" }} set in Clio yet — enter dates below for this calculation (this does not save them as Date of Marriage/Separation; that's still done via <a href="/moore-marsden">Moore/Marsden</a>).
+    {% endif %}
+    {% if matter.current_length_of_marriage %}<br>Current "Length of Marriage" on file: <strong>{{ matter.current_length_of_marriage }}</strong>{% endif %}
+  </p>
+  {% endif %}
+
+  <div style="display:flex; gap:1.5rem; flex-wrap:wrap; align-items:flex-end;">
+    <div>
+      <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Start date</label>
+      <input type="date" id="start-date" value="{{ matter.date_of_marriage if matter else '' }}">
+    </div>
+    <div>
+      <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">End date</label>
+      <input type="date" id="end-date" value="{{ matter.date_of_separation if matter else '' }}">
+    </div>
+    <button type="button" onclick="setEndToday()">Today</button>
+  </div>
+
+  <div id="result" style="margin-top:1.25rem;"></div>
+
+  {% if matter %}
+  <div style="margin-top:1rem;">
+    <button type="button" id="save-btn" onclick="saveToMatter({{ matter.id }})" disabled>Save "Length of Marriage" to Clio</button>
+    <span id="save-status" style="margin-left:0.75rem; font-size:0.85rem; color:var(--text-muted);"></span>
+  </div>
+  {% endif %}
+</div>
+
+<script src="/static/matter_search.js"></script>
+<script>initMatterSearch({{ all_matters | tojson | safe }});</script>
+<script>
+const LONG_TERM_YEARS = {{ long_term_years }};
+
+// Same calendar-accurate borrow-from-the-previous-month algorithm as
+// date_calculator.calculate_duration() in Python — kept in sync deliberately
+// rather than round-tripping to the server on every keystroke, since this is
+// pure display; the actual Save always recomputes server-side from the raw
+// dates rather than trusting anything computed here.
+function calcDuration(startStr, endStr) {
+  let start = new Date(startStr + "T00:00:00");
+  let end = new Date(endStr + "T00:00:00");
+  if (end < start) { const t = start; start = end; end = t; }
+  let years = end.getFullYear() - start.getFullYear();
+  let months = end.getMonth() - start.getMonth();
+  let days = end.getDate() - start.getDate();
+  if (days < 0) {
+    months -= 1;
+    days += new Date(end.getFullYear(), end.getMonth(), 0).getDate();
+  }
+  if (months < 0) {
+    years -= 1;
+    months += 12;
+  }
+  const totalDays = Math.round((end - start) / 86400000);
+  return { years, months, days, totalDays };
+}
+
+function pluralize(n, unit) {
+  return `${n} ${unit}${n !== 1 ? "s" : ""}`;
+}
+
+// Mirrors date_calculator.Duration.format() in Python — years/months only,
+// no days, since that's what actually gets saved to the Length of Marriage
+// field. Shown as a preview so what you see here is what Save will write.
+function formatSummary(d) {
+  const parts = [];
+  if (d.years) parts.push(pluralize(d.years, "year"));
+  if (d.months) parts.push(pluralize(d.months, "month"));
+  if (!parts.length) parts.push(pluralize(d.days, "day"));
+  let text = parts.join(", ");
+  if (d.years >= LONG_TERM_YEARS) text += " — Long-Term Marriage";
+  return text;
+}
+
+function render() {
+  const startEl = document.getElementById("start-date");
+  const endEl = document.getElementById("end-date");
+  const result = document.getElementById("result");
+  const saveBtn = document.getElementById("save-btn");
+  if (!startEl.value || !endEl.value) {
+    result.innerHTML = "";
+    if (saveBtn) saveBtn.disabled = true;
+    return;
+  }
+  const d = calcDuration(startEl.value, endEl.value);
+  const longTerm = d.years >= LONG_TERM_YEARS
+    ? `<div style="margin-top:0.4rem;"><span class="badge warn">Long-Term Marriage (${LONG_TERM_YEARS}+ years, Fam. Code § 4336)</span></div>`
+    : "";
+  // Omit zero-valued components (e.g. exactly 21 years reads as "21 years,
+  // 27 days", not "21 years, 0 months, 27 days") — always show at least one.
+  const breakdownParts = [];
+  if (d.years) breakdownParts.push(pluralize(d.years, "year"));
+  if (d.months) breakdownParts.push(pluralize(d.months, "month"));
+  if (d.days || !breakdownParts.length) breakdownParts.push(pluralize(d.days, "day"));
+  result.innerHTML = `
+    <div style="font-size:1.4rem; font-weight:600;">${breakdownParts.join(", ")}</div>
+    <div style="color:var(--text-muted); font-size:0.85rem; margin-top:0.2rem;">${d.totalDays.toLocaleString()} total days</div>
+    ${longTerm}
+    <div style="color:var(--text-muted); font-size:0.85rem; margin-top:0.5rem;">Would save as: <strong>${formatSummary(d)}</strong></div>
+  `;
+  if (saveBtn) saveBtn.disabled = false;
+}
+
+function setEndToday() {
+  const today = new Date();
+  document.getElementById("end-date").value = today.toISOString().slice(0, 10);
+  render();
+}
+
+async function saveToMatter(matterId) {
+  const startEl = document.getElementById("start-date");
+  const endEl = document.getElementById("end-date");
+  const status = document.getElementById("save-status");
+  const btn = document.getElementById("save-btn");
+  btn.disabled = true;
+  status.textContent = "Saving…";
+  try {
+    const resp = await fetch("/date-calculator/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: `matter_id=${encodeURIComponent(matterId)}&start_date=${encodeURIComponent(startEl.value)}&end_date=${encodeURIComponent(endEl.value)}`,
+    });
+    const body = await resp.json();
+    if (resp.ok && body.success) {
+      status.textContent = `Saved: "${body.value}"`;
+    } else {
+      status.textContent = body.error || "Couldn't save — try again.";
+    }
+  } catch (e) {
+    status.textContent = "Couldn't save — try again.";
+  }
+  btn.disabled = false;
+}
+
+document.getElementById("start-date").addEventListener("input", render);
+document.getElementById("end-date").addEventListener("input", render);
+if (!document.getElementById("end-date").value) setEndToday();
+render();
+</script>
+{% endblock %}

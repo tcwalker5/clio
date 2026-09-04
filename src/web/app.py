@@ -119,6 +119,7 @@ from web.routes_bradford import router as bradford_router  # noqa: E402
 from web.routes_calendar import router as calendar_router  # noqa: E402
 from web.routes_client_assignment import router as client_assignment_router  # noqa: E402
 from web.routes_collections import router as collections_router  # noqa: E402
+from web.routes_date_calculator import router as date_calculator_router  # noqa: E402
 from web.routes_equalizer import router as equalizer_router  # noqa: E402
 from web.routes_legs import router as legs_router  # noqa: E402
 from web.routes_moore_marsden import router as moore_marsden_router  # noqa: E402
@@ -132,6 +133,7 @@ app.include_router(bradford_router)
 app.include_router(calendar_router)
 app.include_router(client_assignment_router)
 app.include_router(collections_router)
+app.include_router(date_calculator_router)
 app.include_router(equalizer_router)
 app.include_router(legs_router)
 app.include_router(moore_marsden_router)
