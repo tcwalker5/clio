@@ -5,24 +5,30 @@ marriage (Date of Marriage -> Date of Separation), including California's
 Family Code § 4336 "long-term marriage" (10+ years) presumption.
 
 Reuses moore_marsden/clio_matter_dates.py's existing Date of Marriage/Date
-of Separation field names and read logic rather than re-solving the same
-lookup — these are the same two real Clio matter custom fields Moore/
-Marsden already owns (ids 18509746/18509761, confirmed live 2026-08-18).
-This tool is deliberately READ-ONLY on those two fields (Ted, 2026-09-04)
-— entering/correcting Date of Marriage/Separation permanently still
-happens via Moore/Marsden's own Settings, not here, to avoid two separate
-write paths into the same fields. Typing dates directly into this
-calculator (e.g. when neither field is set in Clio yet) only affects the
-calculation shown here, nothing gets saved to Date of Marriage/Separation.
+of Separation field names, read, AND write logic rather than re-solving
+the same lookup — these are the same two real Clio matter custom fields
+Moore/Marsden already owns (ids 18509746/18509761, confirmed live
+2026-08-18). **Corrected 2026-09-04** — an earlier version of this tool
+was deliberately read-only on those two fields, sending staff to
+Moore/Marsden's own Settings to actually set them; Ted reversed that
+after using it: "each tool should not depend on another tool or force the
+user to navigate to another one." Date Calculator's Save action now
+writes Date of Marriage/Separation itself (via
+moore_marsden.clio_matter_dates.update_matter_dates(), not a duplicate
+implementation) in the same click that writes Length of Marriage —
+`routes_date_calculator.py` owns this write path, `date_calculator.py`
+itself doesn't call it directly since it's a UI-triggered action, not
+part of the background sync.
 
-This tool DOES write its own new field, "Length of Marriage" (text, e.g.
+This tool also writes its own new field, "Length of Marriage" (text, e.g.
 "8 years, 4 months — Long-Term Marriage") — a real Clio custom field Ted
 created for this (text type, parent type Matter).
 
 Two ways this field gets populated:
-1. Interactively, from /date-calculator, when staff have a matter open
-   with both dates already set (or typed in for the occasion) and click
-   Save.
+1. Interactively, from /date-calculator — attach a matter (auto-fills
+   Date of Marriage/Separation if already set), enter or correct dates,
+   and click Save to write all three fields (Date of Marriage, Date of
+   Separation, Length of Marriage) at once.
 2. In the background: `uv run src/date_calculator.py` scans every open/
    pending matter, and for any with BOTH Date of Marriage and Date of
    Separation set, computes and writes the field only if the computed

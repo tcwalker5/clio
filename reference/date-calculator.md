@@ -16,28 +16,56 @@ marriage of 10 years or more, from marriage to separation, shifts the burden on
 spousal support duration) — flagged automatically whenever the computed span reaches
 10 years.
 
-**Reuses Moore/Marsden's existing Date of Marriage/Date of Separation fields and read
-logic** (`moore_marsden.clio_matter_dates`, field names imported directly rather than
-re-typed) — real Clio matter custom fields (ids `18509746`/`18509761`, `date` type),
-not something this tool invents. **Deliberately read-only on those two fields** (Ted,
-2026-09-04) — entering/correcting Date of Marriage/Separation permanently still only
-happens via Moore/Marsden's own Settings, so there's exactly one write path into those
-two fields, not two independently-maintained ones. Typing dates directly into this
-calculator (e.g. for a matter where neither is set in Clio yet, or for a fully generic
-calculation with no matter at all) only affects what's shown here — nothing is saved
-to Date of Marriage/Separation from this tool.
+**Reuses Moore/Marsden's existing Date of Marriage/Date of Separation fields, read,
+and write logic directly** (`moore_marsden.clio_matter_dates`, names AND functions
+imported rather than re-typed/re-implemented) — real Clio matter custom fields (ids
+`18509746`/`18509761`, `date` type), not something this tool invents. **Corrected
+2026-09-04** — an earlier version was deliberately read-only on these two fields,
+sending staff to Moore/Marsden's own Settings to actually set them. Ted reversed this
+after using it: *"each tool should not depend on another tool or force the user to
+navigate to another one."* One Save click on `/date-calculator` now writes Date of
+Marriage, Date of Separation, and Length of Marriage together —
+`routes_date_calculator.py`'s `/save` handler calls
+`moore_marsden.clio_matter_dates.update_matter_dates()` directly, so there's still
+only one *implementation* of the write (no duplicated logic, no drift risk), just two
+UI entry points to trigger it now instead of one.
+
+**Real bug fixed 2026-09-04 — Jinja renders Python `None` as the literal text
+`"None"`.** The Start/End date `<input>` tags used `{{ matter.date_of_marriage if
+matter else '' }}` — when `matter` is truthy but `date_of_marriage` is `None` (no
+value set in Clio), that expression evaluates to `None`, not `''`, and Jinja stringifies
+it to `"None"`. An `<input type="date" value="None">` fails the browser's date-format
+validation and renders as blank — which looked like "the field didn't populate" (Ted's
+report, live on DOE, JANE) but was actually a real bug, not a false alarm: it happened
+to look like "did nothing" only because the invalid value coincidentally also renders
+as empty. Fixed with `{{ (matter.date_of_marriage or '') if matter else '' }}` (and the
+same for Date of Separation) — `or ''` catches `None` before Jinja ever stringifies it.
+
+**Custom field values CAN be cleared to blank via the API — unlike Client
+Assignment's built-in relationship fields.** Confirmed live 2026-09-04, reverting a
+test write on DOE, JANE: `PATCH .../matters/{id}.json` with
+`{"custom_field_values": [{"id": "<existing CustomFieldValue id>", "value": null}]}`
+returns `200` and genuinely clears it (re-fetch confirmed `null`). This is a real,
+useful difference from `client_assignment.py`'s `responsible_attorney`/
+`originating_attorney`/`responsible_staff` — those are core Matter *relationship*
+fields, not custom fields, and Clio's own spec explicitly disallows `null` for them
+(confirmed via a 422 there). Don't assume that restriction carries over to any other
+custom field this project touches (Date of Marriage/Separation, Length of Marriage,
+FLARPL Recorded, Payment Plan, Court Case Number) — it appears to be specific to that
+handful of built-in relationship fields, not custom fields generally.
 
 **Selecting a matter loads it immediately — no separate "Load Matter" button**
 (changed 2026-09-04, Ted: "that is more consistent with a dropdown"). Every other
 page sharing `matter_search.js` (Equalizer, Legs, Moore/Marsden, Printer) keeps its
 own explicit submit button — this page is the one exception, via a new opt-in
 `autoSubmit` parameter (`initMatterSearch(matters, true)`, default `false` everywhere
-else) rather than changing the shared behavior for all five pages. Deliberately
-scoped this way, not by accident: **auto-firing on selection is only safe because
-loading a matter here is read-only** (it just fetches Date of Marriage/Separation to
-display) — the actual write (Save "Length of Marriage" to Clio) stays its own
-separate, explicit button click, unaffected by this change. Don't set `autoSubmit`
-on a matter-search form whose submit itself writes to Clio.
+else) rather than changing the shared behavior for all five pages. This distinction
+still matters even now that this page writes DOM/DOS: **auto-firing on selection is
+only safe because loading a matter is read-only** (it just fetches whatever's
+currently in Clio to display) — the actual write (Save, which sets Date of
+Marriage/Separation and Length of Marriage together) stays its own separate,
+explicit button click, unaffected by this change. Don't set `autoSubmit` on a
+matter-search form whose submit itself writes to Clio.
 
 **Duration math** (`calculate_duration()`) is a plain calendar-accurate
 years/months/days breakdown — the standard borrow-from-the-previous-month technique
@@ -74,8 +102,14 @@ genuinely none exists yet.
 ## Two ways the field gets populated
 
 1. **Interactively** — `/date-calculator`, search for a matter (open/pending, same
-   scope Moore/Marsden's own matter search uses), which auto-fills Date of
-   Marriage/Separation if already set; click **Save "Length of Marriage" to Clio**.
+   scope Moore/Marsden's own matter search uses — selecting one loads it immediately,
+   see below), which auto-fills Date of Marriage/Separation if already set; click
+   **Save** to write Date of Marriage, Date of Separation, and Length of Marriage
+   together. Date of Marriage/Separation is written unconditionally on Save; if that
+   succeeds but the Length of Marriage write fails (e.g. the field genuinely doesn't
+   exist), the response still reports success with a `warning` explaining the dates
+   were saved but the summary field wasn't — never a flat failure that implies nothing
+   happened when the more foundational write actually succeeded.
 2. **In the background** — `uv run src/date_calculator.py` (`sync_length_of_marriage()`)
    scans every open/pending matter in **one bulk fetch** (`custom_field_values`
    included directly in the `matters.json` call, same pattern
@@ -93,11 +127,13 @@ LAN-only (`cap.lan`, no public exposure — see root `CLAUDE.md`). A daily Sched
 Task is the fit here, same as every other unattended job in this repo (see
 `src/web/CLAUDE.md`'s CAP section) — not real-time, but zero new infrastructure.
 
-**If the "Length of Marriage" field doesn't exist yet in Clio,** both the interactive
-Save button and the background sync fail loud with the same clear message ("create it
-in Clio's Custom Fields settings first") rather than a raw error — the sync job fails
-on its very first eligible matter (nothing partially updates first, since no matter
-can have an existing `CustomFieldValue` for a field that doesn't exist at all yet).
+**The "Length of Marriage" field exists in Clio as of 2026-09-04** (Ted created it —
+text, parent type Matter). Before it existed, the background sync failed loud on its
+first eligible matter with a clear message ("create it in Clio's Custom Fields
+settings first"), and the interactive Save still wrote Date of Marriage/Separation
+successfully with a `warning` explaining the summary field specifically couldn't be
+set yet (see the partial-success note above) — worth remembering if this field is
+ever renamed/deleted and that failure mode needs recognizing again.
 
 ## Workflow
 ```powershell

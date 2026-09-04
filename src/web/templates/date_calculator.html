@@ -2,7 +2,7 @@
 {% block title %}Date Calculator{% endblock %}
 {% block content %}
 <h1>Date Calculator</h1>
-<p class="subtitle">Calculate the time between two dates — years, months, and days. Optionally attach it to a matter to save the result as that matter's "Length of Marriage" field in Clio.</p>
+<p class="subtitle">Calculate the time between two dates — years, months, and days. Optionally attach it to a matter to save Date of Marriage/Separation and the computed "Length of Marriage" straight to Clio.</p>
 
 {% if error %}
 <div class="panel"><p class="error-text">{{ error }}</p></div>
@@ -30,7 +30,7 @@
     {% if matter.date_of_marriage and matter.date_of_separation %}
       Date of Marriage and Date of Separation are both set in Clio, prefilled below.
     {% else %}
-      Date of Marriage/Separation {{ "isn't" if not matter.date_of_marriage and not matter.date_of_separation else "aren't both" }} set in Clio yet — enter dates below for this calculation (this does not save them as Date of Marriage/Separation; that's still done via <a href="/moore-marsden">Moore/Marsden</a>).
+      Date of Marriage/Separation {{ "isn't" if not matter.date_of_marriage and not matter.date_of_separation else "aren't both" }} set in Clio yet — enter dates below and Save will set them.
     {% endif %}
     {% if matter.current_length_of_marriage %}<br>Current "Length of Marriage" on file: <strong>{{ matter.current_length_of_marriage }}</strong>{% endif %}
   </p>
@@ -39,11 +39,11 @@
   <div style="display:flex; gap:1.5rem; flex-wrap:wrap; align-items:flex-end;">
     <div>
       <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Start date</label>
-      <input type="date" id="start-date" value="{{ matter.date_of_marriage if matter else '' }}">
+      <input type="date" id="start-date" value="{{ (matter.date_of_marriage or '') if matter else '' }}">
     </div>
     <div>
       <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">End date</label>
-      <input type="date" id="end-date" value="{{ matter.date_of_separation if matter else '' }}">
+      <input type="date" id="end-date" value="{{ (matter.date_of_separation or '') if matter else '' }}">
     </div>
     <button type="button" onclick="setEndToday()">Today</button>
   </div>
@@ -52,7 +52,7 @@
 
   {% if matter %}
   <div style="margin-top:1rem;">
-    <button type="button" id="save-btn" onclick="saveToMatter({{ matter.id }})" disabled>Save "Length of Marriage" to Clio</button>
+    <button type="button" id="save-btn" onclick="saveToMatter({{ matter.id }})" disabled>Save to Clio (Date of Marriage, Date of Separation, Length of Marriage)</button>
     <span id="save-status" style="margin-left:0.75rem; font-size:0.85rem; color:var(--text-muted);"></span>
   </div>
   {% endif %}
@@ -154,7 +154,9 @@ async function saveToMatter(matterId) {
     });
     const body = await resp.json();
     if (resp.ok && body.success) {
-      status.textContent = `Saved: "${body.value}"`;
+      status.textContent = body.warning
+        ? body.warning
+        : `Saved — Date of Marriage: ${startEl.value}, Date of Separation: ${endEl.value}, Length of Marriage: "${body.value}"`;
     } else {
       status.textContent = body.error || "Couldn't save — try again.";
     }

@@ -1,11 +1,16 @@
 """
 routes_date_calculator.py — Date Calculator: a generic two-date duration
-calculator, plus a matter-aware mode that reads (never writes) a matter's
-Date of Marriage/Separation and can save the computed "Length of Marriage"
-summary back to Clio as its own field.
+calculator, plus a matter-aware mode that reads AND writes a matter's Date
+of Marriage/Separation, and can save the computed "Length of Marriage"
+summary back to Clio as its own field — all from one Save action, so this
+tool is self-sufficient rather than sending staff to Moore/Marsden just to
+set those two dates (Ted, 2026-09-04: "each tool should not depend on
+another tool or force the user to navigate to another one").
 
-See date_calculator.py's module docstring for the Clio field details and
-why this stays read-only on Date of Marriage/Separation themselves.
+Reuses moore_marsden.clio_matter_dates.update_matter_dates() directly for
+the write — same two fields, same existing-CustomFieldValue-id handling,
+no reason to duplicate it. See date_calculator.py's module docstring for
+the Length of Marriage field details.
 """
 
 from fastapi import APIRouter, Depends, Form, Request
@@ -14,7 +19,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 import date_calculator
 import matter_matching
-from moore_marsden.clio_matter_dates import fetch_matter_dates
+from moore_marsden.clio_matter_dates import fetch_matter_dates, update_matter_dates
 from web.auth import require_auth
 
 router = APIRouter(prefix="/date-calculator", tags=["date-calculator"])
@@ -75,19 +80,32 @@ async def date_calculator_save(
     matter_id: int = Form(...), start_date: str = Form(...), end_date: str = Form(...),
     _: None = Depends(require_auth),
 ):
-    def _do() -> str:
+    def _do() -> dict:
         start = date_calculator.parse_iso_date(start_date)
         end = date_calculator.parse_iso_date(end_date)
         text_value = date_calculator.calculate_duration(start, end).format()
         session = date_calculator.build_session()
-        date_calculator.update_length_of_marriage(session, matter_id, text_value)
-        return text_value
+        # Same single explicit click writes all three fields — Save always
+        # means "these are the real dates," not "just remember the summary."
+        # Date of Marriage/Separation is the more foundational write (the
+        # same two fields Moore/Marsden's math depends on); Length of
+        # Marriage is a secondary convenience summary. If that summary
+        # field write fails (e.g. it doesn't exist in Clio yet), the dates
+        # themselves should still be considered saved — not reported as a
+        # flat failure that makes it look like nothing happened.
+        update_matter_dates(session, matter_id, date_of_marriage=start_date, date_of_separation=end_date)
+        try:
+            date_calculator.update_length_of_marriage(session, matter_id, text_value)
+            warning = None
+        except RuntimeError as e:
+            warning = f"Date of Marriage/Separation saved, but Length of Marriage wasn't: {e}"
+        return {"value": text_value, "warning": warning}
 
     try:
-        text_value = await run_in_threadpool(_do)
+        result = await run_in_threadpool(_do)
     except ValueError:
         return JSONResponse({"error": "Invalid date."}, status_code=400)
     except RuntimeError as e:
         return JSONResponse({"error": str(e)}, status_code=502)
 
-    return JSONResponse({"success": True, "value": text_value})
+    return JSONResponse({"success": True, "value": result["value"], "warning": result["warning"]})
