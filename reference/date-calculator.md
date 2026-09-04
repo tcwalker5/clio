@@ -27,6 +27,18 @@ calculator (e.g. for a matter where neither is set in Clio yet, or for a fully g
 calculation with no matter at all) only affects what's shown here — nothing is saved
 to Date of Marriage/Separation from this tool.
 
+**Selecting a matter loads it immediately — no separate "Load Matter" button**
+(changed 2026-09-04, Ted: "that is more consistent with a dropdown"). Every other
+page sharing `matter_search.js` (Equalizer, Legs, Moore/Marsden, Printer) keeps its
+own explicit submit button — this page is the one exception, via a new opt-in
+`autoSubmit` parameter (`initMatterSearch(matters, true)`, default `false` everywhere
+else) rather than changing the shared behavior for all five pages. Deliberately
+scoped this way, not by accident: **auto-firing on selection is only safe because
+loading a matter here is read-only** (it just fetches Date of Marriage/Separation to
+display) — the actual write (Save "Length of Marriage" to Clio) stays its own
+separate, explicit button click, unaffected by this change. Don't set `autoSubmit`
+on a matter-search form whose submit itself writes to Clio.
+
 **Duration math** (`calculate_duration()`) is a plain calendar-accurate
 years/months/days breakdown — the standard borrow-from-the-previous-month technique
 (the same one `python-dateutil`'s `relativedelta` uses internally). Not pulled in as a

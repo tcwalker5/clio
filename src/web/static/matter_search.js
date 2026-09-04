@@ -3,7 +3,17 @@
 // the full open-matters list is small enough to embed once per page load).
 // Selecting a result fills the sibling form's ".matter-search-id" hidden
 // field, which is what actually gets submitted.
-function initMatterSearch(matters) {
+//
+// autoSubmit (default false, opt-in per page — this is shared by Equalizer,
+// Legs, Moore/Marsden, Printer, and Date Calculator, and only Date
+// Calculator asks for it) submits the form immediately on selection rather
+// than waiting for a separate button click. Safe to auto-fire here
+// specifically because loading a matter is read-only (it just fetches
+// reference data to display) — never do this for a form whose submit
+// actually writes to Clio; that should always need its own deliberate
+// click (see Date Calculator's separate "Save to Clio" button, which this
+// has no effect on).
+function initMatterSearch(matters, autoSubmit = false) {
   const MAX_RESULTS = 8;
 
   document.querySelectorAll(".matter-search-input").forEach((input) => {
@@ -76,6 +86,7 @@ function initMatterSearch(matters) {
       results.style.display = "none";
       results.innerHTML = "";
       clearError();
+      if (autoSubmit) form.requestSubmit ? form.requestSubmit() : form.submit();
     });
 
     input.addEventListener("blur", () => {
