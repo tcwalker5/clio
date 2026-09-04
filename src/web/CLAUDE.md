@@ -152,26 +152,27 @@ feature N+1. Two independent, native-Windows mechanisms instead:
    hot-reloaded (only Jinja2 templates are, unchanged from before), and this was a
    deliberate choice over a file-watcher auto-restart: a watcher would bounce the live
    LAN service mid-edit during a multi-file change, serving a half-finished state to
-   whoever's using it at that moment. After a deploy, restart with:
-   ```powershell
-   Stop-ScheduledTask -TaskName "CAP Dashboard"
-   Start-ScheduledTask -TaskName "CAP Dashboard"
-   ```
-   (`Start-ScheduledTask` runs the task's action immediately — it doesn't wait for
-   another logon.)
+   whoever's using it at that moment. After a deploy, restart with **`restart-dashboard.bat`**
+   (repo root — there's no native `Restart-ScheduledTask` cmdlet, this wraps
+   `Stop-ScheduledTask` + a 3s pause + `Start-ScheduledTask` in one command; the pause
+   is deliberate, see the incident right below).
 
-   **Real bug found live 2026-09-04 — `Stop-ScheduledTask` didn't actually kill the
-   dashboard, and Task Scheduler never noticed.** `start-dashboard-service.vbs`
-   called `WshShell.Run(...)` but never did anything with its return value — VBScript
-   only propagates a launched process's exit code if something explicitly acts on it
-   (`WScript.Quit(exitCode)`); without that, `wscript.exe` always exits `0` no matter
-   what the batch/uvicorn underneath it actually did. Confirmed live: after a
-   `Stop`/`Start-ScheduledTask` cycle, the *old* process was still holding port 8421
-   (an orphan `Stop-ScheduledTask` never actually reached), so the fresh instance
-   failed immediately with `WinError 10048` (port already in use, exit code 3) — but
-   `Get-ScheduledTaskInfo` reported `LastTaskResult: 0` (success) anyway, so the
-   "restart on failure" setting never even tried, and `/date-calculator` 404'd against
-   the stale process for the rest of that session. Fixed by adding
+   **Real incident 2026-09-04 — a restart left `/date-calculator` 404ing against a
+   stale process.** Most likely proximate cause: only `Start-ScheduledTask` was run,
+   without `Stop-ScheduledTask` first — Ted asked for a true "restart" command right
+   after, which is exactly what `restart-dashboard.bat` above now is, precisely so
+   this can't happen from muscle memory again. Independently, this also surfaced a
+   real bug worth fixing regardless of what caused this specific incident:
+   `start-dashboard-service.vbs` called `WshShell.Run(...)` but never did anything
+   with its return value — VBScript only propagates a launched process's exit code if
+   something explicitly acts on it (`WScript.Quit(exitCode)`); without that,
+   `wscript.exe` always exits `0` no matter what the batch/uvicorn underneath it
+   actually did. Confirmed live via the log: uvicorn failed to bind port 8421
+   (`WinError 10048`, exit code 3, because the old process was still holding it), but
+   `Get-ScheduledTaskInfo` reported `LastTaskResult: 0` (success) anyway — meaning
+   Task Scheduler's own "restart on failure" setting would never fire on a *genuine*
+   crash either, silently, since its first signal (a non-zero exit code) never
+   reached it. Fixed by adding
    `WScript.Quit(WshShell.Run(...))` so the real exit code reaches Task Scheduler.
    **This means the crash-restart safety net was silently non-functional from
    registration (2026-09-03) until this fix (2026-09-04)** — worth remembering if a
