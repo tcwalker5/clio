@@ -152,8 +152,13 @@ that runs the dashboard — second real example of the per-feature-task pattern
 schtasks /create /tn "Clio Length of Marriage Sync" /tr "C:\Users\TEDMINI\projects\clio\sync-length-of-marriage.bat" /sc daily /st 07:15
 ```
 Registering this is a deliberate, one-time manual step (persistent OS-level
-automation is confirmed with the user before being created, not silently set up) —
-not yet registered as of 2026-09-04, pending the "Length of Marriage" field actually
-being created in Clio first.
+automation is confirmed with the user before being created, not silently set up).
+**Registered and live-tested 2026-09-04** — triggered manually right after
+registration (`Start-ScheduledTask`, not waiting for the 07:15 trigger) specifically
+to test the task mechanics and the sync logic together: first run correctly
+backfilled all 4 real matters that had both dates set but no Length of Marriage yet
+(VALENTINE LAURA, COVARRUBIAS ADRIANNA, MARSO ALEXANDRIA, ZAVALA POORNIMA — confirmed
+live in Clio), second run found the same 4 matters and updated 0 (values already
+matched), confirming the "only touch what changed" no-op behavior works as intended.
 
 ---
