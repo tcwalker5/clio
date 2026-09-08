@@ -130,7 +130,29 @@ p.subtitle { color: var(--text-muted); margin-top: 0; }
 .hero h1 { color: var(--ink-text); font-size: 2rem; margin-bottom: 0.6rem; }
 .hero .lede { color: var(--ink-text-muted); max-width: 46rem; margin: 0; font-size: 1rem; }
 
-/* ---------- Channel grid (dashboard home) ---------- */
+/* ---------- Channel sections + grid (dashboard home) ---------- */
+
+.channel-section { margin-bottom: 2.5rem; }
+.channel-section:last-child { margin-bottom: 0; }
+
+.channel-section-head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+}
+.channel-section-head h2 { margin: 0; }
+
+.channel-section-count {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 0.05rem 0.55rem;
+}
+
+.channel-section > .subtitle { margin: 0.2rem 0 1rem; }
 
 .channel-grid {
     display: grid;

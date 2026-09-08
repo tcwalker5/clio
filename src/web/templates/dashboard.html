@@ -8,123 +8,150 @@
     expenses, calendars, and directories, each its own channel in and out of Clio.</p>
 </section>
 
-<div class="channel-grid">
-  <a class="channel" href="/bradford">
-    <div class="channel-head">
-      <span class="channel-code">BRD</span>
-      <span class="channel-mode">posts to clio</span>
-    </div>
-    <h3>Bradford Invoice Import</h3>
-    <p>Drag in the PL Bradford Law invoice PDF, preview matched time entries, then post to Clio.</p>
-    <p class="channel-flow">PDF <span class="channel-arrow">&rarr;</span> Clio</p>
-  </a>
-  <a class="channel" href="/printer">
-    <div class="channel-head">
-      <span class="channel-code">PRN</span>
-      <span class="channel-mode">posts to clio</span>
-    </div>
-    <h3>Printer Expenses</h3>
-    <p>Drag in the monthly Papercut CSV, preview matched expense entries, then post to Clio.</p>
-    <p class="channel-flow">Papercut <span class="channel-arrow">&rarr;</span> Clio</p>
-  </a>
-  <a class="channel" href="/legs">
-    <div class="channel-head">
-      <span class="channel-code">LEG</span>
-      <span class="channel-mode">posts to clio</span>
-    </div>
-    <h3>Legs Expenses</h3>
-    <p>Drag in the monthly Legs Legal Support statement PDF, preview matched expense entries, then post to Clio.</p>
-    <p class="channel-flow">PDF <span class="channel-arrow">&rarr;</span> Clio</p>
-  </a>
-  <a class="channel" href="/calendar">
-    <div class="channel-head">
-      <span class="channel-code">CAL</span>
-      <span class="channel-mode readonly">read-only compare</span>
-    </div>
-    <h3>Court Calendar Sync</h3>
-    <p>Compare the SD Superior Court calendar against Clio calendar entries.</p>
-    <p class="channel-flow">Court site <span class="channel-arrow">&harr;</span> Clio</p>
-  </a>
-  <a class="channel" href="/ringcentral">
-    <div class="channel-head">
-      <span class="channel-code">RC</span>
-      <span class="channel-mode">exports csv</span>
-    </div>
-    <h3>RingCentral Directory</h3>
-    <p>Sync the RingCentral company phone directory with Clio clients and OC/OP contacts.</p>
-    <p class="channel-flow">Clio <span class="channel-arrow">&rarr;</span> RingCentral</p>
-  </a>
-  <a class="channel" href="/papercut">
-    <div class="channel-head">
-      <span class="channel-code">PC</span>
-      <span class="channel-mode">exports tsv</span>
-    </div>
-    <h3>PaperCut Accounts</h3>
-    <p>Generates a PaperCut Shared Account batch import from Clio's open matters, keyed by matter ID for exact expense matching.</p>
-    <p class="channel-flow">Clio <span class="channel-arrow">&rarr;</span> PaperCut</p>
-  </a>
-  <a class="channel" href="/trust">
-    <div class="channel-head">
-      <span class="channel-code">TRU</span>
-      <span class="channel-mode">drafts trust requests</span>
-    </div>
-    <h3>Trust Monitor</h3>
-    <p>Flags matters low on trust, and lets you review and send trust replenishment requests in bulk.</p>
-    <p class="channel-flow">Clio <span class="channel-arrow">&harr;</span> Trust Request</p>
-  </a>
-  <a class="channel" href="/collections">
-    <div class="channel-head">
-      <span class="channel-code">COL</span>
-      <span class="channel-mode readonly">read-only</span>
-    </div>
-    <h3>Collections</h3>
-    <p>Unpaid, already-issued bills — money earned for work already done, separate from trust/retainer tracking.</p>
-    <p class="channel-flow">Clio <span class="channel-arrow">&rarr;</span> Report</p>
-  </a>
-  <a class="channel" href="/staff-unbilled">
-    <div class="channel-head">
-      <span class="channel-code">SUB</span>
-      <span class="channel-mode readonly">read-only</span>
-    </div>
-    <h3>Staff Unbilled Report</h3>
-    <p>Who's working on matters that owe money — unbilled activity by staff member, paired with what's already owed on the same matter.</p>
-    <p class="channel-flow">Clio <span class="channel-arrow">&rarr;</span> Report</p>
-  </a>
-  <a class="channel" href="/assignments">
-    <div class="channel-head">
-      <span class="channel-code">CAS</span>
-      <span class="channel-mode">posts to clio</span>
-    </div>
-    <h3>Client Assignment</h3>
-    <p>Find open matters missing a Responsible Attorney, Originating Attorney, or Responsible Staff, and assign one from a dropdown.</p>
-    <p class="channel-flow">Clio <span class="channel-arrow">&harr;</span> Clio</p>
-  </a>
-  <a class="channel" href="/equalizer">
-    <div class="channel-head">
-      <span class="channel-code">EQZ</span>
-      <span class="channel-mode">saves pdf to clio</span>
-    </div>
-    <h3>Equalizer</h3>
-    <p>Split assets and debts between two parties and calculate the equalization payment to balance the division.</p>
-    <p class="channel-flow">Worksheet <span class="channel-arrow">&rarr;</span> Clio</p>
-  </a>
-  <a class="channel" href="/date-calculator">
-    <div class="channel-head">
-      <span class="channel-code">DTC</span>
-      <span class="channel-mode">posts to clio</span>
-    </div>
-    <h3>Date Calculator</h3>
-    <p>Time between two dates, with a length-of-marriage mode that flags California's 10-year long-term-marriage threshold and can save the result to a matter.</p>
-    <p class="channel-flow">Dates <span class="channel-arrow">&rarr;</span> Clio</p>
-  </a>
-  <a class="channel" href="/moore-marsden">
-    <div class="channel-head">
-      <span class="channel-code">MM</span>
-      <span class="channel-mode">saves pdf to clio</span>
-    </div>
-    <h3>Moore/Marsden Calculator</h3>
-    <p>Calculate the community's interest in a spouse's separate-property real estate, including chained multi-refinance scenarios.</p>
-    <p class="channel-flow">Worksheet <span class="channel-arrow">&rarr;</span> Clio</p>
-  </a>
-</div>
+<section class="channel-section">
+  <div class="channel-section-head">
+    <h2>Billing &amp; Expenses</h2>
+    <span class="channel-section-count">7</span>
+  </div>
+  <p class="subtitle">Invoices, printer costs, trust, collections, and unbilled work.</p>
+  <div class="channel-grid">
+    <a class="channel" href="/bradford">
+      <div class="channel-head">
+        <span class="channel-code">BRD</span>
+        <span class="channel-mode">posts to clio</span>
+      </div>
+      <h3>Bradford Invoice Import</h3>
+      <p>Drag in the PL Bradford Law invoice PDF, preview matched time entries, then post to Clio.</p>
+      <p class="channel-flow">PDF <span class="channel-arrow">&rarr;</span> Clio</p>
+    </a>
+    <a class="channel" href="/printer">
+      <div class="channel-head">
+        <span class="channel-code">PRN</span>
+        <span class="channel-mode">posts to clio</span>
+      </div>
+      <h3>Printer Expenses</h3>
+      <p>Drag in the monthly Papercut CSV, preview matched expense entries, then post to Clio.</p>
+      <p class="channel-flow">Papercut <span class="channel-arrow">&rarr;</span> Clio</p>
+    </a>
+    <a class="channel" href="/legs">
+      <div class="channel-head">
+        <span class="channel-code">LEG</span>
+        <span class="channel-mode">posts to clio</span>
+      </div>
+      <h3>Legs Expenses</h3>
+      <p>Drag in the monthly Legs Legal Support statement PDF, preview matched expense entries, then post to Clio.</p>
+      <p class="channel-flow">PDF <span class="channel-arrow">&rarr;</span> Clio</p>
+    </a>
+    <a class="channel" href="/papercut">
+      <div class="channel-head">
+        <span class="channel-code">PC</span>
+        <span class="channel-mode">exports tsv</span>
+      </div>
+      <h3>PaperCut Accounts</h3>
+      <p>Generates a PaperCut Shared Account batch import from Clio's open matters, keyed by matter ID for exact expense matching.</p>
+      <p class="channel-flow">Clio <span class="channel-arrow">&rarr;</span> PaperCut</p>
+    </a>
+    <a class="channel" href="/trust">
+      <div class="channel-head">
+        <span class="channel-code">TRU</span>
+        <span class="channel-mode">drafts trust requests</span>
+      </div>
+      <h3>Trust Monitor</h3>
+      <p>Flags matters low on trust, and lets you review and send trust replenishment requests in bulk.</p>
+      <p class="channel-flow">Clio <span class="channel-arrow">&harr;</span> Trust Request</p>
+    </a>
+    <a class="channel" href="/collections">
+      <div class="channel-head">
+        <span class="channel-code">COL</span>
+        <span class="channel-mode readonly">read-only</span>
+      </div>
+      <h3>Collections</h3>
+      <p>Unpaid, already-issued bills — money earned for work already done, separate from trust/retainer tracking.</p>
+      <p class="channel-flow">Clio <span class="channel-arrow">&rarr;</span> Report</p>
+    </a>
+    <a class="channel" href="/staff-unbilled">
+      <div class="channel-head">
+        <span class="channel-code">SUB</span>
+        <span class="channel-mode readonly">read-only</span>
+      </div>
+      <h3>Staff Unbilled Report</h3>
+      <p>Who's working on matters that owe money — unbilled activity by staff member, paired with what's already owed on the same matter.</p>
+      <p class="channel-flow">Clio <span class="channel-arrow">&rarr;</span> Report</p>
+    </a>
+  </div>
+</section>
+
+<section class="channel-section">
+  <div class="channel-section-head">
+    <h2>Case Calculators</h2>
+    <span class="channel-section-count">3</span>
+  </div>
+  <p class="subtitle">Family-law worksheets and date math, saved straight to the matter.</p>
+  <div class="channel-grid">
+    <a class="channel" href="/equalizer">
+      <div class="channel-head">
+        <span class="channel-code">EQZ</span>
+        <span class="channel-mode">saves pdf to clio</span>
+      </div>
+      <h3>Equalizer</h3>
+      <p>Split assets and debts between two parties and calculate the equalization payment to balance the division.</p>
+      <p class="channel-flow">Worksheet <span class="channel-arrow">&rarr;</span> Clio</p>
+    </a>
+    <a class="channel" href="/moore-marsden">
+      <div class="channel-head">
+        <span class="channel-code">MM</span>
+        <span class="channel-mode">saves pdf to clio</span>
+      </div>
+      <h3>Moore/Marsden Calculator</h3>
+      <p>Calculate the community's interest in a spouse's separate-property real estate, including chained multi-refinance scenarios.</p>
+      <p class="channel-flow">Worksheet <span class="channel-arrow">&rarr;</span> Clio</p>
+    </a>
+    <a class="channel" href="/date-calculator">
+      <div class="channel-head">
+        <span class="channel-code">DTC</span>
+        <span class="channel-mode">posts to clio</span>
+      </div>
+      <h3>Date Calculator</h3>
+      <p>Time between two dates, with a length-of-marriage mode that flags California's 10-year long-term-marriage threshold and can save the result to a matter.</p>
+      <p class="channel-flow">Dates <span class="channel-arrow">&rarr;</span> Clio</p>
+    </a>
+  </div>
+</section>
+
+<section class="channel-section">
+  <div class="channel-section-head">
+    <h2>Office Operations</h2>
+    <span class="channel-section-count">3</span>
+  </div>
+  <p class="subtitle">Staff assignment, court calendar, and the phone directory.</p>
+  <div class="channel-grid">
+    <a class="channel" href="/assignments">
+      <div class="channel-head">
+        <span class="channel-code">CAS</span>
+        <span class="channel-mode">posts to clio</span>
+      </div>
+      <h3>Client Assignment</h3>
+      <p>Find open matters missing a Responsible Attorney, Originating Attorney, or Responsible Staff, and assign one from a dropdown.</p>
+      <p class="channel-flow">Clio <span class="channel-arrow">&harr;</span> Clio</p>
+    </a>
+    <a class="channel" href="/calendar">
+      <div class="channel-head">
+        <span class="channel-code">CAL</span>
+        <span class="channel-mode readonly">read-only compare</span>
+      </div>
+      <h3>Court Calendar Sync</h3>
+      <p>Compare the SD Superior Court calendar against Clio calendar entries.</p>
+      <p class="channel-flow">Court site <span class="channel-arrow">&harr;</span> Clio</p>
+    </a>
+    <a class="channel" href="/ringcentral">
+      <div class="channel-head">
+        <span class="channel-code">RC</span>
+        <span class="channel-mode">exports csv</span>
+      </div>
+      <h3>RingCentral Directory</h3>
+      <p>Sync the RingCentral company phone directory with Clio clients and OC/OP contacts.</p>
+      <p class="channel-flow">Clio <span class="channel-arrow">&rarr;</span> RingCentral</p>
+    </a>
+  </div>
+</section>
 {% endblock %}
