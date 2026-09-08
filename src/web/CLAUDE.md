@@ -305,3 +305,72 @@ system synced with Clio" pattern the rest of this platform is built around.
 
 ---
 
+
+## Per-user Clio attribution — open decision (2026-09-08, on hold)
+
+**The problem:** every Document, Note, and write this platform makes shows up in Clio
+as authored by whoever authorized the one shared `CLIO_ACCESS_TOKEN` — currently Ted
+Walker (confirmed live via `/users/who_am_i.json`, id `359072911`), regardless of which
+staff member actually used the dashboard. Surfaced 2026-09-08 via Equalizer's Save-to-
+Clio (a PDF and a Note, both attributed to Ted no matter who saved them), but it's true
+of every write across every subproject, not just Equalizer/Moore-Marsden.
+
+**Confirmed not fixable per-request:** a Document's `creator` field (`ClioCreator`, a
+full user reference) and a Note's `author` field (`User`) both exist on read, but
+**neither is a writable property** in `POST /documents.json` or `POST /notes.json`
+(checked directly against `reference/openapi.json`'s request-body schemas, not
+assumed) — they're server-derived from whatever identity the API call authenticates
+as. There is no override.
+
+**Rejected 2026-09-08 (Ted): appending the real user's name as visible text** (e.g.
+"(saved by Misty Sherman)" in the document name or Note body, while the real Clio
+`creator`/`author` metadata still shows Ted) — explicitly not an acceptable compromise.
+**Ted's stated position: either ignore this feature entirely, or do the full per-user
+integration** — no scoped/partial version (e.g. per-user auth just for Equalizer/
+Moore-Marsden's Document+Note saves, leaving everything else on the shared token) is
+on the table. Decision between those two not yet made — parked here for a future
+session rather than re-scoped smaller.
+
+**What full per-user integration actually requires** (scoped 2026-09-08, not yet
+built):
+1. **A real web-based OAuth callback.** `clio_auth.py`'s existing flow opens a browser
+   and runs a *local* HTTP server on `127.0.0.1` to catch the redirect — that only
+   works for a CLI script on one machine. A shared dashboard needs a server-side
+   callback route (e.g. `http://cap.lan:8421/oauth/callback`) so each person's own
+   browser redirects back to the dashboard itself. Same Clio app registration/
+   client_id, no new Developer Portal app needed — just a different redirect URI and
+   a route to receive it.
+2. **Per-user token storage.** A new table in `data/clio_dashboard.db` (own schema
+   fragment, matching this project's established per-module pattern) holding each
+   authorized person's access/refresh token + expiry, keyed by Clio user id — not a
+   single `.env` pair anymore.
+3. **Per-user token refresh.** Access tokens expire in about an hour. Today's refresh
+   is a manual `clio_auth.py --refresh` editing one `.env` pair; for N people this has
+   to happen automatically, per row, with no human running a CLI command.
+4. **CAP's login model has to change.** `web/auth.py` today is a bare boolean — one
+   shared passphrase, no identity attached at all. Real attribution means CAP has to
+   know *who* is logged in, which points at replacing the shared passphrase with
+   "Sign in with Clio" itself (Clio already is the identity system that matters here).
+   This is a genuinely different login experience for the whole office, not just a
+   backend change. Court Calendar Sync's pages (deliberately open, no login, so
+   anyone on the LAN can use them) would need to stay carved out separately, still
+   reading under a fixed/shared identity.
+5. **Every subproject's `build_session()` reads one global env var today.** Making
+   this per-user means threading "whose token" through essentially the whole
+   codebase — `trust_monitor.py`, `collections_monitor.py`, `client_assignment.py`,
+   `date_calculator.py`, `equalizer/`, `moore_marsden/`, all of it — and every route
+   handler needs to resolve "the current logged-in user" and pass their session
+   through. This is the single largest piece of the work by line count.
+6. **Real permission-compatibility risk, unverified:** Ted's token currently works for
+   Accounting-scoped calls (Trust Monitor) because he's presumably an account
+   owner/admin in Clio. A paralegal's or associate's own personal Clio permissions
+   might not include Accounting or Billing write — their personal token could be
+   rejected on operations Ted's sails through today. Needs a per-person Clio
+   permission audit before trusting this platform-wide, not assumed to just work.
+
+**Not decided:** whether to build this (full scope, per point 1-6 above, no smaller
+version per Ted's stated either/or) or drop the ask entirely. Revisit when picked back
+up — start from this section rather than re-deriving the schema findings above.
+
+---
+

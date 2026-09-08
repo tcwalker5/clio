@@ -243,6 +243,19 @@ uv run src/clio_auth.py --refresh
 
 Both commands update `CLIO_ACCESS_TOKEN` and `CLIO_REFRESH_TOKEN` in `.env` automatically.
 
+**Every write this whole platform makes is attributed to whoever authorized this one
+shared token** — confirmed live via `/users/who_am_i.json`: currently Ted Walker (id
+`359072911`). A Document's `creator` field and a Note's `author` field are **not
+writable** via the API (confirmed against `reference/openapi.json`'s own POST request
+schemas for `/documents.json` and `/notes.json` — neither field appears among the
+writable properties) — they're server-derived from whichever identity the API call
+authenticates as, with no per-request override. This means every Equalizer/Moore-
+Marsden PDF, every posted Note, every custom field write, shows as done by Ted
+regardless of which staff member actually used the dashboard. Real per-user
+attribution needs per-user Clio OAuth, a genuinely large undertaking — see
+`src/web/CLAUDE.md`'s CAP section, "Per-user Clio attribution" for the full scoping
+and the open decision (2026-09-08, on hold).
+
 ### App permissions (Developer Portal) — not a freely-requestable OAuth scope string
 
 Unlike Microsoft Graph (where you just list scopes in the authorize URL — see
