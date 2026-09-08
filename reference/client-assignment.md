@@ -69,6 +69,24 @@ field that can go missing already lives in the row's own selects).
 page, same "live pipeline rendered as a printable table" pattern as Collections'
 action-report: `view=missing` lists only matters still missing a field, `view=all`
 lists every open matter with its current assignments (`—` for anything still blank).
+**No Client column** (removed 2026-09-08, Ted) — same reasoning as Collections' own
+print report: every matter today has exactly one client (matter name = client name),
+so listing both is redundant.
+
+**Print cutoff, fixed 2026-09-08** — real bug, live-confirmed: with 5 columns (before
+the Client column was dropped) `table.nowrap`'s `white-space:nowrap` made the table
+wider than a printed page, and unlike a screen view (which just gets a scrollbar), a
+printed page has no way to reveal the overflow — it silently clips, with no visible
+sign anything was cut off. Exact same failure mode Collections' print report hit and
+fixed once already (see `billing-monitors.md`'s "Long Handling text" note). Dropping
+the Client column got it close (measured ~731px of intrinsic content width against a
+~720px printable page — right at the edge, printer-margin-dependent), but the durable
+fix is letting the Matter column specifically wrap on print
+(`#report-table th:first-child, #report-table td:first-child { white-space: normal }`
+inside `@media print`) since matter names vary the most in length ("ALDERMAN, KEVIN &
+MARYANNE" vs. "COX, JOEY") while the other three columns draw from a small fixed
+roster of short names. Verified live by simulating the print rule's effect and
+re-measuring: intrinsic width dropped to fit within a 720px page with room to spare.
 
 ## Case Load
 

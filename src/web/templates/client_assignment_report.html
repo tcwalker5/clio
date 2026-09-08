@@ -16,13 +16,12 @@
   <div style="overflow-x:auto;">
   <table class="nowrap" id="report-table">
     <thead><tr>
-      <th>Matter</th><th>Client</th><th>Responsible Attorney</th><th>Originating Attorney</th><th>Responsible Staff</th>
+      <th>Matter</th><th>Responsible Attorney</th><th>Originating Attorney</th><th>Responsible Staff</th>
     </tr></thead>
     <tbody>
       {% for m in matters %}
       <tr>
         <td>{{ m.display_number }}</td>
-        <td>{{ m.client_name }}</td>
         <td>{{ m.responsible_attorney_name or "—" }}</td>
         <td>{{ m.originating_attorney_name or "—" }}</td>
         <td>{{ m.responsible_staff_name or "—" }}</td>
@@ -42,6 +41,13 @@
   .panel { border: none; padding: 0; }
   body { background: #fff; color: #000; }
   table.nowrap th, table.nowrap td { color: #000; border-color: #ccc; }
+  /* Matter names vary widely in length ("ALDERMAN, KEVIN & MARYANNE" vs.
+     "COX, JOEY") and table.nowrap's white-space:nowrap doesn't wrap
+     overflow on a printed page's fixed width, it silently clips it — same
+     bug already hit and fixed once on Collections' print report. Scoped to
+     this one column only; the other three are short, fixed-roster names
+     that stay comfortably narrow. */
+  #report-table th:first-child, #report-table td:first-child { white-space: normal; }
 }
 </style>
 {% endif %}
