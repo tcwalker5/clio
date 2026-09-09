@@ -26,22 +26,68 @@
     </span>
   </a>
   <nav>
-    <a href="/calendar">Court Calendar</a>
-    <a href="/bradford">Bradford Invoice</a>
-    <a href="/printer">Printer Expenses</a>
-    <a href="/legs">Legs Expenses</a>
-    <a href="/ringcentral">RingCentral Directory</a>
-    <a href="/papercut">PaperCut Accounts</a>
-    <a href="/trust">Trust Monitor</a>
-    <a href="/collections">Collections</a>
-    <a href="/staff-unbilled">Staff Unbilled</a>
-    <a href="/assignments">Client Assignment</a>
-    <a href="/date-calculator">Date Calculator</a>
-    <a href="/equalizer">Equalizer</a>
-    <a href="/moore-marsden">Moore/Marsden</a>
+    <!-- Grouped 2026-09-08 to match dashboard.html's three channel-card
+         sections (Case Calculators / Office Operations / Billing & Expenses)
+         — 13 flat links plus Log out was too crowded to scan. CSS-only
+         hover/focus dropdown (:focus-within), no JS: `.nav-group` triggers
+         are focusable buttons so Tab opens a menu the same as hover does,
+         and Tab continues into its links (real <a> descendants) before
+         :focus-within lets go. -->
+    <div class="nav-group">
+      <button type="button" class="nav-trigger">Case Calculators</button>
+      <div class="nav-dropdown">
+        <a href="/equalizer">Equalizer</a>
+        <a href="/moore-marsden">Moore/Marsden</a>
+        <a href="/date-calculator">Date Calculator</a>
+      </div>
+    </div>
+    <div class="nav-group">
+      <button type="button" class="nav-trigger">Office Operations</button>
+      <div class="nav-dropdown">
+        <a href="/assignments">Client Assignment</a>
+        <a href="/calendar">Court Calendar</a>
+        <a href="/ringcentral">RingCentral Directory</a>
+      </div>
+    </div>
+    <div class="nav-group">
+      <button type="button" class="nav-trigger">Billing &amp; Expenses</button>
+      <div class="nav-dropdown">
+        <a href="/bradford">Bradford Invoice</a>
+        <a href="/printer">Printer Expenses</a>
+        <a href="/legs">Legs Expenses</a>
+        <a href="/papercut">PaperCut Accounts</a>
+        <a href="/trust">Trust Monitor</a>
+        <a href="/collections">Collections</a>
+        <a href="/staff-unbilled">Staff Unbilled</a>
+      </div>
+    </div>
     <a href="/logout">Log out</a>
   </nav>
 </header>
+<script>
+// Click-to-open menu bar (2026-09-08) -- replaces an earlier hover-only
+// version Ted rejected as not matching a normal app menu (File -> Save/Print
+// etc: click the category to open it, click a link to act, click elsewhere
+// to dismiss). Vanilla JS, no build step, same convention as this app's
+// other per-page scripts.
+(function () {
+  var groups = document.querySelectorAll(".nav-group");
+  function closeAll(except) {
+    groups.forEach(function (g) { if (g !== except) g.classList.remove("open"); });
+  }
+  groups.forEach(function (group) {
+    var trigger = group.querySelector(".nav-trigger");
+    trigger.addEventListener("click", function (e) {
+      e.stopPropagation();
+      var wasOpen = group.classList.contains("open");
+      closeAll(group);
+      group.classList.toggle("open", !wasOpen);
+    });
+  });
+  document.addEventListener("click", function () { closeAll(); });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape") closeAll(); });
+})();
+</script>
 {% elif request.url.path != '/login' %}
 <header class="topbar">
   <a class="brand" href="/calendar">

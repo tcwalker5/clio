@@ -178,6 +178,31 @@ feature N+1. Two independent, native-Windows mechanisms instead:
    registration (2026-09-03) until this fix (2026-09-04)** — worth remembering if a
    past "it restarted fine" observation from that window gets second-guessed.
 
+   **Second real incident, 2026-09-08 — `restart-dashboard.bat`'s own stop+sleep+start
+   still wasn't enough.** A Collections template/route deploy was restarted via
+   `restart-dashboard.bat`, then `Stop-ScheduledTask` was also run manually — `cap.lan`
+   kept serving through both. Diagnosis: the uvicorn process actually answering port
+   8421 (PID confirmed via `Get-NetTCPConnection`) had a `StartTime` of **2026-09-04
+   3:54:27 PM** — the very incident above — meaning that day's fix never actually took
+   effect; the process it should have replaced had just kept running, undetected,
+   for four days. Root cause: `Stop-ScheduledTask` only reliably terminates the task's
+   own tracked root process (`wscript.exe`); it does not reliably reap uvicorn's
+   process tree underneath it once that tree has drifted outside Task Scheduler's job
+   object (confirmed live: the tree was three levels deep, `uvicorn.exe` launcher ->
+   `python.exe` -> `python.exe`). The subsequent `Start-ScheduledTask` then failed to
+   bind the now-still-occupied port — `Get-ScheduledTaskInfo` showed `LastTaskResult: 3`,
+   proof the 2026-09-04 exit-code fix above *was* working and correctly recorded the
+   failure — but nothing was ever checking that result, so the failure stayed silent
+   and the stale process just kept answering requests with 2026-09-04's code.
+   **Fixed same day:** `restart-dashboard.bat` now explicitly force-kills any leftover
+   process after `Stop-ScheduledTask` — `Get-CimInstance Win32_Process` filtered by
+   `CommandLine -match 'uvicorn'` and `-match 'port 8421'` (catches the whole wrapper
+   chain by content rather than guessing at process names or PID ownership), then
+   `Stop-Process -Force` on each match — and then verifies port 8421 is actually free
+   before calling `Start-ScheduledTask` at all, aborting with a clear error instead of
+   launching a doomed second instance. It also now prints the post-start
+   `LastTaskResult` instead of unconditionally claiming "Restarted."
+
 2. **Scheduled/unattended jobs — per-feature Windows Scheduled Tasks, not a shared
    scheduler.** Generalizes RingCentral's own pattern below, which predates this
    decision and was the direct precedent for it: one small `.bat` (`uv run
