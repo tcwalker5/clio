@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Collections{% endblock %}
+{% block main_class %}wide{% endblock %}
 {% block content %}
 <h1>Collections</h1>
 <p class="subtitle">Bills already sent to clients that haven't been paid yet — money earned for work already done, entirely separate from the <a href="/trust">Trust Monitor</a>'s retainer tracking (that's money held for future, unearned work). One row per matter — click to expand into that matter's individual unpaid bills, listed in the same columns so Balance always lines up. Handling and its Clio confirmation are matter-level decisions, set once here rather than repeated on every bill below.</p>
@@ -26,7 +27,7 @@
   </div>
 
   {% if summaries %}
-  <div style="overflow-x:auto;">
+  <div class="table-scroll">
   <table class="nowrap" id="collections-table">
     <thead><tr>
       <th></th>
@@ -44,8 +45,8 @@
       {% set group_id = "collections-group-" ~ loop.index %}
       <tr class="summary-row" data-overdue="{{ 'yes' if s.overdue else 'no' }}" data-group="{{ group_id }}">
         <td class="expand-icon" style="cursor:pointer;" onclick="toggleDetail('{{ group_id }}')"><span id="collections-icon-{{ loop.index }}">&#9656;</span></td>
-        <td>{% if s.all_trust %}<span class="badge warn" title="{{ 'New client retainer — not subject to collections' if s.matter_id is none else 'Trust replenishment request' }}">Trust request</span>{% elif s.overdue %}<span class="badge err">{{ s.max_days_overdue }}d past due</span>{% else %}<span class="badge ok">Current</span>{% endif %}</td>
-        <td data-sort="{{ s.display_number or s.client_name }}" style="cursor:pointer;" onclick="toggleDetail('{{ group_id }}')">{% if s.display_number %}{{ s.display_number }}{% else %}<span title="No matter linked to this bill in Clio — showing the client name instead">{{ s.client_name }}</span>{% endif %} <span style="color:var(--text-muted);font-size:0.8rem;">({{ s.bills|length }} bill{{ "s" if s.bills|length != 1 else "" }})</span></td>
+        <td>{% if s.all_trust %}<span class="badge warn" title="{{ 'New client retainer — not subject to collections' if s.matter_id is none else 'Trust replenishment request' }}">Trust request</span>{% if s.trust_level_mismatch %} <span class="badge err" title="This client's own matter already holds ${{ s.matter_trust_balance|money }} in trust — the deposit may have been recorded at the matter level instead of applied to this client-level request. Verify in Clio before treating this as still owed.">⚠ Check trust level</span>{% endif %}{% elif s.overdue %}<span class="badge err">{{ s.max_days_overdue }}d past due</span>{% else %}<span class="badge ok">Current</span>{% endif %}</td>
+        <td data-sort="{{ s.display_name }}" style="cursor:pointer;" onclick="toggleDetail('{{ group_id }}')">{% if s.display_number %}{{ s.display_number }}{% else %}<span title="No matter linked to this bill in Clio — showing the client name instead">{{ s.display_name }}</span>{% endif %} <span style="color:var(--text-muted);font-size:0.8rem;">({{ s.bills|length }} bill{{ "s" if s.bills|length != 1 else "" }})</span></td>
         <td data-sort="{{ s.oldest_issued_at }}">{{ s.oldest_issued_at or "—" }}</td>
         <td>—</td>
         <td>{{ s.max_days_overdue }}</td>

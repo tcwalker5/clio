@@ -238,6 +238,89 @@ before it's printed) and in the print stylesheet, `tr.matter-row`/`tr.bill-subro
 Before this they read identically, with no visual separation between one matter's block
 and the next.
 
+**Redesigned 2026-09-08 (Ted: too many horizontal lines, hard to differentiate an
+expanded matter's bills):** the old version gave every cell in both the outer table
+and every matter's own nested bill table a full-width `border-bottom` (the global
+`th, td` rule in `style.css`) — with several matters each showing multiple bills, that
+read as a dense grid rather than distinct groups. Now the *only* rule line is each
+matter's top border (unchanged from 2026-08-25 above); everything inside a block is
+grouped by faint zebra shading (`table.detail-table tbody tr:nth-child(even)`) instead
+of ruled lines, both on screen and on paper. Two more changes landed the same day:
+- **Matter name and Bill # are now live links into Clio** — the matter name links to
+  `{{ clio_base_url }}/nc/#/matters/{matter_id}` (same URL shape Court Calendar Sync's
+  client-list report already uses), and each bill number links to
+  `{{ clio_base_url }}/nc/#/bills/{bill_id}`, both `target="_blank"`. Only rendered
+  when a link target actually exists (`s.matter_id and s.display_number` — a bill with
+  no matter still falls back to plain client-name text, same as before); print CSS
+  renders these as plain black text, no underline, since they're not clickable on paper.
+- **A ▶/▼ expand/collapse arrow was added per matter** (`toggleReportDetail()`,
+  same pattern as `/collections`' own `toggleDetail()`), replacing the old
+  always-expanded-on-print-only design — collapsing lets staff skim Handling/Balance
+  on screen without wading through every bill. Collapsing is screen-only: printing
+  force-shows every matter's bills regardless of collapsed state
+  (`@media print { tr.bill-subrow.hidden { display: table-row; } }`), so a matter
+  collapsed for on-screen review never silently drops off the actual printed page.
+
+**Trust requests split into their own block, links fixed for the no-matter case
+(2026-09-09, Ted):** three related fixes to the print report specifically —
+- **Trust requests are now a separate alphabetical block below the real invoices**,
+  headed by a plain "Trust Requests — not subject to collections" label row (spacing
+  only, no rule line, matching the rest of this redesign). Previously every summary —
+  invoices and trust requests alike — was sorted together by `display_number`, which
+  is blank for a trust request with no matter (the "new client retainer" case — see
+  `UnpaidBill.trust_label`), so those rows sorted to the very top out of alphabetical
+  order relative to everything else. Ted: confusing to anyone unfamiliar with the page.
+  `routes_collections.py`'s `action_report` now builds `invoice_summaries` and
+  `trust_summaries` separately (each sorted by the new `display_name`, see next point),
+  and the template's row-rendering logic is a Jinja macro (`summary_rows`) called once
+  per block instead of duplicated.
+- **A trust request with no matter (new client retainer) now sorts and displays as
+  "Last, First"**, matching every matter-backed row's own `display_number` convention,
+  instead of Clio's raw `client.name` field ("LISA BRANSON", space-order — not a format
+  choice, just what Clio calls its `name` field for an individual). New
+  `MatterBillSummary.display_name` property + a module-level `_last_first()` helper in
+  `collections_monitor.py` do the reformatting; best-effort (splits on the last space),
+  not a full name parser — company names and already-comma'd names pass through
+  unchanged.
+- **A trust request with no matter is now a clickable link too** — it previously
+  rendered as plain, unlinked text since there was no matter to link to at all. Fixed
+  by linking to the Clio **contact** (`/nc/#/contacts/{client_id}`) instead of a matter
+  in that case, since the client always exists even when the matter doesn't yet.
+  Requires `MatterBillSummary.client_id`, newly carried through from the bill's own
+  `client_id` (`build_matter_summaries` already had it on `UnpaidBill`, just wasn't
+  propagated up to the per-matter summary before this).
+
+  **Root cause found (Ted, same day):** the Branson trust request had been issued at the
+  CLIENT level (no matter — "Client level trust request", the same "new client retainer"
+  case above), but the actual payment got recorded against the MATTER's own trust
+  ledger once one existed for her, instead of being applied to the client-level request
+  bill. Confirmed live: her matter's `account_balances` Trust entry was $7,935.00 —
+  matching the "unpaid" request's balance exactly. Clio has no mechanism that
+  reconciles the two automatically; the request bill just stays `awaiting_payment`
+  forever unless someone notices and fixes it by hand (which Ted did, in Clio, once
+  this was found).
+
+  **New live check added the same day — `MatterBillSummary.trust_level_mismatch`:**
+  Ted asked for a way to flag this before it happens again, since a client-level trust
+  request existing at all means a matter often gets created for that client shortly
+  after (going from prospective to actual client) — exactly when this mixup can occur.
+  For every unpaid client-level trust request, `collections_monitor.fetch_matter_trust_balance()`
+  makes one targeted `matters.json?client_id=X&status=open,pending,closed` call (same
+  `account_balances{type=Trust}` field `trust_monitor.py` already relies on, any status
+  since the money could've been recorded before the matter closed) and sums that
+  client's Trust balance across all their matters. `trust_level_mismatch` is true when
+  that sum is nonzero — surfaced as a red "⚠ Check trust level" badge next to the
+  existing "Trust request" badge on both `/collections` and the print report. Deliberately
+  a **soft signal, not a conclusion** — confirmed live the same day against Jennifer Roof's
+  existing $5,000 client-level trust request (the original bill that surfaced the whole
+  three-category quirk, 2026-09-02 below): her matter holds $152.86 in trust, which
+  flags the same badge but is obviously not the same $5,000 — could be unrelated trust
+  dust, not proof of the Branson-style mixup. The badge's tooltip states the actual
+  matter trust balance so staff can judge for themselves rather than trusting the flag
+  blindly. Scoped tightly (one call per affected client, not a firm-wide matters sweep)
+  — with only 3-4 client-level trust requests open at a time in practice, this adds a
+  handful of calls to `/collections`' existing live fetch, not a new class of cost.
+
 **Three bill categories, not one flat "unpaid bill" list (added 2026-09-02, Ted):**
 a real Clio quirk surfaced while investigating a bill with no matter shown (JENNIFER
 ROOF, bill #30285, $5,000) — it had no matter linked, but Clio's `Bill.kind` field

@@ -47,6 +47,18 @@ BILLS_ENDPOINT = f"{BASE_URL}/api/v4/bills.json"
 BILLS_FIELDS = "id,number,issued_at,due_at,total,balance,kind,client{id,name},matters{id,display_number}"
 BILL_STATE = "awaiting_payment"
 
+# Used only by fetch_matter_trust_balance below, to catch a CLIENT-level
+# trust request (see MatterBillSummary.trust_level_mismatch) whose actual
+# deposit got recorded against a matter's own trust ledger instead of
+# applied to the request bill. Same account_balances field trust_monitor.py
+# already relies on for matter-level trust balances — needs the Accounting
+# permission (granted 2026-07-29, see trust_monitor.py's own note).
+MATTERS_ENDPOINT = f"{BASE_URL}/api/v4/matters.json"
+MATTER_TRUST_FIELDS = "id,account_balances{id,balance,type,name}"
+# Any status, not just "open" — a matter could have been closed after the
+# money was (mis)recorded against it, and this check should still catch it.
+MATTER_STATUSES_FOR_TRUST_CHECK = "open,pending,closed"
+
 PAGE_SIZE = 200
 
 # Fixed dropdown of collections handling decisions (Ted, 2026-08-18) — kept
@@ -219,6 +231,23 @@ class UnpaidBill:
         return self.days_overdue > 0
 
 
+def _last_first(name: str) -> str:
+    """Best-effort "Last, First" reformat of a raw Clio contact name ("LISA
+    BRANSON", Clio's own convention for an individual's `name` field) so a
+    trust-only summary — no matter, so no built-in "Last, First"
+    display_number to show instead — sorts and reads the same way as every
+    matter-backed row (Ted, 2026-09-09: seeing these out of alphabetical
+    order next to real "Last, First" matter names was confusing). Already-
+    comma'd names and single-word/company names pass through unchanged —
+    this is a display nicety for the common two/three-word individual case,
+    not a full name parser."""
+    name = (name or "").strip()
+    if not name or "," in name or " " not in name:
+        return name
+    first, _, last = name.rpartition(" ")
+    return f"{last}, {first}"
+
+
 @dataclass
 class MatterBillSummary:
     """One row per matter (or per bill, for the rare bill with no matter
@@ -230,9 +259,18 @@ class MatterBillSummary:
     display_number: str
     client_name: str
     bills: list[UnpaidBill]  # this matter's unpaid bills, oldest issued first
+    client_id: int = 0  # 0 = no client on the underlying bill (shouldn't happen in practice) — lets a matter-less summary still link to the Clio contact instead of nothing
     action: str = ""  # persisted collections_actions.action, set by the route layer
     flarpl_recorded: bool = False  # live, read-only from Clio's own FLARPL Recorded custom field, only meaningful when action == "FLARPL"
     payment_plan_active: bool = False  # live, read-only from Clio's own Payment Plan custom field, only meaningful when action == "Payment plan"
+    matter_trust_balance: float = 0.0  # live, only fetched/meaningful for a client-level trust request (matter_id is None and all_trust) — see trust_level_mismatch and fetch_matter_trust_balance
+
+    @property
+    def display_name(self) -> str:
+        """What to show/sort by when there's no matter display_number to use
+        — see _last_first. Matter-backed summaries never need this (their
+        display_number is already "Last, First")."""
+        return self.display_number if self.display_number else _last_first(self.client_name)
 
     @property
     def total_balance(self) -> float:
@@ -274,6 +312,42 @@ class MatterBillSummary:
     def overdue(self) -> bool:
         return self.max_days_overdue > 0
 
+    @property
+    def trust_level_mismatch(self) -> bool:
+        """True when this is an unpaid trust request issued at the CLIENT
+        level (no matter — see UnpaidBill.trust_label) but the client's own
+        matter(s) already hold trust funds. Real incident, 2026-09-09
+        (Ted): a Branson trust request was issued at the client level, but
+        staff recorded the actual deposit against the matter's own trust
+        ledger instead of applying it to this request bill — leaving the
+        request stuck "awaiting_payment" forever even though the retainer
+        had genuinely been funded (confirmed live: the matter's Trust
+        balance was $7,935.00, matching the "unpaid" request exactly). Not
+        proof it's the same dollars — a live signal worth a human glance,
+        not an automatic conclusion — see
+        reference/billing-monitors.md for the full writeup."""
+        return self.matter_id is None and self.all_trust and self.matter_trust_balance > 0
+
+
+def fetch_matter_trust_balance(session: requests.Session, client_id: int) -> float:
+    """Sums the Trust account_balances across every matter (any status) tied
+    to one client — see MatterBillSummary.trust_level_mismatch for why.
+    Only called per client with an open client-level trust request, not a
+    firm-wide sweep — a handful of targeted calls, not a new page-load-wide
+    matters fetch."""
+    resp = session.get(MATTERS_ENDPOINT, params={
+        "client_id": client_id, "status": MATTER_STATUSES_FOR_TRUST_CHECK, "fields": MATTER_TRUST_FIELDS,
+    })
+    if resp.status_code != 200:
+        raise RuntimeError(f"Failed to fetch matters for client {client_id}: {resp.status_code} {resp.text[:200]}")
+    matters = resp.json().get("data", [])
+    return sum(
+        (b.get("balance") or 0.0)
+        for m in matters
+        for b in (m.get("account_balances") or [])
+        if b.get("type") == "Trust"
+    )
+
 
 def build_matter_summaries(bills: list[UnpaidBill]) -> list[MatterBillSummary]:
     """Groups unpaid bills into one summary per matter, sorted the same way
@@ -295,6 +369,7 @@ def build_matter_summaries(bills: list[UnpaidBill]) -> list[MatterBillSummary]:
             matter_id=matter_bills[0].matter_id,
             display_number=matter_bills[0].display_number,
             client_name=matter_bills[0].client_name,
+            client_id=matter_bills[0].client_id,
             bills=sorted(matter_bills, key=lambda b: b.issued_at),
         )
         for matter_bills in by_matter.values()

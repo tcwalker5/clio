@@ -81,6 +81,52 @@ staff cache, RingCentral sync run history, trust request settings/lifecycle. No
 external database service. Gitignored via the blanket `data/` rule — see the
 "Gap closed" note under Project Structure.
 
+**Page width for wide data tables — `main.wide` + `.table-scroll` (2026-09-09):**
+`base.html`'s `<main>` is capped at 1360px and centered (`style.css`'s bare `main`
+rule) — fine for prose/hero pages, but it forced every table page's own
+`overflow-x:auto` wrapper to scroll far more than it needed to, even on a fully
+maximized wide monitor. Root-caused live on `/collections`: a staff member's
+"Handling column is missing" turned out to be this cap, not a bug in the table
+itself — confirmed by loading the live page and finding a `<main>` box centered
+with large unused margins on both sides of the panel, well within a monitor wide
+enough to show the whole table.
+
+Fix is two cooperating pieces, not just a bigger number on `main` — **only bumping
+`main`'s `max-width` was tried and rejected**, since a plain bigger max-width alone
+means a page whose table happens to be *narrower* than the cap gets a
+stretched-full-width panel with the table flush-left and dead space to its right,
+not centered (Ted specifically wanted centered, not left-justified):
+- **`main.wide { max-width: 1800px; }`** — opt-in per page via
+  `{% block main_class %}wide{% endblock %}` (added to `base.html` as
+  `<main class="{% block main_class %}{% endblock %}">`; pages that don't override
+  it get `class=""`, unaffected). Deliberately a plain `max-width`, **not**
+  `width: fit-content` — that was the first attempt and it broke live: this
+  container also holds a prose `<p class="subtitle">`, and a paragraph's
+  "max-content" size is its entire sentence rendered as one unbroken line (often
+  2000+px) — `fit-content` sized `main` to that huge number on a narrow window,
+  pulling the *whole page* into horizontal scroll instead of containing the
+  overflow in the table's own wrapper. Confirmed live via `getBoundingClientRect()`
+  before catching it: `main` at 1405px inside a 1133px window, `document.documentElement.scrollWidth
+  > clientWidth`.
+- **`.table-scroll`** (replaces the old bare `<div style="overflow-x:auto;">` wrapper
+  around a table — only changed on `/collections` and its print report so far, other
+  pages still use the old inline-style version) — `overflow-x: auto; width:
+  fit-content; max-width: 100%; margin: 0 auto;`. `fit-content` is safe *here*
+  specifically because this div's only content is the table itself, no prose to
+  inflate the calculation — so it correctly reflects the table's true nowrap width:
+  narrower than the panel's available space, it shrinks to that and centers;
+  wider, `max-width: 100%` clamps it to the panel and the excess scrolls inside
+  this div exactly as before. Verified live both directions: a real ~1300px-wide
+  table inside a 1133px window stayed contained (no page-level scroll, confirmed
+  `pageHasHorizontalScroll: false`); a synthetic 200px test table centered with
+  identical left/right gaps (411px each) inside a wider panel.
+
+  **If widening another table page later:** add `{% block main_class %}wide{%
+  endblock %}` and swap that page's `<div style="overflow-x:auto;">` for `<div
+  class="table-scroll">` — don't reach for `width: fit-content` on anything wider
+  than the table wrapper itself (i.e. never on `main` or `.panel` directly) if it
+  also contains ordinary paragraph text.
+
 **Drag-and-drop apps (Bradford Invoice, Printer Expenses, Legs Expenses):** upload a file -> dry-run
 preview (payloads + exceptions, same categories as the CLI) -> "Confirm & Post" button ->
 live run. Mirrors the CLI's `--dry-run` workflow; the confirm step is the only path that

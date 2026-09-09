@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Collections Action Report{% endblock %}
+{% block main_class %}wide{% endblock %}
 {% block content %}
 <h1>Collections Action Report</h1>
 <p class="subtitle no-print">Handling decisions for unpaid bills, one summary line per matter (client name is left off since each matter has one client today) with that matter's individual unpaid bills listed underneath. Set/change a decision on the <a href="/collections">Collections</a> page; this view is for printing/review.</p>
@@ -10,57 +11,112 @@
 
 {% if summaries is not none %}
 <div class="panel">
-  <button type="button" class="btn secondary no-print" onclick="window.print()" style="margin-bottom:0.75rem;">Print</button>
+  <div class="no-print" style="display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap;margin-bottom:0.75rem;">
+    <button type="button" class="btn secondary" onclick="window.print()">Print</button>
+    <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.9rem;">
+      <input type="checkbox" id="section-invoice" checked onchange="applySectionFilter()"> Invoices
+    </label>
+    <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.9rem;">
+      <input type="checkbox" id="section-trust" checked onchange="applySectionFilter()"> Trust Requests
+    </label>
+  </div>
 
   {% if summaries %}
-  <div style="overflow-x:auto;">
+  {% macro summary_rows(items, section) %}
+    {% for s in items %}
+    {% set group_id = "report-group-" ~ (s.matter_id or ("client-" ~ s.client_id)) %}
+    <tr class="matter-row" data-section="{{ section }}">
+      <td class="expand-icon" style="cursor:pointer;" onclick="toggleReportDetail('{{ group_id }}')"><span class="no-print" id="report-icon-{{ group_id }}">&#9662;</span></td>
+      <td>
+        {% if s.matter_id and s.display_number %}
+        <a href="{{ clio_base_url }}/nc/#/matters/{{ s.matter_id }}" target="_blank" rel="noopener">{{ s.display_number }}</a>
+        {% elif s.client_id %}
+        <a href="{{ clio_base_url }}/nc/#/contacts/{{ s.client_id }}" target="_blank" rel="noopener">{{ s.display_name }}</a>
+        {% else %}
+        <span title="No matter or client linked to this bill in Clio">{{ s.display_name }}</span>
+        {% endif %}
+        {% if s.all_trust %} <span class="badge warn" title="{{ 'New client retainer — not subject to collections' if s.matter_id is none else 'Trust replenishment request' }}">Trust request</span>{% endif %}
+        {% if s.trust_level_mismatch %} <span class="badge err" title="This client's own matter already holds ${{ s.matter_trust_balance|money }} in trust — the deposit may have been recorded at the matter level instead of applied to this client-level request. Verify in Clio before treating this as still owed.">⚠ Check trust level — matter holds ${{ s.matter_trust_balance|money }}</span>{% endif %}
+      </td>
+      <td>{{ s.oldest_issued_at or "—" }}</td>
+      <td>
+        {% if s.earned_balance %}${{ s.earned_balance|money }}{% endif %}
+        {% if s.replenishment_balance %}<div style="color:#555;font-size:0.85em;">{{ "+ " if s.earned_balance else "" }}${{ s.replenishment_balance|money }} replenishment</div>{% endif %}
+        {% if s.new_trust_balance %}<div style="color:#555;font-size:0.85em;">{{ "+ " if s.earned_balance or s.replenishment_balance else "" }}${{ s.new_trust_balance|money }} new client retainer</div>{% endif %}
+        {% if not s.earned_balance and not s.replenishment_balance and not s.new_trust_balance %}$0.00{% endif %}
+      </td>
+      <td>{{ s.action or "—" }}</td>
+      <td>
+        {% if s.action == "FLARPL" %}{{ "Recorded" if s.flarpl_recorded else "Not recorded yet" }}
+        {% elif s.action == "Payment plan" %}{{ "In place" if s.payment_plan_active else "Not set up yet" }}
+        {% else %}—
+        {% endif %}
+      </td>
+    </tr>
+    <tr class="bill-subrow" id="{{ group_id }}" data-section="{{ section }}">
+      <td colspan="6">
+        <table class="nowrap detail-table">
+          <thead><tr>
+            <th>Bill #</th><th>Issued</th><th>Due</th><th>Days Overdue</th><th>Balance</th>
+          </tr></thead>
+          <tbody>
+            {% for b in s.bills %}
+            <tr>
+              <td><a href="{{ clio_base_url }}/nc/#/bills/{{ b.bill_id }}" target="_blank" rel="noopener">{{ b.number }}</a></td>
+              <td>{{ b.issued_at }}</td>
+              <td>{{ b.due_at or "—" }}</td>
+              <td>{{ "Trust request" if b.is_trust_request else b.days_overdue }}</td>
+              <td>${{ b.balance|money }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </td>
+    </tr>
+    {% endfor %}
+  {% endmacro %}
+  <div class="table-scroll">
   <table class="nowrap" id="report-table">
     <thead><tr>
-      <th>Matter</th><th>Oldest Issued</th><th>Total Balance</th><th>Handling</th><th>Confirmed</th>
+      <th></th><th>Matter</th><th>Oldest Issued</th><th>Total Balance</th><th>Handling</th><th>Confirmed</th>
     </tr></thead>
     <tbody>
-      {% for s in summaries %}
-      <tr class="matter-row">
-        <td>{% if s.display_number %}{{ s.display_number }}{% else %}<span title="No matter linked to this bill in Clio — showing the client name instead">{{ s.client_name }}</span>{% endif %}{% if s.all_trust %} <span class="badge warn" title="{{ 'New client retainer — not subject to collections' if s.matter_id is none else 'Trust replenishment request' }}">Trust request</span>{% endif %}</td>
-        <td>{{ s.oldest_issued_at or "—" }}</td>
-        <td>
-          {% if s.earned_balance %}${{ s.earned_balance|money }}{% endif %}
-          {% if s.replenishment_balance %}<div style="color:#555;font-size:0.85em;">{{ "+ " if s.earned_balance else "" }}${{ s.replenishment_balance|money }} replenishment</div>{% endif %}
-          {% if s.new_trust_balance %}<div style="color:#555;font-size:0.85em;">{{ "+ " if s.earned_balance or s.replenishment_balance else "" }}${{ s.new_trust_balance|money }} new client retainer</div>{% endif %}
-          {% if not s.earned_balance and not s.replenishment_balance and not s.new_trust_balance %}$0.00{% endif %}
-        </td>
-        <td>{{ s.action or "—" }}</td>
-        <td>
-          {% if s.action == "FLARPL" %}{{ "Recorded" if s.flarpl_recorded else "Not recorded yet" }}
-          {% elif s.action == "Payment plan" %}{{ "In place" if s.payment_plan_active else "Not set up yet" }}
-          {% else %}—
-          {% endif %}
-        </td>
-      </tr>
-      <tr class="bill-subrow">
-        <td colspan="5">
-          <table class="nowrap detail-table">
-            <thead><tr>
-              <th>Bill #</th><th>Issued</th><th>Due</th><th>Days Overdue</th><th>Balance</th>
-            </tr></thead>
-            <tbody>
-              {% for b in s.bills %}
-              <tr>
-                <td>{{ b.number }}</td>
-                <td>{{ b.issued_at }}</td>
-                <td>{{ b.due_at or "—" }}</td>
-                <td>{{ "Trust request" if b.is_trust_request else b.days_overdue }}</td>
-                <td>${{ b.balance|money }}</td>
-              </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </td>
-      </tr>
-      {% endfor %}
+      {{ summary_rows(invoice_summaries, "invoice") }}
+      {% if trust_summaries %}
+      <tr class="section-divider-row" data-section="trust"><td colspan="6">Trust Requests — not subject to collections</td></tr>
+      {{ summary_rows(trust_summaries, "trust") }}
+      {% endif %}
     </tbody>
   </table>
   </div>
+  <script>
+  // Screen-only — matters can be collapsed to skim Handling/Balance without
+  // wading through every bill. Printing always shows every matter's bills
+  // regardless of collapsed state (see @media print below), so collapsing
+  // on screen never hides anything from the actual printed page.
+  function toggleReportDetail(groupId) {
+    const row = document.getElementById(groupId);
+    if (!row) return;
+    const expanded = !row.classList.contains("hidden");
+    row.classList.toggle("hidden", expanded);
+    const icon = document.getElementById("report-icon-" + groupId);
+    icon.innerHTML = expanded ? "&#9656;" : "&#9662;";
+  }
+
+  // Independent Invoices/Trust Requests checkboxes (Ted, 2026-09-09) — any
+  // combination is valid: both on (default, full report), one on to print
+  // just that section, or both off to show nothing. Uses a dedicated
+  // "section-hidden" class rather than inline style or the expand/collapse
+  // "hidden" class above, so the two mechanisms never fight each other and
+  // this filter is deliberately respected in print too (unlike collapsed
+  // matters, which always print in full — see the @media print rule below).
+  function applySectionFilter() {
+    const showInvoices = document.getElementById("section-invoice").checked;
+    const showTrust = document.getElementById("section-trust").checked;
+    document.querySelectorAll('#report-table tr[data-section="invoice"]').forEach((r) => r.classList.toggle("section-hidden", !showInvoices));
+    document.querySelectorAll('#report-table tr[data-section="trust"]').forEach((r) => r.classList.toggle("section-hidden", !showTrust));
+  }
+  </script>
   {% else %}
   <p class="subtitle">Nothing unpaid right now.</p>
   {% endif %}
@@ -68,11 +124,44 @@
 {% endif %}
 
 <style>
-/* Differentiate a matter's summary line from its bill sub-table — same on
-   screen (this page is reviewed before it's printed) and on paper. */
+/* Simplified 2026-09-08 (Ted: too many horizontal lines, hard to tell one
+   matter's bills apart from the next when expanded). Old version gave every
+   cell in both the outer table AND every matter's own nested bill table a
+   full-width border-bottom (style.css's global `th, td` rule) — with several
+   matters each showing 2-3 bills, that reads as a dense grid with no clear
+   grouping. Now: the ONLY line separating one matter's block from the next
+   is the top border below; everything inside a block (summary row + its
+   bills) is grouped by shading/spacing instead of ruled lines. */
+#report-table > tbody > tr > td { border-bottom: none; }
 tr.matter-row td { font-weight: 700; border-top: 2px solid var(--border); padding-top: 0.6rem; }
-tr.bill-subrow > td { padding-left: 1.5rem; padding-top: 0; padding-bottom: 0.6rem; border-bottom: none; }
-table.detail-table th, table.detail-table td { color: var(--text-muted); font-weight: 400; }
+
+/* Separates the Trust Requests block from real invoices above it (Ted,
+   2026-09-09) — trust requests aren't collections AR (see all_trust) and
+   sorting them into the same alphabetical run as real matters read as
+   confusing to anyone unfamiliar with the page. Label only, no rule line —
+   consistent with the rest of this redesign's "spacing, not lines" approach. */
+tr.section-divider-row td { padding: 1.6rem 0 0.5rem; font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); border-top: none; }
+tr.matter-row td.expand-icon { color: var(--text-muted); font-weight: 400; width: 1.2rem; }
+tr.bill-subrow.hidden { display: none; }
+tr.bill-subrow > td { padding: 0 0 0.7rem 2.2rem; }
+
+/* Invoices/Trust Requests checkbox filter — deliberately NOT overridden in
+   @media print below, unlike tr.bill-subrow.hidden: an unchecked section
+   should stay out of the printed page too, that's the point of printing
+   only one section at a time. */
+tr.section-hidden { display: none !important; }
+
+/* Bill sub-table: no header rule, no per-row lines — bills within one
+   matter are told apart by faint alternating shading instead. */
+table.detail-table { background: var(--bg); border-radius: 6px; }
+table.detail-table th, table.detail-table td { color: var(--text-muted); font-weight: 400; border-bottom: none; padding: 0.35rem 0.6rem; }
+table.detail-table thead th { border-bottom: 1px solid var(--border); font-size: 0.68rem; }
+table.detail-table tbody tr:nth-child(even) td { background: rgba(0,0,0,0.035); }
+table.detail-table a { color: var(--link); text-decoration: none; }
+table.detail-table a:hover { text-decoration: underline; }
+
+#report-table > thead a, #report-table > tbody a { color: var(--link); text-decoration: none; }
+#report-table > thead a:hover, #report-table > tbody a:hover { text-decoration: underline; }
 
 /* Handling/Confirmed can carry longer text ("Send to collections agency",
    "Payment from sale of home") — real bug hit 2026-08-25: table.nowrap's
@@ -80,9 +169,10 @@ table.detail-table th, table.detail-table td { color: var(--text-muted); font-we
    just gets silently cut off ("Claim as uncollectable and withdraw" ->
    "Claim as uncollectable and w" on paper, no visible sign anything was
    truncated). Scoped to #report-table only — the bill sub-table's own
-   columns are all short and stay nowrap. */
-#report-table th:nth-child(4), #report-table td:nth-child(4),
-#report-table th:nth-child(5), #report-table td:nth-child(5) { white-space: normal; }
+   columns are all short and stay nowrap. Indices shifted by 1 (2026-09-08)
+   for the new leading expand-arrow column. */
+#report-table th:nth-child(5), #report-table td:nth-child(5),
+#report-table th:nth-child(6), #report-table td:nth-child(6) { white-space: normal; }
 
 /* "Trust request" (replacing a numeric Days Overdue) is short enough to fit
    nowrap today, but scope this the same way as above so a longer label
@@ -95,7 +185,14 @@ table.detail-table td:nth-child(4) { white-space: normal; }
   body { background: #fff; color: #000; }
   table.nowrap th, table.nowrap td { color: #000; border-color: #ccc; }
   tr.matter-row td { border-top: 2px solid #000; }
+  table.detail-table { background: transparent; }
   table.detail-table th, table.detail-table td { color: #555; }
+  table.detail-table tbody tr:nth-child(even) td { background: #f3f3f3; }
+  #report-table a, table.detail-table a { color: #000; text-decoration: none; }
+  /* A matter collapsed on screen must still print in full — collapsing is a
+     screen-only skim aid (see toggleReportDetail's JS comment), never a way
+     to accidentally omit a matter's bills from the printed page. */
+  tr.bill-subrow.hidden { display: table-row; }
 }
 </style>
 {% endblock %}

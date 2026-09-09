@@ -107,7 +107,7 @@
   </nav>
 </header>
 {% endif %}
-<main>
+<main class="{% block main_class %}{% endblock %}">
 {% block content %}{% endblock %}
 </main>
 </body>

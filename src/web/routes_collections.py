@@ -6,6 +6,7 @@ live on every page view. See collections_monitor.py's module docstring for
 why this is split out from Trust Monitor rather than living on /trust.
 """
 
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -21,16 +22,20 @@ from web.db import get_connection
 
 router = APIRouter(prefix="/collections", tags=["collections"])
 
+CLIO_BASE_URL = os.getenv("CLIO_BASE_URL", "https://app.clio.com").rstrip("/")
+
 
 def _attach_actions(summaries: list[collections_monitor.MatterBillSummary]) -> None:
     """Sets each matter summary's `.action` from collections_actions (keyed
     by matter, which is exactly what a MatterBillSummary already is — see
-    collections_monitor.SCHEMA's docstring note), plus two live read-only
-    Clio confirmations, each only fetched for matters whose action
-    currently matches: `.flarpl_recorded` for "FLARPL" (collections_flarpl.py)
-    and `.payment_plan_active` for "Payment plan" (collections_payment_plan.py).
-    Clio is the source of truth for both — this dashboard only ever reflects
-    them, never sets them."""
+    collections_monitor.SCHEMA's docstring note), plus three live read-only
+    Clio confirmations, each only fetched for the summaries they're
+    meaningful for: `.flarpl_recorded` for "FLARPL" (collections_flarpl.py),
+    `.payment_plan_active` for "Payment plan" (collections_payment_plan.py),
+    and `.matter_trust_balance` for a client-level trust request (see
+    collections_monitor.MatterBillSummary.trust_level_mismatch). Clio is the
+    source of truth for all three — this dashboard only ever reflects them,
+    never sets them."""
     conn = get_connection()
     try:
         actions_by_matter = collections_monitor.fetch_actions_by_matter(conn)
@@ -56,6 +61,21 @@ def _attach_actions(summaries: list[collections_monitor.MatterBillSummary]) -> N
         for s in summaries:
             if s.action == "Payment plan" and s.matter_id:
                 s.payment_plan_active = active_by_matter.get(s.matter_id, False)
+
+    # Client-level trust requests only (matter_id is None, all_trust) — a
+    # handful of clients at most, one targeted matters.json call each, not a
+    # firm-wide sweep. See MatterBillSummary.trust_level_mismatch.
+    client_trust_client_ids = sorted({s.client_id for s in summaries if s.matter_id is None and s.all_trust and s.client_id})
+    if client_trust_client_ids:
+        session = session or collections_monitor.build_session()
+        # Cached per client_id — a client with more than one client-level
+        # trust bill gets one summary per bill (build_matter_summaries can't
+        # group matter-less bills together), which would otherwise mean a
+        # duplicate live call for the same client.
+        trust_balance_by_client = {cid: collections_monitor.fetch_matter_trust_balance(session, cid) for cid in client_trust_client_ids}
+        for s in summaries:
+            if s.matter_id is None and s.all_trust and s.client_id:
+                s.matter_trust_balance = trust_balance_by_client[s.client_id]
 
 
 @router.get("", response_class=HTMLResponse)
@@ -121,11 +141,22 @@ async def action_report(request: Request, _: None = Depends(require_auth)):
     summaries = collections_monitor.build_matter_summaries(bills)
     await run_in_threadpool(_attach_actions, summaries)
 
-    # Alphabetical by matter display number, which is already "Last, First"
-    # by Clio's own convention — no separate last-name parsing needed.
-    summaries_sorted = sorted(summaries, key=lambda s: s.display_number)
+    # Split trust requests into their own alphabetical block, separate from
+    # actual invoices (Ted, 2026-09-09) — sorting the whole list together by
+    # display_number put trust-only rows (no matter, so no display_number)
+    # at the top out of alphabetical order relative to real matters, which
+    # read as confusing to anyone unfamiliar with the page. Each block is
+    # alphabetized by display_name, which is already "Last, First" for a
+    # real matter and reformatted to match for a trust-only row (see
+    # collections_monitor._last_first) — no separate last-name parsing
+    # needed either way.
+    invoice_summaries = sorted((s for s in summaries if not s.all_trust), key=lambda s: s.display_name)
+    trust_summaries = sorted((s for s in summaries if s.all_trust), key=lambda s: s.display_name)
 
-    return render(request, "collections_action_report.html", error=None, summaries=summaries_sorted)
+    return render(
+        request, "collections_action_report.html", error=None, summaries=summaries,
+        invoice_summaries=invoice_summaries, trust_summaries=trust_summaries, clio_base_url=CLIO_BASE_URL,
+    )
 
 
 @router.get("/download")

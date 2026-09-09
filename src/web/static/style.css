@@ -89,6 +89,55 @@ header.topbar nav a {
 
 header.topbar nav a:hover { color: var(--ink-text); border-color: var(--accent-bright); }
 
+header.topbar nav { display: flex; align-items: center; }
+
+/* Nav category dropdowns (2026-09-08) — grouping the same three ways
+   dashboard.html's channel cards already do (Case Calculators / Office
+   Operations / Billing & Expenses). Click-to-open menu-bar behavior (like
+   a normal app's File menu), driven by the `.open` class toggled in
+   base.html's inline script — a first hover-only version was rejected as
+   not matching that "click File, see Save/Print" pattern. */
+.nav-group { position: relative; margin-left: 1.4rem; }
+.nav-group .nav-trigger {
+    background: none; border: none; padding: 0; margin: 0; font: inherit;
+    color: var(--ink-text-muted);
+    font-size: 0.85rem;
+    cursor: pointer;
+    padding-bottom: 0.2rem;
+    border-bottom: 1px solid transparent;
+    transition: color 0.15s, border-color 0.15s;
+}
+.nav-group .nav-trigger::after { content: "\25BE"; font-size: 0.65em; margin-left: 0.3em; }
+.nav-group .nav-trigger:hover { color: var(--ink-text); }
+.nav-group.open .nav-trigger { color: var(--ink-text); border-color: var(--accent-bright); }
+
+.nav-dropdown {
+    display: none;
+    position: absolute; top: 100%; left: 50%; transform: translateX(-50%);
+    margin-top: 0.7rem;
+    background: var(--ink-soft);
+    border: 1px solid var(--ink-line);
+    border-radius: 8px;
+    padding: 0.35rem;
+    min-width: 12rem;
+    box-shadow: 0 10px 24px rgba(0,0,0,0.35);
+    z-index: 30;
+}
+.nav-group.open .nav-dropdown { display: block; }
+
+.nav-dropdown a {
+    display: block;
+    margin-left: 0;
+    color: var(--ink-text-muted);
+    text-decoration: none;
+    font-size: 0.85rem;
+    padding: 0.45rem 0.6rem;
+    border-radius: 5px;
+    border-bottom: none;
+    white-space: nowrap;
+}
+.nav-dropdown a:hover { background: var(--ink-line); color: var(--ink-text); border-color: transparent; }
+
 @media (max-width: 880px) {
     .brand-tag { display: none; }
 }
@@ -99,6 +148,39 @@ main {
     max-width: 1360px;
     margin: 0 auto;
     padding: 2rem 1.5rem 4rem;
+}
+
+/* Opt-in for wide-data-table pages (Ted, 2026-09-09 — Collections' Handling
+   column got reported "missing" on a smaller/non-maximized window; turned
+   out the real cause was this file's OTHER main rule above capping every
+   page at 1360px regardless of actual window width, forcing the table to
+   scroll inside a needlessly narrow column even on a huge, fully-widened
+   monitor). Just a bigger, ordinary max-width — NOT width:fit-content.
+   Tried fit-content first and caught it live breaking things: this element
+   also contains a plain prose <p>, and a paragraph's "max-content" size is
+   its ENTIRE sentence rendered as one unbroken line — often 2000+px — so
+   fit-content sized `main` to that huge number instead of anything
+   table-related, pulling the whole page into horizontal scroll instead of
+   containing it in the table's own scrollbar. Centering a narrower-than-cap
+   table is instead handled by .table-scroll below, which only ever wraps
+   the table itself (no prose mixed in), so its own fit-content is safe. */
+main.wide {
+    max-width: 1800px;
+}
+
+/* Wraps a table for horizontal scrolling. width: fit-content here is safe
+   (unlike on main.wide above) because this div's only content is the table
+   itself — no prose paragraph to inflate the calculation — so it correctly
+   reflects just the table's true nowrap width: narrower than the available
+   panel width, it shrinks to that and `margin: 0 auto` centers it instead
+   of leaving it flush-left with dead space to the right; wider than
+   available (max-width: 100%, relative to the now-fixed-width panel above),
+   it's clamped and the excess scrolls within this div exactly as before. */
+.table-scroll {
+    overflow-x: auto;
+    width: fit-content;
+    max-width: 100%;
+    margin: 0 auto;
 }
 
 h1 { font-family: var(--font-display); font-size: 1.6rem; font-weight: 600; margin-bottom: 0.25rem; }
