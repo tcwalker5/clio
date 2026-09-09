@@ -99,6 +99,12 @@ POST_DELAY     = 1.5  # seconds between POSTs — stay under 50 req/min
 
 OCR_RESOLUTION = 200  # dpi for page rendering — matches the resolution these parsing rules were tuned against
 
+# Clio ExpenseCategory id for "Legal Services" (confirmed live 2026-09-09 via
+# GET /expense_categories.json). Without this, Clio labels the entry
+# "Reimbursable Expense: <note>" instead of showing it under its real
+# category — Ted flagged this after noticing the generic prefix in Clio.
+EXPENSE_CATEGORY_ID = 6218118
+
 # custom_field_values{...} is needed for the Opposing Party fallback below —
 # not a plain field on the base Matter resource, same nested-selector gotcha
 # as court_calendar/matter_fields.py's Court Case Number.
@@ -657,6 +663,7 @@ def build_payloads(
             "type": "ExpenseEntry",
             "date": inv.date or datetime.today().strftime("%Y-%m-%d"),
             "matter": {"id": matter_id},
+            "expense_category": {"id": EXPENSE_CATEGORY_ID},
             "quantity": 1,
             "price": inv.statement_amount,
             # 2026-09-01, at Ted's request: the OCR'd service-description

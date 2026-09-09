@@ -36,9 +36,21 @@ fallback (which still produces a best-guess date even from an odd range) — thi
 purely an FYI check on top of that, same relationship Legs' reconciliation check has to
 its own posting logic.
 
-**Note text (changed 2026-09-01):** now `"Prints/Copies/Scans — <month>: N pages
-(...)"`, was `"Copies/Printing — ..."` — if grepping old logs/Clio notes for the prior
-wording, check both.
+**Expense Category (added 2026-09-09):** every payload now sets
+`"expense_category": {"id": EXPENSE_CATEGORY_ID}` (`6218073`, Clio's existing
+"Printing/Scanning/Copying" category — confirmed live via `GET
+/expense_categories.json`; there's no category named exactly "Copies/Printing" in
+this account, so don't add one under that name expecting it to be the one in use
+here). Without an `expense_category`, Clio prefixes the entry with the generic
+`"Reimbursable Expense: "` instead of showing it under its real category — Ted
+caught this live in Clio and asked for the category to be set explicitly.
+
+**Note text (changed 2026-09-09, again 2026-09-01):** now just `"<month>: N pages
+(...)"` — no category-name prefix, since the expense category above already shows
+"Printing/Scanning/Copying" in Clio and repeating it in the note would be redundant.
+Was `"Prints/Copies/Scans — <month>: N pages (...)"` (2026-09-01–2026-09-09), and
+`"Copies/Printing — ..."` before that — if grepping old logs/Clio notes for prior
+wording, check all three.
 
 **Outputs:**
 - `output/expenses_YYYY-MM.json` — API payloads (always written)

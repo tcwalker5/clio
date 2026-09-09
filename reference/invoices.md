@@ -331,6 +331,16 @@ Clio (`post_entry` sends `{"data": payload["data"]}` explicitly) — `page` is a
 key on the payload dict, present for the dashboard's thumbnail links but never part of
 the API call.
 
+**Expense Category (added 2026-09-09):** every payload sets `"expense_category":
+{"id": EXPENSE_CATEGORY_ID}` (`6218118`, Clio's existing "Legal Services" category —
+confirmed live via `GET /expense_categories.json`). Without it, Clio prefixes the
+entry with the generic `"Reimbursable Expense: "` instead of showing it under its
+real category — Ted caught this live in Clio and asked for the category to be set
+explicitly, same fix applied to `printer_expenses.py` (see
+`reference/printer-papercut.md`). Note text is unchanged (`"Legs Legal Support —
+Invoice L######"`) — each entry is already one per invoice, so its `price` is
+already that invoice's own month-of-service amount; no monthly rollup needed here.
+
 **Outputs:**
 - `output/{stem}_payloads.json` — API payloads (always written)
 - `output/{stem}_exceptions.csv` — unmatched client identifiers (if any)

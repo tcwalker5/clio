@@ -52,6 +52,12 @@ PERSISTED_MATTER_MAP_PATH = Path("data") / "printer_manual_matter_map.csv"
 
 PRICE_PER_PAGE = 0.10
 
+# Clio ExpenseCategory id for "Printing/Scanning/Copying" (confirmed live
+# 2026-09-09 via GET /expense_categories.json). Without this, Clio labels the
+# entry "Reimbursable Expense: <note>" instead of showing it under its real
+# category — Ted flagged this after noticing the generic prefix in Clio.
+EXPENSE_CATEGORY_ID = 6218073
+
 # Manual overrides: normalized printer name → Clio matter ID (int)
 # Add entries here when auto-matching fails or resolves to the wrong matter.
 MANUAL_MATTER_MAP: dict[str, int] = {
@@ -282,6 +288,10 @@ def parse_printer_report(csv_path: Path) -> tuple[str, bool, str, dict[str, dict
 # ---------------------------------------------------------------------------
 
 def build_note(name: str, data: dict, report_date: str) -> str:
+    """Note text alongside the entry's Printing/Scanning/Copying expense
+    category (EXPENSE_CATEGORY_ID) — no category-name prefix needed here
+    since Clio already shows the category, so this is just the month total
+    and its breakdown by job type."""
     month_label = datetime.strptime(report_date, "%Y-%m-%d").strftime("%b %Y")
     parts = []
     if data["print"]:
@@ -291,7 +301,7 @@ def build_note(name: str, data: dict, report_date: str) -> str:
     if data["copy"]:
         parts.append(f"Copy: {data['copy']}")
     breakdown = ", ".join(parts)
-    return f"Prints/Copies/Scans — {month_label}: {data['total']} pages ({breakdown})"
+    return f"{month_label}: {data['total']} pages ({breakdown})"
 
 
 def match_and_build(
@@ -354,6 +364,7 @@ def match_and_build(
                 "type": "ExpenseEntry",
                 "date": report_date,
                 "matter": {"id": matter_id},
+                "expense_category": {"id": EXPENSE_CATEGORY_ID},
                 "quantity": total,
                 "price": PRICE_PER_PAGE,
                 "note": build_note(name, data, report_date),
