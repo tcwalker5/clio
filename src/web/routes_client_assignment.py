@@ -9,10 +9,12 @@ back to blank (Clio's own spec: "null is not valid for this field").
 """
 
 import math
+from datetime import datetime
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 import client_assignment
 from web.auth import require_auth
@@ -156,7 +158,22 @@ async def assignments_report(request: Request, view: str = "missing", _: None = 
         matters = [m for m in matters if m.missing_any]
 
     matters_sorted = sorted(matters, key=lambda m: m.display_number)
+
+    # Written on every view so the download link always matches what's on
+    # screen right now — keyed by `view` (missing/all) so switching views
+    # doesn't require re-visiting the page before downloading the other one.
+    csv_path = Path("output") / f"client_assignment_report_{view}_{datetime.today().strftime('%Y-%m-%d')}.csv"
+    await run_in_threadpool(client_assignment.write_report_csv, matters_sorted, csv_path)
+
     return render(
         request, "client_assignment_report.html", error=None,
         matters=matters_sorted, view=view,
     )
+
+
+@router.get("/report/download")
+async def assignments_report_download(view: str = "missing", _: None = Depends(require_auth)):
+    path = Path("output") / f"client_assignment_report_{view}_{datetime.today().strftime('%Y-%m-%d')}.csv"
+    if not path.exists():
+        return HTMLResponse("No report generated yet — visit the report page first.", status_code=404)
+    return FileResponse(path, filename=path.name, media_type="text/csv")

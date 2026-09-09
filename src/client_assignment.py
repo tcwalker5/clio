@@ -29,6 +29,7 @@ Usage:
 """
 
 import argparse
+import csv
 import logging
 import os
 import sys
@@ -171,6 +172,24 @@ def fetch_matters_for_assignment(session: requests.Session) -> list[MatterAssign
         ))
     result.sort(key=lambda x: (-x.missing_count, x.display_number))
     return result
+
+
+def write_report_csv(matters: list[MatterAssignment], path: Path) -> None:
+    """CSV mirroring client_assignment_report.html's own table exactly — same
+    four columns, same order, no client_name (the printed report leaves it
+    off too — see that template's own note) and no raw id columns (not shown
+    on screen either)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["Matter", "Responsible Attorney", "Originating Attorney", "Responsible Staff"])
+        for m in matters:
+            writer.writerow([
+                m.display_number,
+                m.responsible_attorney_name or "—",
+                m.originating_attorney_name or "—",
+                m.responsible_staff_name or "—",
+            ])
 
 
 def _counts_by_name(matters: list[MatterAssignment], name_attr: str, roster_names: list[str]) -> list[tuple[str, int]]:

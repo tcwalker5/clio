@@ -153,10 +153,24 @@ async def action_report(request: Request, _: None = Depends(require_auth)):
     invoice_summaries = sorted((s for s in summaries if not s.all_trust), key=lambda s: s.display_name)
     trust_summaries = sorted((s for s in summaries if s.all_trust), key=lambda s: s.display_name)
 
+    # Written on every view so its download link always matches this exact
+    # page — deliberately a separate file from /collections/download's own
+    # CSV below, which is bill-level and has no Handling/Confirmed columns.
+    action_report_csv_path = Path("output") / f"collections_action_report_{datetime.today().strftime('%Y-%m-%d')}.csv"
+    await run_in_threadpool(collections_monitor.write_action_report_csv, invoice_summaries, trust_summaries, action_report_csv_path)
+
     return render(
         request, "collections_action_report.html", error=None, summaries=summaries,
         invoice_summaries=invoice_summaries, trust_summaries=trust_summaries, clio_base_url=CLIO_BASE_URL,
     )
+
+
+@router.get("/action-report/download")
+async def collections_action_report_download(_: None = Depends(require_auth)):
+    path = Path("output") / f"collections_action_report_{datetime.today().strftime('%Y-%m-%d')}.csv"
+    if not path.exists():
+        return HTMLResponse("No report generated yet — visit the print report page first.", status_code=404)
+    return FileResponse(path, filename=path.name, media_type="text/csv")
 
 
 @router.get("/download")

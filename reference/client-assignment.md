@@ -88,6 +88,18 @@ MARYANNE" vs. "COX, JOEY") while the other three columns draw from a small fixed
 roster of short names. Verified live by simulating the print rule's effect and
 re-measuring: intrinsic width dropped to fit within a 720px page with room to spare.
 
+**CSV export, added 2026-09-09 (Ted: wanted CSV export for any page with a
+printable list)** — a "Download CSV" button next to Print, same 4 columns as the
+table (Matter/Responsible Attorney/Originating Attorney/Responsible Staff),
+respecting whichever `view` is currently on screen. `client_assignment.py`'s new
+`write_report_csv()` writes to `output/client_assignment_report_{view}_{date}.csv`
+on every page load (same "written as a side effect of rendering, served back by a
+separate `/download` route" pattern Trust Monitor and Staff Unbilled already use),
+keyed by `view` so switching between missing/all doesn't require a fresh page load
+before downloading the other one. **Case Load below was explicitly excluded** from
+this same request — it's a pie chart, not a list, so a CSV export wasn't judged
+worth building for it.
+
 ## Case Load
 
 **`/assignments/caseload`** (button next to the two print buttons, 2026-09-03) — case

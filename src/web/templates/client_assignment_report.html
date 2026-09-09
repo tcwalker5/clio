@@ -10,7 +10,10 @@
 
 {% if matters is not none %}
 <div class="panel">
-  <button type="button" class="btn secondary no-print" onclick="window.print()" style="margin-bottom:0.75rem;">Print</button>
+  <div class="no-print" style="display:flex;align-items:center;gap:1rem;margin-bottom:0.75rem;">
+    <button type="button" class="btn secondary" onclick="window.print()">Print</button>
+    <a class="btn secondary" href="/assignments/report/download?view={{ view }}">Download CSV</a>
+  </div>
 
   {% if matters %}
   <div style="overflow-x:auto;">

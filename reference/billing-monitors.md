@@ -321,6 +321,33 @@ of ruled lines, both on screen and on paper. Two more changes landed the same da
   — with only 3-4 client-level trust requests open at a time in practice, this adds a
   handful of calls to `/collections`' existing live fetch, not a new class of cost.
 
+**Independent Invoices/Trust Requests checkboxes (2026-09-09):** two checkboxes next
+to Print, both checked by default — any combination is valid (both on for the full
+report, one on to print just that section, both off to show neither). Implemented as
+a `data-section="invoice"/"trust"` attribute per row plus a dedicated `section-hidden`
+CSS class (`applySectionFilter()` in the template), kept deliberately separate from
+the existing per-matter expand/collapse `hidden` class so the two toggles can't
+interfere with each other. Unlike a collapsed matter (which the `@media print` rule
+always force-expands — see the redesign note above), an unchecked section stays
+hidden in print too, since that's the entire point of the checkboxes.
+
+**CSV export, added 2026-09-09 (Ted: wanted CSV export for any page with a printable
+list):** a "Download CSV" button next to Print. Deliberately a **separate CSV from
+`/collections/download`'s own** (that one is bill-level with no Handling/Confirmed
+columns — wouldn't actually match this page). New
+`collections_monitor.write_action_report_csv()` mirrors this page's table exactly:
+same `Section` values (Invoice/Trust Request) and order as the two on-screen blocks
+above, same Handling/Confirmed columns. The one difference forced by CSV's own
+shape: the page's single "Total Balance" cell stacks up to three $ figures
+(earned/replenishment/new-trust) — the CSV splits those into three real columns
+instead, since a spreadsheet cell should hold one value. A `trust_level_mismatch`
+flag (see above) has no dedicated page *column* to mirror — it's a badge on the
+Matter cell — so it's appended as text to that same cell in the CSV instead (e.g.
+`ROOF, JENNIFER — CHECK TRUST LEVEL (matter holds $152.86)`), keeping the CSV a
+faithful text rendering of what's on screen rather than inventing a new column the
+page doesn't have. Same "written to `output/` on page load, served by its own
+`/download` route" pattern as every other CSV in this app.
+
 **Three bill categories, not one flat "unpaid bill" list (added 2026-09-02, Ted):**
 a real Clio quirk surfaced while investigating a bill with no matter shown (JENNIFER
 ROOF, bill #30285, $5,000) — it had no matter linked, but Clio's `Bill.kind` field

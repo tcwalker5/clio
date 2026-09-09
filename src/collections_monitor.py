@@ -432,6 +432,43 @@ def write_report_csv(bills: list[UnpaidBill], path: Path) -> None:
             ])
 
 
+def write_action_report_csv(
+    invoice_summaries: list[MatterBillSummary], trust_summaries: list[MatterBillSummary], path: Path,
+) -> None:
+    """CSV mirroring collections_action_report.html's own table exactly —
+    same two sections in the same order (Invoices, then Trust Requests, each
+    already alphabetized by the caller), same Handling/Confirmed columns.
+    The page's one "Total Balance" column stacks up to three $ figures
+    (earned/replenishment/new-trust) — split into three real columns here
+    rather than one combined string, since a CSV's whole point is one value
+    per cell."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            "Section", "Matter", "Oldest Issued", "Earned Balance", "Replenishment Balance",
+            "New Client Retainer Balance", "Handling", "Confirmed",
+        ])
+        for section, summaries in (("Invoice", invoice_summaries), ("Trust Request", trust_summaries)):
+            for s in summaries:
+                if s.action == "FLARPL":
+                    confirmed = "Recorded" if s.flarpl_recorded else "Not recorded yet"
+                elif s.action == "Payment plan":
+                    confirmed = "In place" if s.payment_plan_active else "Not set up yet"
+                else:
+                    confirmed = ""
+                matter = s.display_name
+                if s.trust_level_mismatch:
+                    matter += f" — CHECK TRUST LEVEL (matter holds ${s.matter_trust_balance:.2f})"
+                writer.writerow([
+                    section, matter, s.oldest_issued_at,
+                    f"{s.earned_balance:.2f}" if s.earned_balance else "",
+                    f"{s.replenishment_balance:.2f}" if s.replenishment_balance else "",
+                    f"{s.new_trust_balance:.2f}" if s.new_trust_balance else "",
+                    s.action, confirmed,
+                ])
+
+
 def build_session() -> requests.Session:
     if not ACCESS_TOKEN:
         raise RuntimeError("CLIO_ACCESS_TOKEN not set in .env")
