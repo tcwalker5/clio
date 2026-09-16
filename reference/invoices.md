@@ -151,9 +151,19 @@ uv run src/bradford_invoice.py --input "data/Invoice-*.pdf"
 
 ## Resolving exceptions from the dashboard
 `/bradford`'s exceptions table has, per row: a one-click **"Use suggested match"**
-button (only shown when `suggested_matter_id` is populated) and a free-text matter-ID
-field for anything else (wrong suggestion, ambiguous case, no suggestion at all).
-Either one POSTs to `/bradford/resolve-exception`, which appends to
+button (only shown when `suggested_matter_id` is populated) and, for anything else
+(wrong suggestion, ambiguous case, no suggestion at all), a **type-to-filter
+matter-name search** (`matter_search.js` + a `tojson` Jinja2 filter registered
+app-wide in `web/app.py`) — staff know client names, not Clio's internal matter IDs.
+Fixed 2026-09-16 (Ted): this field used to be a raw numeric Matter ID input,
+`type="number"`, which literally couldn't accept a name — real problem hit resolving
+an "Ambiguous — multiple open matters" exception (e.g. PENNER, ROJAS: two open
+matters share that last name), where the fix is picking the *right one by name*, not
+knowing its ID offhand. `RunResult.all_matters` (~220 entries, `{"id", "name"}`) is
+now built the same way Legs Expenses' own copy of this field already was (see that
+section below) — embedded once per page load, filtered client-side, no per-keystroke
+network call. Either the suggested-match button or the search field POSTs to
+`/bradford/resolve-exception`, which appends to
 `data/bradford_manual_matter_map.csv` (`name,matter_id,note,added_at` — created with
 a header on first write, BOM only on that first write since re-opening in append
 mode with `utf-8-sig` would otherwise inject a fresh BOM into the middle of the file
@@ -369,14 +379,13 @@ uv run src/legs_expenses.py --input "data/June 2026.pdf"
 ```
 
 ## Resolving exceptions from the dashboard
-`/legs`'s exceptions table works like Bradford's (suggested-match button + manual
-resolve, same `/legs/resolve-exception` -> persisted-override -> re-run-dry-run flow),
-but the manual-entry field is a **type-to-filter matter-name search**
-(`matter_search.js` + a `tojson` Jinja2 filter registered app-wide in `web/app.py`,
-reusable by any future page) instead of a raw Matter ID field — staff know client names,
-not Clio's internal IDs. The full open-matters list (`RunResult.all_matters`, ~240
-entries) is embedded once per page load; filtering is client-side, no per-keystroke
-network call.
+`/legs`'s exceptions table works exactly like Bradford's now (suggested-match button +
+type-to-filter matter-name search, same `/legs/resolve-exception` -> persisted-override
+-> re-run-dry-run flow, see Bradford's own section above for the full writeup) — this
+was the original home of `matter_search.js` before Bradford's own manual-entry field
+was fixed 2026-09-16 to match it. The full open-matters list (`RunResult.all_matters`,
+~240 entries) is embedded once per page load; filtering is client-side, no
+per-keystroke network call.
 
 ---
 

@@ -101,7 +101,11 @@
           <form method="post" action="/bradford/resolve-exception" style="display:flex; align-items:center; gap:0.4rem; flex-shrink:0;">
             <input type="hidden" name="token" value="{{ token }}">
             <input type="hidden" name="name" value="{{ e.name }}">
-            <input type="number" name="matter_id" placeholder="Matter ID" required style="width:9rem;">
+            <input type="hidden" name="matter_id" class="matter-search-id" required>
+            <div class="matter-search">
+              <input type="text" class="matter-search-input" placeholder="Search matter name…" autocomplete="off">
+              <div class="matter-search-results"></div>
+            </div>
             <button type="submit">Save</button>
           </form>
           </div>
@@ -144,4 +148,8 @@
 
 <script src="/static/dropzone.js"></script>
 <script>initDropzone('dropzone', 'file-input', 'upload-form');</script>
+{% if result and result.exceptions and token %}
+<script src="/static/matter_search.js"></script>
+<script>initMatterSearch({{ result.all_matters | tojson | safe }});</script>
+{% endif %}
 {% endblock %}

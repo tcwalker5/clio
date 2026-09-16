@@ -706,6 +706,7 @@ class RunResult:
     payloads_path: Path | None = None
     exceptions_path: Path | None = None
     matter_names: dict[int, str] = field(default_factory=dict)  # matter_id -> last name, for UI
+    all_matters: list[dict] = field(default_factory=list)  # [{"id":, "name":}], for the dashboard's matter-name search (exception resolution)
     invoice_number: str | None = None
     # Reconciliation helpers — see "Reconciling against Clio" in reference/invoices.md.
     # Hours are all post-rounding (0.1h increments), matching what Clio itself records.
@@ -795,8 +796,16 @@ def run_pipeline(
     output_dir.mkdir(exist_ok=True)
     stem = re.sub(r"[^\w\-]", "_", input_path.stem)
     matter_names = {mid: name for name, mid in matters.items() if mid}
+    all_matters = sorted(
+        (
+            {"id": int(m["id"]), "name": m["display_number"]}
+            for m in matters_raw if m.get("display_number")
+        ),
+        key=lambda m: m["name"],
+    )
     result = RunResult(stem=stem, payloads=payloads, exceptions=exceptions, skipped=skipped,
                         total_entries=len(all_entries), matter_names=matter_names,
+                        all_matters=all_matters,
                         invoice_number=invoice_number, matched_hours=matched_hours,
                         already_posted_hours=already_posted_hours, exception_hours=exception_hours,
                         date_range=date_range)
