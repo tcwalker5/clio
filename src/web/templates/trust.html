@@ -2,121 +2,116 @@
 {% block title %}Trust Monitor{% endblock %}
 {% block content %}
 <h1>Trust Monitor</h1>
-<p class="subtitle">Two independent things: trust replenishment requests (below), based purely on each matter's raw trust balance — a request is only generated once trust drops below ${{ action_gate|money(0) }}, topping up to ${{ trust_minimum|money(0) }} — and an early-warning monitor (further down) for matters where unbilled work (WIP) is outpacing trust, before it's even billed. Billing itself stays entirely manual, done through Clio's own UI on the firm's normal cycle. This page is retainer-only — for clients who owe money on bills already sent, see <a href="/collections">Collections</a>.</p>
+<p class="subtitle">Every open matter's trust picture, for the responsible attorney to review directly: current trust balance, unbilled work (WIP), what trust would be left after that WIP is billed, any balance already due on a sent bill, and a Target trust balance you can set per matter — defaults to the firm's standard $2,500, saved the moment you change it. A matter shows "Below target" once its trust-after-WIP figure drops under that target. This page is retainer-only — for clients who owe money on bills already sent, see <a href="/collections">Collections</a>.</p>
 
 {% if error %}
 <div class="panel"><p class="error-text">{{ error }}</p></div>
 {% endif %}
-{% if notice %}
-<div class="panel"><p class="notice-text">{{ notice }}</p></div>
-{% endif %}
 
-{% if candidates is not none %}
-<div class="panel" id="requests">
-  <h2>Trust Requests to Review</h2>
-  <p class="subtitle">Sending creates a real Trust Request in Clio as an unapproved draft (not auto-sent to the client) — review the amount, then send individually or select several and send together.</p>
+{% if rows is not none %}
+<div class="panel" id="results">
   <div class="summary-bar">
-    <div class="summary-stat"><strong>{{ to_send_count }}</strong>ready to send</div>
+    <div class="summary-stat"><strong>{{ rows|length }}</strong>matters checked</div>
+    <div class="summary-stat"><strong>{{ flagged_count }}</strong>below target</div>
   </div>
 
-  {% if candidates %}
+  <div style="display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap;margin-bottom:0.75rem;">
+    <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.9rem;">
+      <input type="checkbox" id="flagged-only" onchange="filterResults()">
+      Show only matters below target
+    </label>
+    <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.9rem;">
+      Attorney:
+      <select id="attorney-filter" onchange="filterResults()" style="padding:0.3rem 0.4rem;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text);font-size:0.85rem;">
+        <option value="">All</option>
+        {% for a in attorneys %}
+        <option value="{{ a }}">{{ a }}</option>
+        {% endfor %}
+        {% if has_unassigned %}
+        <option value="__unassigned__">Unassigned</option>
+        {% endif %}
+      </select>
+    </label>
+    <a class="btn secondary" href="/trust/download">Download CSV</a>
+  </div>
+
+  {% if rows %}
   <div style="overflow-x:auto;">
-  <table class="nowrap" id="requests-table">
+  <table class="nowrap" id="monitor-table">
     <thead><tr>
-      <th><input type="checkbox" id="select-all" onchange="toggleAll(this)"></th>
       <th>Status</th>
-      <th class="sortable" onclick="sortTable('requests-table', 2, 'text', this)">Matter <span class="sort-icon">&#8645;</span></th>
-      <th class="sortable" onclick="sortTable('requests-table', 3, 'number', this)">Trust <span class="sort-icon">&#8645;</span></th>
-      <th>New Trust Target</th><th>Requested</th><th>Actions</th>
+      <th class="sortable" onclick="sortTable('monitor-table', 1, 'text', this)">Matter <span class="sort-icon">&#8645;</span></th>
+      <th>Attorney</th>
+      <th>In Trust</th><th class="formula-op"></th><th>WIP</th><th class="formula-op"></th>
+      <th class="sortable" onclick="sortTable('monitor-table', 7, 'number', this)" title="Trust balance after covering unbilled work (WIP) — the number this report flags against your Target.">Trust After WIP <span class="sort-icon">&#8645;</span></th>
+      <th class="sortable" onclick="sortTable('monitor-table', 8, 'number', this)">Balance Due <span class="sort-icon">&#8645;</span></th>
+      <th>Target</th>
     </tr></thead>
     <tbody>
-      {% for c in candidates %}
-      <tr>
+      {% for r in rows %}
+      <tr data-flagged="{{ 'yes' if r.flagged else 'no' }}" data-attorney="{{ r.attorney_name }}">
+        <td>{% if r.flagged %}<span class="badge err">Below target</span>{% else %}<span class="badge ok">OK</span>{% endif %}</td>
+        <td data-sort="{{ r.display_number }}">{{ r.display_number }}</td>
+        <td title="{{ r.attorney_name }}">{{ r.attorney_name|initials or "—" }}</td>
+        <td>${{ r.amount_in_trust|money }}</td>
+        <td class="formula-op">&minus;</td>
+        <td>${{ r.unbilled_amount|money }}</td>
+        <td class="formula-op">=</td>
+        <td data-sort="{{ r.cushion }}">${{ r.cushion|money }}</td>
+        <td data-sort="{{ r.balance_due }}">{% if r.balance_due > 0 %}${{ r.balance_due|money }}{% else %}&mdash;{% endif %}</td>
         <td>
-          {% if c.state == "candidate" %}
-          <input type="checkbox" name="matter_ids" value="{{ c.matter_id }}" form="bulk-send-form"
-                 data-amount="{{ c.requested_amount }}" onchange="updateSelectionSummary()">
-          {% endif %}
-        </td>
-        <td>
-          {% if c.state == "candidate" %}<span class="badge err">Ready to send</span>
-          {% elif c.state == "already_requested" %}<span class="badge warn">Already requested</span>
-          {% else %}<span class="badge">Paused</span>{% endif %}
-        </td>
-        <td data-sort="{{ c.display_number }}">{{ c.display_number }}</td>
-        <td data-sort="{{ c.trust_balance }}">${{ c.trust_balance|money }}</td>
-        <td>
-          <form method="post" action="/trust/set-target" style="display:flex;align-items:center;gap:0.3rem;">
-            <input type="hidden" name="matter_id" value="{{ c.matter_id }}">
-            <input type="text" inputmode="decimal" name="target_amount" value="{{ c.target_amount|money }}"
-                   title="Commas are optional — 10000 and 10,000 both work."
-                   style="width:7rem;padding:0.25rem 0.4rem;border:1px solid var(--border);border-radius:6px;">
-            <button type="submit" class="secondary" style="padding:0.2rem 0.5rem;font-size:0.8rem;">Save</button>
-          </form>
-        </td>
-        <td>{% if c.state == "paused" %}&mdash;{% else %}${{ c.requested_amount|money }}{% endif %}</td>
-        <td>
-          <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
-          {% if c.state == "candidate" %}
-          <form method="post" action="/trust/send-request"
-                onsubmit="return confirm('Send a ${{ c.requested_amount|money }} trust request for {{ c.display_number }}? This creates a real draft in Clio.');">
-            <input type="hidden" name="matter_id" value="{{ c.matter_id }}">
-            <button type="submit" style="padding:0.2rem 0.6rem;font-size:0.8rem;">Send</button>
-          </form>
-          {% endif %}
-          {% if c.state == "paused" %}
-          <form method="post" action="/trust/unpause">
-            <input type="hidden" name="matter_id" value="{{ c.matter_id }}">
-            <button type="submit" class="secondary" style="padding:0.2rem 0.6rem;font-size:0.8rem;">Unpause</button>
-          </form>
-          {% else %}
-          <form method="post" action="/trust/pause">
-            <input type="hidden" name="matter_id" value="{{ c.matter_id }}">
-            <button type="submit" class="secondary" style="padding:0.2rem 0.6rem;font-size:0.8rem;">Pause</button>
-          </form>
-          {% endif %}
-          {% if c.state == "already_requested" %}
-          <span style="color:var(--text-muted);font-size:0.78rem;">sent {{ c.requested_at | local_time }}</span>
-          {% endif %}
-          </div>
+          <input type="text" inputmode="decimal" class="trust-target-input" data-matter-id="{{ r.matter_id }}"
+                 value="{{ r.target_amount|money }}" onchange="saveTrustTarget(this)"
+                 title="Commas are optional — 10000 and 10,000 both work. Clear the field to reset to the $2,500 default."
+                 style="width:6.5rem;padding:0.25rem 0.4rem;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text);">
         </td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
   </div>
-
-  <div class="summary-bar" style="margin-top:1rem;">
-    <div class="summary-stat"><strong id="selected-count">0</strong>selected</div>
-    <div class="summary-stat"><strong id="selected-total">$0.00</strong>total requested</div>
-    <div class="summary-stat"><strong id="selected-fee">$0.00</strong>card fee risk ({{ "%.2f"|format(card_fee_rate * 100) }}%) if all paid by card</div>
-  </div>
-
-  <form id="bulk-send-form" method="post" action="/trust/send-selected" style="margin-top:0.75rem;"
-        onsubmit="return confirm('Send trust requests for every checked matter? This creates real drafts in Clio.');">
-    <button type="submit">Send Selected</button>
-  </form>
   {% else %}
-  <p class="subtitle">Nothing needs a trust request right now.</p>
+  <p class="subtitle">No open matters with trust/WIP activity right now.</p>
   {% endif %}
 </div>
 <script>
-const CARD_FEE_RATE = {{ card_fee_rate }};
-
-function toggleAll(master) {
-  document.querySelectorAll('input[name="matter_ids"]').forEach((cb) => { cb.checked = master.checked; });
-  updateSelectionSummary();
+function filterResults() {
+  const onlyFlagged = document.getElementById("flagged-only").checked;
+  const attorney = document.getElementById("attorney-filter").value;
+  document.querySelectorAll("#results tbody tr[data-flagged]").forEach((row) => {
+    const flaggedOut = onlyFlagged && row.dataset.flagged === "no";
+    const attorneyOut = attorney && !(
+      attorney === "__unassigned__" ? row.dataset.attorney === "" : row.dataset.attorney === attorney
+    );
+    row.style.display = (flaggedOut || attorneyOut) ? "none" : "";
+  });
 }
+filterResults();
 
-function updateSelectionSummary() {
-  const checked = document.querySelectorAll('input[name="matter_ids"]:checked');
-  let total = 0;
-  checked.forEach((cb) => { total += parseFloat(cb.dataset.amount || "0"); });
-  const fee = total * CARD_FEE_RATE;
-  const fmt = (n) => "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  document.getElementById("selected-count").textContent = checked.length;
-  document.getElementById("selected-total").textContent = fmt(total);
-  document.getElementById("selected-fee").textContent = fmt(fee);
+async function saveTrustTarget(input) {
+  const matterId = input.dataset.matterId;
+  const previous = input.dataset.lastSaved || input.value;
+  input.disabled = true;
+  try {
+    const resp = await fetch("/trust/set-target", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: `matter_id=${encodeURIComponent(matterId)}&target_amount=${encodeURIComponent(input.value)}`,
+    });
+    const body = await resp.json();
+    input.disabled = false;
+    if (resp.ok && body.success) {
+      input.value = body.target_amount;
+      input.dataset.lastSaved = body.target_amount;
+    } else {
+      alert(body.error || "Couldn't save — try again.");
+      input.value = previous;
+    }
+  } catch (e) {
+    input.disabled = false;
+    alert("Couldn't save — try again.");
+    input.value = previous;
+  }
 }
 
 function sortTable(tableId, colIndex, type, headerEl) {
@@ -140,63 +135,6 @@ function sortTable(tableId, colIndex, type, headerEl) {
   headerEl.dataset.dir = ascending ? 'asc' : 'desc';
   headerEl.querySelector('.sort-icon').innerHTML = ascending ? '&#9650;' : '&#9660;';
 }
-</script>
-{% endif %}
-
-{% if statuses is not none %}
-<div class="panel" id="results">
-  <h2>Full Monitor</h2>
-  <div class="summary-bar">
-    <div class="summary-stat"><strong>{{ statuses|length }}</strong>matters checked</div>
-    <div class="summary-stat"><strong>{{ flagged_count }}</strong>below ${{ trust_minimum|money(0) }} cushion</div>
-    <div class="summary-stat"><strong>${{ total_owed|money }}</strong>total owed</div>
-  </div>
-
-  <div style="display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap;margin-bottom:0.75rem;">
-    <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.9rem;">
-      <input type="checkbox" id="flagged-only" checked onchange="filterResults()">
-      Show only matters below cushion ({{ flagged_count }}) — hide the {{ statuses|length - flagged_count }} already healthy
-    </label>
-    <a class="btn secondary" href="/trust/download">Download CSV</a>
-  </div>
-
-  <div style="overflow-x:auto;">
-  <table class="nowrap" id="monitor-table">
-    <thead><tr>
-      <th>Status</th>
-      <th class="sortable" onclick="sortTable('monitor-table', 1, 'text', this)">Matter <span class="sort-icon">&#8645;</span></th>
-      <th>WIP</th><th class="formula-op"></th><th>In Trust</th><th class="formula-op"></th>
-      <th class="sortable" onclick="sortTable('monitor-table', 6, 'number', this)">Cushion <span class="sort-icon">&#8645;</span></th>
-      <th class="formula-op"></th><th>Retainer Needed</th><th class="formula-op"></th><th>Target</th>
-    </tr></thead>
-    <tbody>
-      {% for s in statuses %}
-      <tr data-flagged="{{ 'yes' if s.flagged else 'no' }}">
-        <td>{% if s.flagged %}<span class="badge err">Below cushion</span>{% else %}<span class="badge ok">OK</span>{% endif %}</td>
-        <td data-sort="{{ s.display_number }}">{{ s.display_number }}</td>
-        <td>{% if s.unbilled_amount > 0 %}$-{{ s.unbilled_amount|money }}{% else %}$0.00{% endif %}</td>
-        <td class="formula-op">+</td>
-        <td>${{ s.amount_in_trust|money }}</td>
-        <td class="formula-op">=</td>
-        <td data-sort="{{ s.cushion }}">${{ s.cushion|money }}</td>
-        <td class="formula-op">+</td>
-        <td>{% if s.flagged %}${{ s.shortfall|money }}{% else %}&mdash;{% endif %}</td>
-        <td class="formula-op">=</td>
-        <td>{% if s.flagged %}${{ trust_minimum|money(0) }}{% else %}&mdash;{% endif %}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  </div>
-</div>
-<script>
-function filterResults() {
-  const onlyFlagged = document.getElementById("flagged-only").checked;
-  document.querySelectorAll("#results tbody tr[data-flagged]").forEach((row) => {
-    row.style.display = (onlyFlagged && row.dataset.flagged === "no") ? "none" : "";
-  });
-}
-filterResults();
 </script>
 {% endif %}
 {% endblock %}

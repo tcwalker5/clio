@@ -1,21 +1,20 @@
 """
-routes_trust.py — Trust cushion monitor + trust replenishment request review.
+routes_trust.py — WIP-vs-trust report, self-service for the responsible
+attorney.
 
-The monitor table (trust_monitor.run_pipeline) is read-only, like Court
-Calendar Sync — runs live on every page view rather than following
-RingCentral's persisted-last-run pattern, since the underlying Clio calls
-are cheap under real data volumes (a few hundred matters/bills, 1-2 pages
-each).
+See trust_monitor.py's module docstring for the full 2026-09-16 redesign
+context: live Clio trust-request sending is blocked/on hold (reference/
+billing-monitors.md), so this page is now a pure report rather than a
+send/review workflow — no Send or Pause routes remain, since there's
+nothing left to send or pause. The only mutating route is /set-target,
+saved instantly on change (same pattern as Client Assignment's/
+Collections' own dropdowns) — a plain JSON endpoint, not a full-page
+form post, since nothing else on the page depends on the new value.
 
-The request-review section below it is NOT read-only: /trust/send-request
-and /trust/send-selected create real TrustRequest drafts in Clio
-(approved=False). Pause and target-override only touch the local
-trust_matter_settings/trust_requests tables in data/clio_dashboard.db.
-
-Every mutating route re-runs the pipeline and re-renders trust.html
-directly in place (same pattern as Bradford's resolve-exception) rather
-than redirecting — a stale query-param success message would be more
-misleading than useful for something backed by a live recompute anyway.
+The report table (trust_monitor.run_pipeline + build_report_rows) is
+read-only and runs live on every page view, like Court Calendar Sync —
+the underlying Clio calls are cheap under real data volumes (a few hundred
+matters/bills, 1-2 pages each).
 """
 
 from datetime import datetime
@@ -23,7 +22,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 import trust_monitor
 from web.auth import require_auth
@@ -32,55 +31,38 @@ from web.db import get_connection
 router = APIRouter(prefix="/trust", tags=["trust"])
 
 
-def _render(request: Request, **overrides):
+@router.get("", response_class=HTMLResponse)
+async def trust_home(request: Request, _: None = Depends(require_auth)):
     from web.app import render
 
-    context = {"error": None, "notice": None, "statuses": None, "candidates": None}
-    context.update(overrides)
-    return render(request, "trust.html", **context)
-
-
-async def _load_home(request: Request, **overrides):
-    """Runs the full live pipeline + candidate evaluation and renders the
-    page. Used for the plain GET and after every mutating action, so the
-    table shown always reflects what's actually true right now."""
     try:
         statuses = await run_in_threadpool(trust_monitor.run_pipeline)
     except RuntimeError as e:
-        return _render(request, error=str(e))
+        return render(request, "trust.html", error=str(e), rows=None)
 
     conn = get_connection()
     try:
-        candidates = trust_monitor.evaluate_request_candidates(conn, statuses)
+        rows = trust_monitor.build_report_rows(conn, statuses)
     finally:
         conn.close()
 
-    statuses_sorted = sorted(statuses, key=lambda s: s.cushion)
-    flagged_count = sum(1 for s in statuses_sorted if s.flagged)
-    total_owed = sum(s.shortfall for s in statuses_sorted if s.flagged)
+    rows_sorted = sorted(rows, key=lambda r: r.cushion)
+    flagged_count = sum(1 for r in rows_sorted if r.flagged)
 
-    # Actionable candidates first (lowest trust balance first within that
-    # group), then already-requested/paused for visibility below.
-    candidates_sorted = sorted(candidates, key=lambda c: (c.state != "candidate", c.trust_balance))
-    to_send_count = sum(1 for c in candidates_sorted if c.state == "candidate")
+    # Attorney filter options: whoever's actually responsible for a matter
+    # in this data set, not a hardcoded roster (client_assignment.py's fixed
+    # ATTORNEY_NAMES list is for the assign-a-name dropdown; this is just
+    # filtering what's already on screen) — plus "Unassigned" if any matter
+    # here is missing one (see /assignments to fix that).
+    attorneys = sorted({r.attorney_name for r in rows_sorted if r.attorney_name})
+    has_unassigned = any(not r.attorney_name for r in rows_sorted)
 
-    context = dict(
-        statuses=statuses_sorted,
-        flagged_count=flagged_count,
-        total_owed=total_owed,
+    return render(
+        request, "trust.html", error=None,
+        rows=rows_sorted, flagged_count=flagged_count,
         trust_minimum=trust_monitor.TRUST_MINIMUM,
-        action_gate=trust_monitor.ACTION_GATE,
-        card_fee_rate=trust_monitor.CARD_FEE_RATE,
-        candidates=candidates_sorted,
-        to_send_count=to_send_count,
+        attorneys=attorneys, has_unassigned=has_unassigned,
     )
-    context.update(overrides)
-    return _render(request, **context)
-
-
-@router.get("", response_class=HTMLResponse)
-async def trust_home(request: Request, _: None = Depends(require_auth)):
-    return await _load_home(request)
 
 
 @router.get("/download")
@@ -91,126 +73,27 @@ async def trust_download(_: None = Depends(require_auth)):
     return FileResponse(path, filename=path.name, media_type="text/csv")
 
 
-@router.post("/set-target", response_class=HTMLResponse)
+@router.post("/set-target")
 async def trust_set_target(
-    request: Request,
-    matter_id: int = Form(...),
-    target_amount: str = Form(""),
-    note: str = Form(""),
-    _: None = Depends(require_auth),
+    matter_id: int = Form(...), target_amount: str = Form(""), _: None = Depends(require_auth),
 ):
-    # Displayed pre-filled with comma separators (e.g. "2,500.00") — strip
-    # them back out so a re-save of an untouched field still parses; a typed
-    # comma is tolerated the same way, a typed comma is not required.
+    """Instant-persist, no confirm button — an empty field clears the
+    override back to the $2,500 firm default rather than storing nothing
+    meaningful; the response returns that resolved effective value so the
+    field can show what actually took effect."""
     raw = target_amount.strip().replace(",", "")
     try:
         amount = float(raw) if raw else None
     except ValueError:
-        return await _load_home(request, error=f"'{target_amount}' isn't a valid dollar amount — target not saved.")
+        return JSONResponse({"error": f"'{target_amount}' isn't a valid dollar amount."}, status_code=400)
+    if amount is not None and amount < 0:
+        return JSONResponse({"error": "Target amount can't be negative."}, status_code=400)
 
     conn = get_connection()
     try:
-        trust_monitor.set_matter_target(conn, matter_id, amount, note)
-    finally:
-        conn.close()
-    return await _load_home(request)
-
-
-@router.post("/pause", response_class=HTMLResponse)
-async def trust_pause(request: Request, matter_id: int = Form(...), _: None = Depends(require_auth)):
-    conn = get_connection()
-    try:
-        trust_monitor.set_matter_paused(conn, matter_id, True)
-    finally:
-        conn.close()
-    return await _load_home(request)
-
-
-@router.post("/unpause", response_class=HTMLResponse)
-async def trust_unpause(request: Request, matter_id: int = Form(...), _: None = Depends(require_auth)):
-    conn = get_connection()
-    try:
-        trust_monitor.set_matter_paused(conn, matter_id, False)
-    finally:
-        conn.close()
-    return await _load_home(request)
-
-
-def _send_one(conn, session, candidate) -> tuple[bool, str]:
-    try:
-        clio_id = trust_monitor.create_trust_request(
-            session, candidate.client_id, candidate.matter_id, candidate.requested_amount,
-        )
-        trust_monitor.record_trust_request(
-            conn, candidate.matter_id, candidate.target_amount, candidate.trust_balance,
-            candidate.requested_amount, clio_id,
-        )
-        return True, ""
-    except RuntimeError as e:
-        return False, str(e)
-
-
-@router.post("/send-request", response_class=HTMLResponse)
-async def trust_send_request(request: Request, matter_id: int = Form(...), _: None = Depends(require_auth)):
-    try:
-        statuses = await run_in_threadpool(trust_monitor.run_pipeline)
-    except RuntimeError as e:
-        return _render(request, error=str(e))
-
-    conn = get_connection()
-    try:
-        candidates = trust_monitor.evaluate_request_candidates(conn, statuses)
-        match = next((c for c in candidates if c.matter_id == matter_id and c.state == "candidate"), None)
-
-        error = None
-        notice = None
-        if match is None:
-            error = f"Matter {matter_id} is no longer a request candidate — its cushion may have changed, or it was already sent. Refreshed below."
-        else:
-            session = trust_monitor.build_session()
-            ok, err = _send_one(conn, session, match)
-            if ok:
-                notice = f"Trust request for ${match.requested_amount:,.2f} sent to Clio as a draft for {match.display_number}."
-            else:
-                error = f"Failed to send trust request for {match.display_number}: {err}"
+        trust_monitor.set_matter_target(conn, matter_id, amount)
     finally:
         conn.close()
 
-    return await _load_home(request, error=error, notice=notice)
-
-
-@router.post("/send-selected", response_class=HTMLResponse)
-async def trust_send_selected(request: Request, _: None = Depends(require_auth)):
-    form = await request.form()
-    matter_ids = {int(v) for v in form.getlist("matter_ids")}
-
-    if not matter_ids:
-        return _load_home(request, error="No matters selected.")
-
-    try:
-        statuses = await run_in_threadpool(trust_monitor.run_pipeline)
-    except RuntimeError as e:
-        return _render(request, error=str(e))
-
-    conn = get_connection()
-    sent, failed = 0, []
-    try:
-        candidates = trust_monitor.evaluate_request_candidates(conn, statuses)
-        by_id = {c.matter_id: c for c in candidates if c.state == "candidate"}
-        session = trust_monitor.build_session()
-        for mid in matter_ids:
-            candidate = by_id.get(mid)
-            if candidate is None:
-                failed.append(f"matter {mid} (no longer a candidate)")
-                continue
-            ok, err = _send_one(conn, session, candidate)
-            if ok:
-                sent += 1
-            else:
-                failed.append(f"{candidate.display_number}: {err}")
-    finally:
-        conn.close()
-
-    notice = f"Sent {sent} trust request(s)." if sent else None
-    error = ("Failed: " + "; ".join(failed)) if failed else None
-    return await _load_home(request, notice=notice, error=error)
+    effective = amount if amount is not None else trust_monitor.TRUST_MINIMUM
+    return JSONResponse({"success": True, "target_amount": f"{effective:,.2f}"})

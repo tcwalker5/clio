@@ -59,6 +59,7 @@ templates = Jinja2Templates(directory=WEB_DIR / "templates")
 templates.env.filters["judge_last_name"] = judge_last_name
 templates.env.filters["tojson"] = json.dumps
 templates.env.filters["money"] = lambda value, decimals=2: f"{value:,.{decimals}f}"
+templates.env.filters["initials"] = lambda name: "".join(w[0].upper() for w in (name or "").split() if w[0].isalpha())
 templates.env.filters["local_time"] = local_time
 
 # Cache-busting query param for static assets (?v=<mtime>) — browsers were

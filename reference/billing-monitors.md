@@ -9,15 +9,65 @@
 **Modules:** `src/trust_monitor.py`, dashboard page at `/trust`
 (`src/web/routes_trust.py`, `src/web/templates/trust.html`)
 
-**Purpose:** Two independent things on one page.
+**Real data bug found and fixed 2026-09-16, same day as the redesign below:**
+`fetch_bills_by_matter()` (which builds both WIP and the Balance Due figure)
+summed EVERY bill in the relevant state regardless of `Bill.kind`, missing
+the same `revenue_kind`/`trust_kind` distinction `collections_monitor.py`'s
+`UnpaidBill.category` was already built around (see "Three bill categories"
+below). Confirmed live: 10 matters had a `trust_kind` bill (an unpaid trust
+replenishment request, not billed work) sitting in `awaiting_payment`,
+silently inflating their Balance Due — most dramatically **WELLS, ANDREW's
+entire $15,060 "outstanding" figure was two pending trust requests ($7,500
++ $7,560, the same matter from the blocked-sending investigation below)
+with zero real earned AR behind it.** Others (STLUKA, PRECIADO, RICHERD)
+had a real earned balance partially inflated by a mixed-in trust request.
+Fixed by filtering `fetch_bills_by_matter()` to `kind == "revenue_kind"`
+only (`BILL_KIND_REVENUE`) for both WIP and Balance Due — no `trust_kind`
+bill has been seen live sitting in `draft`/`awaiting_approval` (WIP) as of
+this fix, but the same filter applies there too on the same reasoning
+rather than assuming that stays true.
+
+**Redesigned 2026-09-16 (Ted) — pivoted from a send/review workflow to a pure
+self-service report,** since live sending has been blocked since 2026-08-12
+(see below) with no resolution from Clio support. `/trust` is now shared
+directly with attorneys: one table, every open matter with financial
+activity, showing **WIP, In Trust, Cushion, Balance Due, and a Target**
+trust balance the responsible attorney sets themselves — defaults to the
+firm's $2,500 (`TRUST_MINIMUM`), saved instantly on change (same
+instant-persist, no-confirm-button pattern as Client Assignment's/
+Collections' own dropdowns), overridable per matter for upcoming work. A
+matter is flagged "Below target" once its cushion (trust minus WIP) drops
+under **that matter's own target**, not a fixed number — the whole reason
+the target field exists. An **Attorney filter dropdown** at the top (All, or
+one name) narrows the table client-side, sourced from whichever attorneys
+actually have matters in the current data (not a hardcoded roster).
+**No Send or Pause buttons anymore** — there's nothing left to send or
+pause, so the whole candidate/already-requested/paused lifecycle those
+buttons drove is gone from the page. **Balance Due (already invoiced,
+unpaid) is back on this page too**, after being deliberately removed
+2026-08-11 (see that history below) — kept visually separate from the
+WIP/Trust/Cushion formula (its own column, no `+`/`=` operators tying it
+in) specifically so it doesn't repeat the earlier "looks part of the same
+calculation" problem.
+
+`trust_monitor.evaluate_request_candidates`/`create_trust_request`/
+`record_trust_request`/`set_matter_paused`/`TrustRequestCandidate` are
+UNTOUCHED in the code, just no longer called from `routes_trust.py` — kept
+for whenever Clio support's reply (still pending, see below) unblocks live
+sending. Everything below this note describes that retired workflow and the
+diagnostic history behind why it's on hold; still accurate as history, just
+not what `/trust` does today.
+
+**Purpose (as originally built — see redesign note above for what's live
+today):** Two independent things on one page.
 
 1. **WIP-vs-trust monitor** (informational) — flags open matters where the
    "cushion" (trust balance minus WIP) has dropped below $2,500, an early
    warning that unbilled work is outpacing trust before it's even billed.
-2. **Trust replenishment request review** (the actual point of the tool) —
-   lets billing staff bulk-review and send trust top-up requests to Clio as
-   unapproved drafts (`approved: false`), with per-matter pause and target
-   override, so nothing goes out without a human clicking Send.
+2. **Trust replenishment request review** — lets billing staff bulk-review
+   and send trust top-up requests to Clio as unapproved drafts
+   (`approved: false`), with per-matter pause and target override, so
+   nothing goes out without a human clicking Send.
 
 **WIP is not `BillableMatter.unbilled_amount` alone.** That field only
 counts activity never added to *any* bill — it silently excludes activity
