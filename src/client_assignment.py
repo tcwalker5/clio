@@ -149,9 +149,12 @@ class MatterAssignment:
 
 def fetch_matters_for_assignment(session: requests.Session) -> list[MatterAssignment]:
     """Open matters only (Ted, 2026-09-02) — matches the convention every
-    other monitor/report in this repo uses. Sorted most-incomplete first,
-    then alphabetically, so the matters needing the most attention surface
-    at the top of the page."""
+    other monitor/report in this repo uses. Sorted alphabetically by matter
+    (display_number is "LAST, FIRST", so this sorts by last name) — changed
+    2026-09-16 (Ted) from an earlier most-incomplete-first grouping, which
+    visually scattered same-client matters (e.g. two "COLTON, ANN" matters
+    landing in different missing-count groups) instead of keeping the list
+    in a single predictable last-name order."""
     matters = fetch_open_matters(session, fields=MATTER_ASSIGNMENT_FIELDS)
     result = []
     for m in matters:
@@ -170,7 +173,7 @@ def fetch_matters_for_assignment(session: requests.Session) -> list[MatterAssign
             responsible_staff_id=rs.get("id"),
             responsible_staff_name=rs.get("name") or "",
         ))
-    result.sort(key=lambda x: (-x.missing_count, x.display_number))
+    result.sort(key=lambda x: x.display_number)
     return result
 
 

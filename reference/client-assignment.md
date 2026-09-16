@@ -49,8 +49,11 @@ otherwise silently vanish from the dropdown instead of erroring.
 matches the convention every other monitor in this repo uses (Trust Monitor, Staff
 Unbilled, etc.), and a matter shows up on `/assignments` if it's missing even one of
 the three fields — DOE, JANE is a real example (had Responsible Attorney set but not
-the other two when this was built). Sorted most-incomplete-first, then alphabetically,
-so the matters needing the most attention surface at the top.
+the other two when this was built). Sorted alphabetically by matter (last name) —
+changed 2026-09-16 (Ted) from an earlier most-incomplete-first grouping, which
+scattered a client's own matters across different missing-count groups (e.g. Ann
+Colton's two open matters, one missing 1 field and one missing 2, landing in separate
+groups instead of next to each other).
 
 **Server-side validation on every save** (`POST /assignments/set`) — the picked
 `user_id` must actually belong to that field's roster (attorney roster for
