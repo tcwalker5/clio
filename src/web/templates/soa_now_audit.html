@@ -1,0 +1,196 @@
+{% extends "base.html" %}
+{% block title %}SoA/NoW Close Audit{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+<h1>SoA/NoW Close Audit</h1>
+<p class="subtitle">A fixed list of old matters flagged for closure — for each one, verify a filed Substitution of Attorney or Notice of Withdrawal exists (Clio, then the legacy Y: drive if Clio has nothing), then close it. Not every matter needs a SoA/NoW on file (dismissals, flat-fee matters) — Close Case is never blocked on anything found here, this is a checklist, not a gate.</p>
+
+{% if error %}
+<div class="panel"><p class="error-text">{{ error }}</p></div>
+{% endif %}
+
+{% if matters is not none %}
+<div class="panel" id="results">
+  <div class="summary-bar">
+    <div class="summary-stat"><strong>{{ matters|length }}</strong>matters</div>
+    <div class="summary-stat"><strong>{{ stats.closed }}</strong>already closed</div>
+    <div class="summary-stat"><strong>{{ stats.filed }}</strong>filed in Clio</div>
+    <div class="summary-stat"><strong>{{ stats.y_filed }}</strong>filed on Y: drive</div>
+    <div class="summary-stat"><strong>{{ stats.review }}</strong>found, needs review</div>
+    {% if stats.unresolved %}<div class="summary-stat"><strong>{{ stats.unresolved }}</strong>not matched to a matter</div>{% endif %}
+  </div>
+
+  {% for m in matters %}
+  <div class="panel" style="margin-top:0.75rem;padding:0.9rem 1rem;" data-matter-id="{{ m.matter_id or '' }}">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.6rem;">
+      <div>
+        <strong>{{ m.name }}</strong>
+        {% if m.status == "closed" %}
+          <span class="badge ok">Closed</span>
+        {% elif m.status in ("not_found", "ambiguous") %}
+          <span class="badge err">{{ "Not found in Clio" if m.status == "not_found" else "Ambiguous match" }}</span>
+        {% elif m.can_close %}
+          <span class="badge ok">Filed in Clio</span>
+        {% elif m.findings %}
+          <span class="badge warn">Found, needs review</span>
+        {% elif m.y_drive and m.y_drive.has_filed %}
+          <span class="badge ok">Filed on Y: drive</span>
+        {% elif m.y_drive and m.y_drive.status == "ambiguous" %}
+          <span class="badge warn">Y: drive ambiguous</span>
+        {% elif m.y_drive and m.y_drive.status == "no_folder" %}
+          <span class="badge err">No Y: drive folder</span>
+        {% else %}
+          <span class="badge warn">Nothing found</span>
+        {% endif %}
+      </div>
+
+      {% if m.matter_id %}
+      <div style="display:flex;gap:0.5rem;align-items:center;">
+        <label style="display:flex;align-items:center;gap:0.35rem;font-size:0.85rem;">
+          <input type="checkbox" class="mark-filed" data-matter-id="{{ m.matter_id }}" {% if m.soa_now_marked %}checked{% endif %} onchange="markFiled(this)">
+          Mark SoA/NoW Filed
+        </label>
+        <a class="btn secondary" href="https://app.clio.com/nc/#/matters/{{ m.matter_id }}/document_management" target="_blank" rel="noopener">Open matter</a>
+        {% if m.status != "closed" %}
+        <button type="button" class="btn secondary close-btn" data-matter-id="{{ m.matter_id }}" onclick="closeCase(this)">Close Case</button>
+        {% endif %}
+      </div>
+      {% endif %}
+    </div>
+
+    {% if m.findings %}
+    <ul style="list-style:none;margin:0.6rem 0 0;padding:0.6rem 0 0;border-top:1px solid var(--border);">
+      {% for f in m.findings %}
+      <li style="font-size:0.85rem;padding:0.2rem 0;">
+        <span class="badge {{ 'ok' if f.classification == 'filed' else ('err' if f.classification == 'opposing' else 'warn') }}" style="font-size:0.68rem;">{{ f.classification }}</span>
+        <span style="color:var(--text-muted);font-family:monospace;font-size:0.8rem;">{{ f.path }}</span> / {{ f.name }}
+        <a href="{{ clio_folder_url(m.matter_id, f.folder_id) }}" target="_blank" rel="noopener" style="margin-left:0.4rem;">Open folder ↗</a>
+      </li>
+      {% endfor %}
+    </ul>
+    {% elif m.y_drive %}
+      {% if m.y_drive.status == "ambiguous" %}
+      <p style="font-size:0.85rem;color:var(--text-muted);margin:0.6rem 0 0;">Ambiguous on Y: drive — multiple "{{ m.name.split(',')[0] }}" folders, none matching the first name: {{ m.y_drive.other_folders|join(', ') }}. Check by hand.</p>
+      {% elif m.y_drive.status == "no_folder" %}
+      <p style="font-size:0.85rem;color:var(--text-muted);margin:0.6rem 0 0;">No matching client folder found on Y: drive.</p>
+      {% elif m.y_drive.status == "found" %}
+        <div style="margin:0.6rem 0 0;padding:0.6rem 0 0;border-top:1px solid var(--border);">
+          <p style="font-size:0.8rem;color:var(--text-muted);margin:0 0 0.3rem;">
+            Y: drive client folder:
+            <span class="ypath" style="font-family:monospace;">{{ m.y_drive.folder_links.display_path }}</span>
+            <button type="button" class="btn secondary copy-path-btn" data-path="{{ m.y_drive.folder_links.display_path }}" onclick="copyPath(this)" style="padding:0.1rem 0.5rem;font-size:0.75rem;">Copy path</button>
+          </p>
+          {% if m.y_drive.findings %}
+          <ul style="list-style:none;margin:0;padding:0;">
+            {% for f in m.y_drive.findings %}
+            <li style="font-size:0.85rem;padding:0.2rem 0;">
+              <span class="badge {{ 'ok' if f.classification == 'filed' else ('err' if f.classification == 'opposing' else 'warn') }}" style="font-size:0.68rem;">{{ f.classification }}</span>
+              <span style="color:var(--text-muted);font-family:monospace;font-size:0.8rem;">{{ f.path }}</span> / {{ f.name }}
+              <span class="ypath" style="font-family:monospace;font-size:0.78rem;margin-left:0.4rem;">{{ f.links.display_path }}</span>
+              <button type="button" class="btn secondary copy-path-btn" data-path="{{ f.links.display_path }}" onclick="copyPath(this)" style="padding:0.05rem 0.4rem;font-size:0.72rem;">Copy path</button>
+            </li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p style="font-size:0.85rem;color:var(--text-muted);margin:0;">No SoA/NoW-looking filename inside.</p>
+          {% endif %}
+        </div>
+      {% endif %}
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+<script>
+// Chrome/Edge block top-level navigation to file:// links clicked from a
+// plain http:// page (confirmed live 2026-09-23: the earlier "Open
+// folder" file:// links failed for every single Y: drive match, not just
+// some — a categorical browser security restriction, not a bad path).
+// Copy-to-clipboard is the reliable alternative: paste into File
+// Explorer's address bar instead of clicking through. Uses the legacy
+// execCommand("copy") rather than navigator.clipboard.writeText() — the
+// modern async Clipboard API requires a secure context (HTTPS or
+// localhost), which this LAN dashboard (http://cap.lan) doesn't have, so
+// navigator.clipboard is unavailable here; execCommand still works fine
+// from a real click on a plain http:// origin.
+function copyPath(button) {
+  const path = button.dataset.path;
+  const temp = document.createElement("textarea");
+  temp.value = path;
+  temp.style.position = "fixed";
+  temp.style.opacity = "0";
+  document.body.appendChild(temp);
+  temp.focus();
+  temp.select();
+  let ok = false;
+  try {
+    ok = document.execCommand("copy");
+  } catch (e) {
+    ok = false;
+  }
+  document.body.removeChild(temp);
+  const original = button.textContent;
+  button.textContent = ok ? "Copied!" : "Couldn't copy";
+  setTimeout(() => { button.textContent = original; }, 1500);
+}
+
+async function markFiled(checkbox) {
+  const matterId = checkbox.dataset.matterId;
+  const marked = checkbox.checked;
+  checkbox.disabled = true;
+  try {
+    const resp = await fetch("/soa-now-audit/mark", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: `matter_id=${encodeURIComponent(matterId)}&marked=${marked ? "true" : "false"}`,
+    });
+    if (!resp.ok) throw new Error("Save failed");
+  } catch (e) {
+    checkbox.checked = !marked;
+    alert("Couldn't save — try again.");
+  } finally {
+    checkbox.disabled = false;
+  }
+}
+
+async function closeCase(button) {
+  const matterId = button.dataset.matterId;
+  button.disabled = true;
+  const originalLabel = button.textContent;
+  button.textContent = "Closing...";
+  try {
+    const resp = await fetch("/soa-now-audit/close", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: `matter_id=${encodeURIComponent(matterId)}`,
+    });
+    const body = await resp.json();
+    if (!resp.ok || !body.success) throw new Error(body.error || "Close failed");
+  } catch (e) {
+    button.disabled = false;
+    button.textContent = originalLabel;
+    alert(`Couldn't close matter: ${e.message}`);
+    return;
+  }
+  // .panel[data-matter-id], not just [data-matter-id] — the button itself
+  // also carries data-matter-id (needed above to read matterId), so a bare
+  // [data-matter-id] selector matches the button first and .closest()
+  // never reaches the actual outer card. Confirmed live: that left the
+  // button stuck disabled on "Closing..." forever after a real, successful
+  // close, since querySelector on the (wrong) "panel" — the button, which
+  // has no div/.badge children — always found nothing to update.
+  const panel = button.closest(".panel[data-matter-id]");
+  // Only the Close Case button goes away — the "Mark SoA/NoW Filed"
+  // checkbox and "Open matter" link stay visible and usable after closing
+  // (matches the template's own status check, which now only wraps this
+  // button). Earlier this removed the whole controls div, checkbox
+  // included, which is why a checked "Mark SoA/NoW Filed" box appeared to
+  // vanish/reset the moment its matter was closed — the mark itself was
+  // still saved server-side, it just became invisible.
+  button.remove();
+  const badge = panel.querySelector(".badge");
+  if (badge) { badge.className = "badge ok"; badge.textContent = "Closed"; }
+}
+</script>
+{% endif %}
+{% endblock %}

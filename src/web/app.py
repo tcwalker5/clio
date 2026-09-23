@@ -127,6 +127,7 @@ from web.routes_moore_marsden import router as moore_marsden_router  # noqa: E40
 from web.routes_papercut import router as papercut_router  # noqa: E402
 from web.routes_printer import router as printer_router  # noqa: E402
 from web.routes_ringcentral import router as ringcentral_router  # noqa: E402
+from web.routes_soa_now_audit import router as soa_now_audit_router  # noqa: E402
 from web.routes_staff_unbilled import router as staff_unbilled_router  # noqa: E402
 from web.routes_trust import router as trust_router  # noqa: E402
 
@@ -141,5 +142,6 @@ app.include_router(moore_marsden_router)
 app.include_router(papercut_router)
 app.include_router(printer_router)
 app.include_router(ringcentral_router)
+app.include_router(soa_now_audit_router)
 app.include_router(staff_unbilled_router)
 app.include_router(trust_router)
