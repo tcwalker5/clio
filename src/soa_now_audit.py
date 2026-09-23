@@ -49,7 +49,12 @@ import matter_matching
 BASE_URL = ca.BASE_URL
 
 # The specific matters this one-time audit covers (Ted, 2026-09-22).
+# CANNIZARO/COLE/COMER added 2026-09-24 — confirmed live against Clio
+# before adding (CANNIZARO, KENNETH id 1795449573; COLE, DYLAN id
+# 1800089868; COMER, MEGAN id 1786825578 — Ted named her "Comer" alone,
+# resolved to exactly one unambiguous live match).
 MATTER_NAMES = [
+    "CANNIZARO, KENNETH", "COLE, DYLAN", "COMER, MEGAN",
     "COURTLAND, KELLY", "DAYBERRY, JAMES", "EVANS, KARI", "FRANK, LINDA",
     "GARCIA, LARISSA", "GOTTLIEB, ERIN", "GRANT, CAROL", "HART, CINDY",
     "HOANG, JENNIFER", "HUERTA, BRIDGET", "HUTMACHER, SARAH", "KENDRO, JILL",

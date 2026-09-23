@@ -28,9 +28,12 @@ checklist for staff to work through by hand, not an automated gate like
 `/assignments`' own Close button.
 
 **Hardcoded matter list, not a live query (Ted, 2026-09-22: "for now, just the hard
-coded list")** — `MATTER_NAMES` is the same fixed ~52 names from the Close Readiness
-report. Ted named this as a likely-future direction ("this might be converted to
-audit our SoA and NoW periodically") but explicitly deferred it — not built as a live
+coded list")** — `MATTER_NAMES` started as the ~52 names from the Close Readiness
+report, plus 3 added by hand 2026-09-24 (CANNIZARO, KENNETH; COLE, DYLAN; COMER,
+MEGAN — 55 total as of that addition; each confirmed against a live, unambiguous
+Clio match before adding). Ted named this as a likely-future direction ("this might
+be converted to audit our SoA and NoW periodically") but explicitly deferred it —
+not built as a live
 all-open-matters query yet. If that's ever picked up, `MATTER_NAMES` needs to become
 a real query and the whole "one-time list" framing in this doc revisited.
 
