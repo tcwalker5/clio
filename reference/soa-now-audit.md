@@ -47,11 +47,41 @@ last-name-only fallback, with an explicit ambiguity check (multiple same-name ma
 **Only checked when Clio has zero SoA/NoW matches for a matter** (`run_audit()`) —
 searches `Y:\Client Files\{letter}\{Last[, First]}` (Ted gave this exact path
 convention 2026-09-22) using the same `SOA_NOW_PATTERN` filename search and folder
-classification (`OPPOSING_NAME_PATTERN`/`FILED_NAME_PATTERN`/
-`CORRESPONDENCE_NAME_PATTERN`) as the Clio side — **without** the naming-convention
-party/status token refinement, since Ted was explicit these are legacy files that
-predate that convention entirely ("All of these are legacy and will not use the new
-naming convention").
+classification (`OPPOSING_NAME_PATTERN`/`CONFORMED_NAME_PATTERN`/
+`FILED_NAME_PATTERN`/`CORRESPONDENCE_NAME_PATTERN`) as the Clio side — **without**
+the naming-convention party/status token refinement, since Ted was explicit these
+are legacy files that predate that convention entirely ("All of these are legacy and
+will not use the new naming convention").
+
+**"filed" vs. "prepared" — same split as `client_assignment.py`'s Close gate, added
+2026-09-24** (see `reference/client-assignment.md` for the full writeup: a bare match
+in "Pleadings"/"Our Pleadings" only proves we drafted/lodged it, Conformed Copies
+specifically is the court-stamped copy). `has_filed` (drives the "Filed on Y: drive"
+badge and the `stats.y_filed` count) now only counts a `"filed"` classification, not
+`"prepared"`. **Real impact, checked live 2026-09-24:** of the original 10 matters
+this page showed as "Filed on Y: drive," only 2 — HUTMACHER, SARAH and KOBS, MAUREEN
+— had a genuine Conformed Copies match; the other 8 (HUERTA, LAWLER, LIEURANCE,
+MICHEL, MIKELS, OBRIEN, RUSSETH, SMITH VANESSA ANN) were all bare "OUR PLEADINGS"
+matches and dropped to `"prepared"` — found, but not confirmed filed, no badge
+upgrade. No template changes were needed for this — both the matter-level badge
+(`m.can_close`, unchanged code) and the per-finding tag (`f.classification`, already
+rendered generically) picked up the stricter values automatically.
+
+**Plain-English "filed" word recovers some of those, same day** (Ted: "filed forms
+could also have the word filed in the name") — `_classify_y_drive_path()` now also
+checks the filename itself (not just folder names) for `client_assignment.FILED_WORD_PATTERN`
+(`\bfiled\b`) when a match is otherwise "prepared," upgrading it to "filed." This is
+deliberately separate from the firm's formal naming convention (which this page
+still doesn't apply to Y: drive files, per Ted's original "these are legacy" — see
+above) — just someone having written what happened directly in the filename. Real
+examples that motivated it, all real Y: drive filenames: "NOW filed 4.18.23.pdf"
+(HUERTA), "NOW filed 11.18.22.pdf" (LIEURANCE, RUSSETH), "NOW filed 12.1.23.pdf"
+(MICHEL), "NOW FILED 12.22.22.pdf" (OBRIEN) — **5 of the 8 "prepared"-demoted
+matters recovered "Filed on Y: drive" status this way**, live-verified. LAWLER,
+MIKELS, and SMITH VANESSA ANN have no such wording in any match and correctly
+remain "prepared." WELLS, BRITTNEY (Clio-side, the match that originally surfaced
+this whole correction) has no "filed" word in any of its 4 filenames either and
+correctly stays excluded from the close gate.
 
 **Same-last-name folders are genuinely ambiguous on Y: — refuses to guess
 (`_find_y_drive_candidate()`).** Real folders found live: `OLSON`, `OLSON, C`,

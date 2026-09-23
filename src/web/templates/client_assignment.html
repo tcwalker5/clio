@@ -211,9 +211,9 @@ async function closeMatter(button) {
   let msg;
   if (readiness.unfiled && readiness.unfiled.length) {
     const lines = readiness.unfiled.map((f) => `• ${f.name}  [${f.classification}]\n  ${f.path}`).join("\n");
-    msg = `Found, but not yet filed:\n\n${lines}\n\nThis needs to be filed (moved to Pleadings or Conformed Copies) before this matter can be closed.`;
+    msg = `Found, but not confirmed filed:\n\n${lines}\n\n"prepared" means it's drafted/lodged in Pleadings but not confirmed the court has it — this needs a Conformed Copies match or a filename marked .Conf before this matter can be closed.`;
   } else {
-    msg = "No Notice of Withdrawal or Substitution of Attorney found. This matter can't be closed until one is filed in Pleadings or Conformed Copies.";
+    msg = "No Notice of Withdrawal or Substitution of Attorney found. This matter can't be closed until one is confirmed filed (Conformed Copies, or a filename marked .Conf).";
     if (readiness.no_documents_in_clio) {
       msg += "\n\nThis matter has no documents in Clio at all — its files may still be on the legacy Y: drive. Check there as well.";
     }

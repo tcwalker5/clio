@@ -20,8 +20,15 @@
     {% if stats.unresolved %}<div class="summary-stat"><strong>{{ stats.unresolved }}</strong>not matched to a matter</div>{% endif %}
   </div>
 
+  <div style="display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap;margin-bottom:0.75rem;">
+    <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.9rem;">
+      <input type="checkbox" id="hide-closed" checked onchange="filterResults()">
+      Hide already-closed matters
+    </label>
+  </div>
+
   {% for m in matters %}
-  <div class="panel" style="margin-top:0.75rem;padding:0.9rem 1rem;" data-matter-id="{{ m.matter_id or '' }}">
+  <div class="panel" style="margin-top:0.75rem;padding:0.9rem 1rem;" data-matter-id="{{ m.matter_id or '' }}" data-closed="{{ 'yes' if m.status == 'closed' else 'no' }}">
     <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.6rem;">
       <div>
         <strong>{{ m.name }}</strong>
@@ -190,7 +197,17 @@ async function closeCase(button) {
   button.remove();
   const badge = panel.querySelector(".badge");
   if (badge) { badge.className = "badge ok"; badge.textContent = "Closed"; }
+  panel.dataset.closed = "yes";
+  filterResults();
 }
+
+function filterResults() {
+  const hideClosed = document.getElementById("hide-closed").checked;
+  document.querySelectorAll("#results [data-closed]").forEach((row) => {
+    row.style.display = (hideClosed && row.dataset.closed === "yes") ? "none" : "";
+  });
+}
+filterResults();
 </script>
 {% endif %}
 {% endblock %}

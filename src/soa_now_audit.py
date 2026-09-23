@@ -283,14 +283,28 @@ def _find_y_drive_candidate(last: str, first: str) -> tuple[str | None, list[str
 
 
 def _classify_y_drive_path(rel_path: str) -> str:
-    """Same folder-name patterns as Clio's classification (no naming-
-    convention token refinement — Ted, 2026-09-22: these are legacy files
-    that predate that convention entirely)."""
+    """Same folder-name patterns as Clio's classification (no formal
+    naming-convention *token* parsing — CL/OP/Conf/Exec — since Ted was
+    explicit these legacy files predate that convention entirely),
+    including the same "filed" (Conformed Copies — the court-stamped copy)
+    vs. "prepared" (bare Pleadings/Our Pleadings — drafted/lodged, not
+    confirmed the court has it) split added 2026-09-24 after Ted called
+    out that a bare-Pleadings match alone isn't evidence of actual court
+    filing. The plain English word "filed" in the filename itself (Ted,
+    same day: "filed forms could also have the word filed in the name" —
+    real examples confirmed on this account: "NOW filed 4.18.23.pdf", "NOW
+    FILED 12.22.22.pdf") upgrades a "prepared" match to "filed" — this
+    isn't the formal convention either, just someone writing what
+    happened, but it's real evidence and these legacy files are exactly
+    where it shows up."""
+    filename = rel_path.replace("/", "\\").split("\\")[-1]
     parts = rel_path.replace("/", "\\").split("\\")[:-1]
     if any(ca.OPPOSING_NAME_PATTERN.match(p) for p in parts):
         return "opposing"
-    if any(ca.FILED_NAME_PATTERN.match(p) for p in parts):
+    if any(ca.CONFORMED_NAME_PATTERN.match(p) for p in parts):
         return "filed"
+    if any(ca.FILED_NAME_PATTERN.match(p) for p in parts):
+        return "filed" if ca.FILED_WORD_PATTERN.search(filename) else "prepared"
     if any(ca.CORRESPONDENCE_NAME_PATTERN.match(p) for p in parts):
         return "correspondence"
     return "other"

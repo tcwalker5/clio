@@ -252,6 +252,53 @@ the client" posture as `/assignments/set`'s roster check) whenever `override` is
 set — a request that reaches that route without a live "filed" match and without
 `override=true` gets rejected with a 400, not just gated by the modal's own JS.
 
+**"filed" vs. "prepared" split, added 2026-09-24** (Ted, reviewing `/soa-now-audit`'s
+green badge on WELLS, BRITTNEY's 4 matches — all bare "OUR PLEADINGS", no Conformed
+Copies, no `.Conf` token: "these are not filed with the court"). Before this, a bare
+match in "Pleadings"/"Our Pleadings" and a match in "Conformed Copies" were both just
+`"filed"` — but a document sitting loose in Our Pleadings only proves we
+drafted/lodged it, not that the court actually has it; Conformed Copies specifically
+holds the court-stamped copy, which is real evidence. Now the folder walk
+distinguishes them: `CONFORMED_NAME_PATTERN` (`^conformed\b` — loose prefix,
+confirmed live it needs to catch a bare "CONFORMED" folder as well as "CONFORMED
+COPIES", real variant seen on MAYHAR, RONNI) → `"filed"`; a bare
+`FILED_NAME_PATTERN` match (now just `^(our\s+)?pleadings\b`, Conformed Copies split
+out of it) → the new `"prepared"` classification — found, drafted, not gate-passing
+on its own. The naming-convention refinement (`_refine_classification()`) now works
+both directions on this tier: an explicit `.Conf` status token upgrades "prepared" to
+"filed" (a court-stamped copy doesn't stop being one just because it's loose in Our
+Pleadings instead of a Conformed Copies subfolder), while Exec/Rec/Draft still
+downgrades either to `"unfiled"`, same as before.
+
+**Real impact, checked live 2026-09-24 against the same ~50-matter list this whole
+feature was built against:** the 7 already-closed matters were unaffected (each had
+at least one genuine Conformed-Copies-or-`.Conf` match surviving the stricter rule),
+but of the 3 matters still open at the time, all 3 — PAUP, LAURA; VISWANATHAN, VIDYA
+(closed by the time of this check, but would have flipped too); WELLS, BRITTNEY —
+lost their "filed" status: none of their matches were Conformed Copies or carried an
+explicit `.Conf` token. The Y: drive side of `/soa-now-audit`'s check (see
+`reference/soa-now-audit.md`) took an even bigger hit: of the original 10 matters
+showing "Filed on Y: drive," only 2 (HUTMACHER, SARAH; KOBS, MAUREEN) had a genuine
+Conformed Copies match on Y: — the other 8 were all bare "OUR PLEADINGS" and dropped
+to "prepared."
+
+**Plain-English "filed" word added as a second upgrade signal, same day** (Ted:
+"filed forms could also have the word filed in the name") — `FILED_WORD_PATTERN`
+(`\bfiled\b`, case-insensitive) is deliberately separate from the formal
+Party.DocType.Status convention (it's not a coded token, just someone writing what
+happened) but treated as equally strong evidence in `_refine_classification()`:
+with no formal status token present, a "prepared" match whose filename contains the
+standalone word "filed" upgrades to "filed" too. Only applies when there's no formal
+status token to defer to instead — an explicit Exec/Rec/Draft still wins. Real
+examples that motivated this, all from the Y: drive side of the 8 matters that had
+just dropped to "prepared": "NOW filed 4.18.23.pdf" (HUERTA), "NOW filed
+11.18.22.pdf" (LIEURANCE, RUSSETH), "NOW filed 12.1.23.pdf" (MICHEL), "NOW FILED
+12.22.22.pdf" (OBRIEN) — 5 of the 8 recovered "filed" status this way; LAWLER,
+MIKELS, and SMITH VANESSA ANN genuinely have no such wording in any match and
+correctly stayed "prepared." WELLS, BRITTNEY (the match that started this whole
+correction) has no "filed" word in any of its 4 filenames either and correctly
+stays excluded — confirmed live this doesn't regress the original fix.
+
 **One modal for the whole flow, not `alert()`/`confirm()`, added 2026-09-21** —
 originally built on plain browser dialogs, revised the same day so the status message
 could carry a real link: `#close-modal-overlay` (in `client_assignment.html`) shows the

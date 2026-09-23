@@ -283,7 +283,8 @@ def build_caseload(matters: list[MatterAssignment]) -> tuple[list[tuple[str, int
 # scope/parent_id needed) and classifying every ancestor of a matching
 # document by name pattern, not just its immediate top-level folder. See
 # _classify_folder_path() below.
-FILED_NAME_PATTERN = re.compile(r"^(our\s+)?pleadings\b|^conformed\s+copies\b", re.IGNORECASE)
+CONFORMED_NAME_PATTERN = re.compile(r"^conformed\b", re.IGNORECASE)
+FILED_NAME_PATTERN = re.compile(r"^(our\s+)?pleadings\b", re.IGNORECASE)
 CORRESPONDENCE_NAME_PATTERN = re.compile(r"^corr", re.IGNORECASE)  # loose prefix, not gate-determining — also catches the "CORRESONDENCE" typo seen live
 OPPOSING_NAME_PATTERN = re.compile(r"^their\b|^op\b|^opposing\b", re.IGNORECASE)
 
@@ -325,6 +326,17 @@ _NAME_TOKEN_SPLIT = re.compile(r"[\s._-]+")
 PARTY_TOKENS = {"CL", "OP", "OC", "CT", "AT", "TP"}
 STATUS_TOKENS = {"EXEC", "CONF", "REC", "DRAFT"}
 
+# Separate from the formal convention above — plain English, not a coded
+# token (Ted, 2026-09-24: "filed forms could also have the word filed in
+# the name"). Real examples confirmed live, all pre-dating the convention:
+# "NOW filed 4.18.23.pdf", "NOW FILED 12.22.22.pdf" — someone just wrote
+# what happened in the filename rather than using the Conf token. Treated
+# as equivalent evidence to an explicit Conf token in _refine_classification()
+# (upgrades "prepared" to "filed"), but only when there's no formal status
+# token to defer to instead — an explicit Exec/Rec/Draft token still wins
+# over this looser signal if a filename somehow carries both.
+FILED_WORD_PATTERN = re.compile(r"\bfiled\b", re.IGNORECASE)
+
 
 def _parse_naming_convention_tokens(name: str) -> tuple[str | None, str | None]:
     """Returns (party_token, status_token) found in `name` as whole tokens
@@ -339,21 +351,31 @@ def _parse_naming_convention_tokens(name: str) -> tuple[str | None, str | None]:
     return party, status
 
 
-def _refine_classification(folder_classification: str, party_token: str | None, status_token: str | None) -> str:
+def _refine_classification(folder_classification: str, party_token: str | None, status_token: str | None, name: str) -> str:
     """Combines the folder-based classification with the filename's own
-    party/status tokens (see _parse_naming_convention_tokens()) — the
-    filename can only ever downgrade a "filed" folder classification, never
-    upgrade a non-filed one, since an unrecognized or absent token means
-    "the filename doesn't say," not "the filename confirms it's ours and
-    filed." Precedence: an explicit OP token always wins (opposing,
-    regardless of folder or status); then an explicit non-Conf status
-    (Exec/Rec/Draft) downgrades an otherwise-"filed" folder classification
-    to "unfiled" — the document itself is saying it isn't filed yet, no
-    matter which folder it's sitting in."""
+    party/status tokens (see _parse_naming_convention_tokens()). Precedence:
+    an explicit OP token always wins ("opposing", regardless of folder or
+    status); then an explicit status token can move a "prepared" or "filed"
+    folder classification in either direction — Conf upgrades "prepared" to
+    "filed" (a court-stamped copy doesn't stop being one just because it's
+    sitting loose in Our Pleadings instead of a Conformed Copies subfolder),
+    while Exec/Rec/Draft downgrades either to "unfiled" (the document itself
+    is saying it isn't filed yet, no matter which folder it's sitting in).
+    With no formal status token either way, the plain word "filed" in the
+    name (FILED_WORD_PATTERN — not the coded convention, just someone
+    writing what happened) is treated as the same evidence as an explicit
+    Conf token. An unrecognized/absent status token and no "filed" word
+    never invents evidence either way — "prepared" stays "prepared",
+    "filed" stays "filed"."""
     if party_token == "OP":
         return "opposing"
-    if folder_classification == "filed" and status_token in {"EXEC", "REC", "DRAFT"}:
-        return "unfiled"
+    if folder_classification in ("filed", "prepared"):
+        if status_token == "CONF":
+            return "filed"
+        if status_token in {"EXEC", "REC", "DRAFT"}:
+            return "unfiled"
+        if status_token is None and FILED_WORD_PATTERN.search(name):
+            return "filed"
     return folder_classification
 
 
@@ -385,16 +407,37 @@ def _fetch_matter_folder_tree(session: requests.Session, matter_id: int) -> dict
 def _classify_folder_path(tree: dict[int, dict], parent_id: int | None) -> tuple[str, str]:
     """Walks a document's containing folder up through the matter's folder
     tree to the matter root, and returns (classification, path) —
-    classification is "filed" (counts toward the close gate), "opposing"
-    (an OP/THEIR folder — explicitly never filed, checked ahead of
-    "filed" in case a filed-looking name shows up nested under an
-    opposing-party folder), "correspondence" (drafted, not yet filed), or
-    "other" (matched SOA_NOW_PATTERN somewhere not recognized as either —
-    still worth showing a human, just doesn't satisfy the gate). `path` is
-    the folder breadcrumb from (just below the matter root) down to the
-    document's immediate folder, e.g. "OUR PLEADINGS > CONFORMED COPIES" —
-    the matter's own root folder (named after the matter itself) is
-    dropped from the breadcrumb since it's redundant."""
+    classification is "filed" (counts toward the close gate — specifically
+    a Conformed Copies-type folder, the court-stamped copy), "prepared"
+    (a bare Pleadings/Our Pleadings folder — we drafted/lodged it, but
+    that alone isn't evidence the court actually has it; does NOT count
+    toward the close gate on its own, see below), "opposing" (an OP/THEIR
+    folder — explicitly never ours, checked ahead of the others in case a
+    filed-looking name shows up nested under an opposing-party folder),
+    "correspondence" (drafted, not yet filed), or "other" (matched
+    SOA_NOW_PATTERN somewhere not recognized as any of these — still worth
+    showing a human, just doesn't satisfy the gate). `path` is the folder
+    breadcrumb from (just below the matter root) down to the document's
+    immediate folder, e.g. "OUR PLEADINGS > CONFORMED COPIES" — the
+    matter's own root folder (named after the matter itself) is dropped
+    from the breadcrumb since it's redundant.
+
+    **"filed" vs. "prepared" split, added 2026-09-24** (Ted, looking at
+    WELLS, BRITTNEY's 4 matches, all bare "OUR PLEADINGS" with no Conf
+    token: "these are not filed with the court" — correctly calling out
+    that the green "Filed" badge overclaimed what a bare Pleadings-folder
+    match actually proves). Before this, "Pleadings"/"Our Pleadings" and
+    "Conformed Copies" were both just "filed" — but a document sitting
+    loose in Our Pleadings only proves we drafted/lodged it, not that the
+    court has it; Conformed Copies specifically holds the court-stamped
+    copy, which is real evidence. Recomputing the ~50-matter list against
+    this split (2026-09-24): the 7 already-closed matters were unaffected
+    (each had at least one genuine Conformed-Copies-or-`.Conf` match), but
+    all 3 matters still open at the time — PAUP, VISWANATHAN, WELLS —
+    dropped out of "ready to close," since none of their matches were
+    Conformed Copies or carried an explicit `.Conf` filename token; PAUP's
+    sole match (a non-convention-following "NOW.legs.pdf") had already been
+    flagged as questionable evidence before this fix existed."""
     names: list[str] = []
     seen: set[int] = set()
     current = parent_id
@@ -411,8 +454,10 @@ def _classify_folder_path(tree: dict[int, dict], parent_id: int | None) -> tuple
 
     if any(OPPOSING_NAME_PATTERN.match(n) for n in names):
         return "opposing", path
-    if any(FILED_NAME_PATTERN.match(n) for n in names):
+    if any(CONFORMED_NAME_PATTERN.match(n) for n in names):
         return "filed", path
+    if any(FILED_NAME_PATTERN.match(n) for n in names):
+        return "prepared", path
     if any(CORRESPONDENCE_NAME_PATTERN.match(n) for n in names):
         return "correspondence", path
     return "other", path
@@ -450,7 +495,7 @@ def find_soa_now_documents(session: requests.Session, matter_id: int) -> list[di
             parent = doc.get("parent") or {}
             folder_classification, path = _classify_folder_path(tree, parent.get("id"))
             party_token, status_token = _parse_naming_convention_tokens(name)
-            classification = _refine_classification(folder_classification, party_token, status_token)
+            classification = _refine_classification(folder_classification, party_token, status_token, name)
             findings.append({
                 "name": name,
                 "path": path,
@@ -485,13 +530,17 @@ def matter_has_any_documents(session: requests.Session, matter_id: int) -> bool:
 
 def evaluate_close_readiness(findings: list[dict]) -> dict:
     """Turns find_soa_now_documents()'s raw findings into the actual close
-    gate: closeable only if at least one match classified "filed" — a
-    match classified "correspondence" (drafted, not yet filed), "opposing"
-    (the other side's copy, never counts as ours), "unfiled" (sitting in a
-    filed-type folder, but the filename's own status token says Exec/Rec/
-    Draft, not Conf — see _refine_classification()), "other" (matched
-    somewhere not recognized as either), or no match at all all block the
-    close, just with different reasons for the UI to explain to the person
+    gate: closeable only if at least one match classified "filed" —
+    specifically a Conformed Copies-type folder or an explicit `.Conf`
+    filename token, real evidence the court has it. A match classified
+    "prepared" (sitting loose in Pleadings/Our Pleadings, no Conformed
+    Copies or `.Conf` evidence — we drafted/lodged it, but that alone
+    doesn't prove the court does too), "correspondence" (drafted, not yet
+    filed), "opposing" (the other side's copy, never counts as ours),
+    "unfiled" (the filename's own status token says Exec/Rec/Draft, not
+    Conf — see _refine_classification()), "other" (matched somewhere not
+    recognized as any of these), or no match at all all block the close,
+    just with different reasons for the UI to explain to the person
     clicking Close."""
     filed = [f for f in findings if f["classification"] == "filed"]
     unfiled = [f for f in findings if f["classification"] != "filed"]
