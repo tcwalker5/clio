@@ -8,6 +8,7 @@ gotchas — notably that a field can be SET through the API but never cleared
 back to blank (Clio's own spec: "null is not valid for this field").
 """
 
+import logging
 import math
 from datetime import datetime
 from pathlib import Path
@@ -99,6 +100,7 @@ async def assignments_home(request: Request, _: None = Depends(require_auth)):
         request, "client_assignment.html", error=None,
         matters=matters, missing_count=missing_count,
         attorneys=attorneys, paralegals=paralegals,
+        clio_base_url=client_assignment.BASE_URL,
     )
 
 
@@ -126,6 +128,67 @@ async def set_assignment(
         return JSONResponse({"error": str(e)}, status_code=502)
 
     return JSONResponse({"success": True, "name": name})
+
+
+@router.get("/close_check")
+async def assignments_close_check(matter_id: int, _: None = Depends(require_auth)):
+    def _do() -> dict:
+        session = client_assignment.build_session()
+        findings = client_assignment.find_soa_now_documents(session, matter_id)
+        readiness = client_assignment.evaluate_close_readiness(findings)
+        # Only worth the extra call when nothing turned up at all — tells
+        # apart "nothing filed" from "this matter's files were never
+        # migrated into Clio," which point staff to different next steps.
+        if not findings:
+            readiness["no_documents_in_clio"] = not client_assignment.matter_has_any_documents(session, matter_id)
+        else:
+            readiness["no_documents_in_clio"] = False
+        return readiness
+
+    try:
+        readiness = await run_in_threadpool(_do)
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+
+    return JSONResponse(readiness)
+
+
+@router.post("/close")
+async def assignments_close(
+    matter_id: int = Form(...), override: bool = Form(False),
+    _: None = Depends(require_auth),
+):
+    def _do() -> str:
+        session = client_assignment.build_session()
+        if override:
+            # Staff-initiated bypass ("Close Anyway") — the filename scan
+            # can miss a real filing (different wording, scanned image with
+            # no searchable name, filed under a different folder), so this
+            # is deliberately available, not locked behind the check. Logged
+            # at WARNING (not just INFO like an ordinary close) specifically
+            # so it stands out in the log file as a gate that was skipped —
+            # this project's "auditability" rule means every write is
+            # inspectable, including the times a safety check was bypassed.
+            logging.warning("Matter %s closed via override — SoA/NoW-in-Pleadings check was bypassed", matter_id)
+        else:
+            # Re-checked server-side, not just trusted from the client —
+            # same "validate again on the server" posture as /assignments/set's
+            # roster check, since close_check's result is only ever advisory
+            # input to the browser until this point.
+            findings = client_assignment.find_soa_now_documents(session, matter_id)
+            readiness = client_assignment.evaluate_close_readiness(findings)
+            if not readiness["can_close"]:
+                raise ValueError("No Substitution of Attorney / Notice of Withdrawal found in Pleadings — file it before closing this matter.")
+        return client_assignment.close_matter(session, matter_id)
+
+    try:
+        status = await run_in_threadpool(_do)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+
+    return JSONResponse({"success": True, "status": status})
 
 
 @router.get("/caseload", response_class=HTMLResponse)

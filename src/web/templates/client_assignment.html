@@ -31,29 +31,30 @@
     <thead><tr>
       <th>Matter</th>
       <th>Client</th>
-      <th>Responsible Attorney</th>
       <th>Originating Attorney</th>
+      <th>Responsible Attorney</th>
       <th>Responsible Staff</th>
       <th>Status</th>
+      <th></th>
     </tr></thead>
     <tbody>
       {% for m in matters %}
-      <tr data-missing="{{ 'yes' if m.missing_any else 'no' }}">
+      <tr data-missing="{{ 'yes' if m.missing_any else 'no' }}" data-matter-id="{{ m.matter_id }}">
         <td>{{ m.display_number }}</td>
         <td>{{ m.client_name }}</td>
-        <td>
-          <select class="assign-select" data-matter-id="{{ m.matter_id }}" data-field="responsible_attorney" onchange="setAssignment(this)" style="padding:0.3rem 0.4rem;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text);font-size:0.85rem;">
-            <option value="" {% if not m.responsible_attorney_id %}selected{% endif %} disabled>— Select —</option>
-            {% for a in attorneys %}
-            <option value="{{ a.id }}" {% if a.id == m.responsible_attorney_id %}selected{% endif %}>{{ a.name }}</option>
-            {% endfor %}
-          </select>
-        </td>
         <td>
           <select class="assign-select" data-matter-id="{{ m.matter_id }}" data-field="originating_attorney" onchange="setAssignment(this)" style="padding:0.3rem 0.4rem;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text);font-size:0.85rem;">
             <option value="" {% if not m.originating_attorney_id %}selected{% endif %} disabled>— Select —</option>
             {% for a in attorneys %}
             <option value="{{ a.id }}" {% if a.id == m.originating_attorney_id %}selected{% endif %}>{{ a.name }}</option>
+            {% endfor %}
+          </select>
+        </td>
+        <td>
+          <select class="assign-select" data-matter-id="{{ m.matter_id }}" data-field="responsible_attorney" onchange="setAssignment(this)" style="padding:0.3rem 0.4rem;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text);font-size:0.85rem;">
+            <option value="" {% if not m.responsible_attorney_id %}selected{% endif %} disabled>— Select —</option>
+            {% for a in attorneys %}
+            <option value="{{ a.id }}" {% if a.id == m.responsible_attorney_id %}selected{% endif %}>{{ a.name }}</option>
             {% endfor %}
           </select>
         </td>
@@ -69,6 +70,7 @@
           {% if m.missing_any %}<span class="badge warn">{{ m.missing_count }} missing</span>
           {% else %}<span class="badge ok">Complete</span>{% endif %}
         </td>
+        <td><button type="button" class="btn secondary" onclick="closeMatter(this)">Close</button></td>
       </tr>
       {% endfor %}
     </tbody>
@@ -78,7 +80,22 @@
   <p class="subtitle">No open matters.</p>
   {% endif %}
 </div>
+
+<div id="close-modal-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:1000;align-items:center;justify-content:center;">
+  <div style="background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:1.5rem;max-width:480px;width:90%;">
+    <h3 id="close-modal-title" style="margin-top:0;">Close Matter</h3>
+    <p id="close-modal-message" style="white-space:pre-line;"></p>
+    <p><a id="close-modal-doc-link" href="#" target="_blank" rel="noopener">Open this matter's Documents in Clio &#8599;</a></p>
+    <div style="display:flex;gap:0.6rem;justify-content:flex-end;margin-top:1rem;flex-wrap:wrap;">
+      <button type="button" class="btn secondary" id="close-modal-cancel-btn" onclick="closeModalDismiss()">Cancel</button>
+      <button type="button" class="btn secondary" id="close-modal-override-btn" style="display:none;border-color:var(--err);color:var(--err);" onclick="closeModalConfirm(true)">Close Anyway</button>
+      <button type="button" class="btn" id="close-modal-confirm-btn" style="display:none;" onclick="closeModalConfirm(false)">Close Matter</button>
+    </div>
+  </div>
+</div>
+
 <script>
+const CLIO_BASE_URL = "{{ clio_base_url }}";
 async function setAssignment(select) {
   const matterId = select.dataset.matterId;
   const field = select.dataset.field;
@@ -122,6 +139,142 @@ function updateRowStatus(row) {
     stat.textContent = String(parseInt(stat.textContent, 10) + delta);
   }
   filterResults();
+}
+
+// Everything about closing a matter runs through one modal (#close-modal-overlay):
+// checking status, explaining why a close is or isn't allowed, the Clio
+// documents link, and (when blocked) the override. Module-level state below
+// tracks which row/button the modal is currently acting on, since only one
+// close attempt can be in flight through the modal at a time.
+let closeModalRow = null;
+let closeModalButton = null;
+let closeModalOriginalLabel = null;
+
+function openCloseModal(row, button) {
+  closeModalRow = row;
+  closeModalButton = button;
+  closeModalOriginalLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = "Checking...";
+
+  document.getElementById("close-modal-doc-link").href =
+    `${CLIO_BASE_URL}/nc/#/matters/${encodeURIComponent(row.dataset.matterId)}/document_management`;
+  document.getElementById("close-modal-title").textContent = "Close Matter";
+  document.getElementById("close-modal-message").textContent =
+    "Checking Correspondence, Pleadings, and Conformed Copies for a Substitution of Attorney or Notice of Withdrawal...";
+  document.getElementById("close-modal-override-btn").style.display = "none";
+  document.getElementById("close-modal-confirm-btn").style.display = "none";
+  document.getElementById("close-modal-overlay").style.display = "flex";
+}
+
+function closeModalDismiss() {
+  document.getElementById("close-modal-overlay").style.display = "none";
+  if (closeModalButton) {
+    closeModalButton.disabled = false;
+    closeModalButton.textContent = closeModalOriginalLabel;
+  }
+  closeModalRow = null;
+  closeModalButton = null;
+}
+
+// Before actually closing a matter, check whether a Substitution of
+// Attorney or Notice of Withdrawal has been FILED — i.e. found in Pleadings
+// or Conformed Copies, not just drafted in Correspondence. That's the only
+// condition this tool allows a close under without the override. The
+// server re-checks this too (routes_client_assignment.py's
+// /assignments/close) — this modal is just so the person sees why before
+// the request even goes out, with a link to go verify in Clio directly.
+async function closeMatter(button) {
+  const row = button.closest("tr");
+  openCloseModal(row, button);
+  const matterId = row.dataset.matterId;
+
+  let readiness;
+  try {
+    const resp = await fetch(`/assignments/close_check?matter_id=${encodeURIComponent(matterId)}`);
+    const body = await resp.json();
+    if (!resp.ok) throw new Error(body.error || "Check failed");
+    readiness = body;
+  } catch (e) {
+    document.getElementById("close-modal-message").textContent =
+      `Couldn't check for a Substitution of Attorney / Notice of Withdrawal: ${e.message}`;
+    return;
+  }
+
+  if (readiness.can_close) {
+    const lines = readiness.filed.map((f) => `• ${f.name}\n  ${f.path}`).join("\n");
+    document.getElementById("close-modal-message").textContent = `Filed:\n\n${lines}\n\nClose this matter?`;
+    document.getElementById("close-modal-confirm-btn").style.display = "";
+    return;
+  }
+
+  let msg;
+  if (readiness.unfiled && readiness.unfiled.length) {
+    const lines = readiness.unfiled.map((f) => `• ${f.name}  [${f.classification}]\n  ${f.path}`).join("\n");
+    msg = `Found, but not yet filed:\n\n${lines}\n\nThis needs to be filed (moved to Pleadings or Conformed Copies) before this matter can be closed.`;
+  } else {
+    msg = "No Notice of Withdrawal or Substitution of Attorney found. This matter can't be closed until one is filed in Pleadings or Conformed Copies.";
+    if (readiness.no_documents_in_clio) {
+      msg += "\n\nThis matter has no documents in Clio at all — its files may still be on the legacy Y: drive. Check there as well.";
+    }
+  }
+  document.getElementById("close-modal-message").textContent = msg;
+  document.getElementById("close-modal-override-btn").style.display = "";
+}
+
+// "Close Anyway" bypasses the SoA/NoW-in-a-filed-folder check entirely —
+// for the real case where a filing exists but the scan can't see it
+// (different wording, a scanned image with no searchable name, filed
+// somewhere else entirely, or the file is only on the legacy Y: drive).
+// The server logs every override at WARNING so it's still visible in the
+// log file even though the check was skipped.
+// closeModalConfirm(false) is the ordinary "Close Matter" button, shown
+// only once the check already came back filed.
+async function closeModalConfirm(override) {
+  if (override && !confirm("This skips the Substitution of Attorney / Notice of Withdrawal check entirely.\n\nClose this matter anyway?")) {
+    return;
+  }
+  const row = closeModalRow;
+  const button = closeModalButton;
+  const originalLabel = closeModalOriginalLabel;
+  document.getElementById("close-modal-cancel-btn").disabled = true;
+  document.getElementById("close-modal-override-btn").disabled = true;
+  document.getElementById("close-modal-confirm-btn").disabled = true;
+  document.getElementById("close-modal-message").textContent = "Closing...";
+
+  const matterId = row.dataset.matterId;
+  try {
+    const resp = await fetch("/assignments/close", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: `matter_id=${encodeURIComponent(matterId)}&override=${override ? "true" : "false"}`,
+    });
+    const body = await resp.json();
+    if (!resp.ok || !body.success) throw new Error(body.error || "Close failed");
+  } catch (e) {
+    document.getElementById("close-modal-message").textContent = `Couldn't close matter: ${e.message}`;
+    document.getElementById("close-modal-cancel-btn").disabled = false;
+    document.getElementById("close-modal-override-btn").disabled = false;
+    document.getElementById("close-modal-confirm-btn").disabled = false;
+    return;
+  }
+
+  document.getElementById("close-modal-overlay").style.display = "none";
+  document.getElementById("close-modal-cancel-btn").disabled = false;
+  document.getElementById("close-modal-override-btn").disabled = false;
+  document.getElementById("close-modal-confirm-btn").disabled = false;
+  closeModalRow = null;
+  closeModalButton = null;
+
+  // Matter is closed, so it drops off this open-matters list entirely.
+  const wasMissing = row.dataset.missing === "yes";
+  row.remove();
+  document.querySelector("#results .summary-stat strong").textContent =
+    String(parseInt(document.querySelector("#results .summary-stat strong").textContent, 10) - 1);
+  if (wasMissing) {
+    const stat = document.querySelector("#missing-stat strong");
+    stat.textContent = String(parseInt(stat.textContent, 10) - 1);
+  }
 }
 
 function filterResults() {

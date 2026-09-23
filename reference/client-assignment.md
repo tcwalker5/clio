@@ -91,9 +91,16 @@ MARYANNE" vs. "COX, JOEY") while the other three columns draw from a small fixed
 roster of short names. Verified live by simulating the print rule's effect and
 re-measuring: intrinsic width dropped to fit within a 720px page with room to spare.
 
+**Column order, changed 2026-09-21 (Ted)** — Originating Attorney now comes before
+Responsible Attorney (then Responsible Staff), on the main table, the print report,
+and the CSV export — was Responsible Attorney/Originating Attorney/Responsible
+Staff before. `client_assignment.ASSIGNMENT_FIELDS` was reordered to match (only
+cosmetic elsewhere — it just drives the "missing: X, Y" gap order in the CLI output
+and iteration order, nothing that depends on a specific sequence).
+
 **CSV export, added 2026-09-09 (Ted: wanted CSV export for any page with a
 printable list)** — a "Download CSV" button next to Print, same 4 columns as the
-table (Matter/Responsible Attorney/Originating Attorney/Responsible Staff),
+table (Matter/Originating Attorney/Responsible Attorney/Responsible Staff),
 respecting whichever `view` is currently on screen. `client_assignment.py`'s new
 `write_report_csv()` writes to `output/client_assignment_report_{view}_{date}.csv`
 on every page load (same "written as a side effect of rendering, served back by a
@@ -102,6 +109,174 @@ keyed by `view` so switching between missing/all doesn't require a fresh page lo
 before downloading the other one. **Case Load below was explicitly excluded** from
 this same request — it's a pie chart, not a list, so a CSV export wasn't judged
 worth building for it.
+
+## Close matter
+
+**"Close" button per row, added 2026-09-21 (Ted)** — a fast way to cull the
+`/assignments` list without leaving the page: `POST /assignments/close` PATCHes
+`{"data": {"status": "closed"}}` (Clio's status enum is `open`/`closed`/`pending`,
+confirmed against `reference/openapi.json`'s PATCH schema for `/matters/{id}.json`).
+One-way from this tool, same posture as the assignment fields themselves — there's
+no "reopen" button here; that's a Clio-UI action.
+
+**Hard-gated on a live SoA/NoW filename check (Ted: "the only time a matter can be
+closed [is when] a SoA or NoW [is] located in ... Pleadings")** — `GET
+/assignments/close_check` (`client_assignment.find_soa_now_documents()` +
+`evaluate_close_readiness()`).
+
+**Rewritten 2026-09-22 — the original exact-folder-name version was live-broken on
+real matters, caught while building a bulk report Ted asked for across ~50 matters
+flagged to close.** The first cut matched only exact top-level folder names
+("Correspondence", "Pleadings", "Conformed Copies"). Live-checking real matters
+found this wrong on two axes: (1) the real folder is usually named **"OUR
+PLEADINGS"**, not "Pleadings" (sometimes just "PLEADINGS", sometimes both, plus a
+typo'd "CORRESONDENCE" seen live) — exact-name matching missed it on most matters,
+meaning the gate was effectively always reporting "nothing found" and blocking
+closes it should have allowed; (2) folders nest arbitrarily deep and inconsistently
+per matter (GARCIA, LARISSA has a second, independent "PLEADINGS" folder nested
+three levels down under a "DCSS" sub-folder, and "CONFORMED COPIES" nested *inside*
+"OUR PLEADINGS" rather than beside it) — a top-level-only search missed real filed
+copies sitting deeper. Most importantly, real matters also have an **opposing-party
+folder** — "THEIR PLEADINGS AND CORRESPONDENCE", "THEIR DOCUMENTS", "OP RFO 2023"
+("OP" = Opposing Party, same abbreviation `equalizer/clio_parties.py`'s OC/OP lookup
+uses) — that a naive substring match on "pleadings" would have wrongly counted as
+our own filed copy; confirmed live on COURTLAND, KELLY, whose only SoA/NoW match in
+the whole matter was the *other side's* filed Substitution of Attorney, sitting in
+"THEIR PLEADINGS AND CORRESPONDENCE - Copy".
+
+Fixed by fetching the matter's **entire folder tree** in one call
+(`_fetch_matter_folder_tree()` — `GET /folders.json?matter_id=X` with no
+`parent_id`/`scope` returns every folder for the matter flat, with parent links,
+confirmed live it goes arbitrarily deep in one page) and **every document** in the
+matter the same way, then classifying each SOA_NOW_PATTERN match by walking its full
+folder ancestry (`_classify_folder_path()`) against three prefix patterns, checked
+in this order:
+- `OPPOSING_NAME_PATTERN` (`^their\b|^op\b|^opposing\b`) → classification
+  `"opposing"`, checked first and short-circuits the others — a filed-looking name
+  nested under an opposing-party folder never counts as ours, at any depth.
+- `FILED_NAME_PATTERN` (`^(our\s+)?pleadings\b|^conformed\s+copies\b`) →
+  `"filed"` — matches "PLEADINGS", "OUR PLEADINGS", "CONFORMED COPIES" at any
+  ancestor depth, deliberately anchored at the start of the name so "THEIR
+  PLEADINGS..." can never match this pattern regardless of the opposing check above.
+- `CORRESPONDENCE_NAME_PATTERN` (`^corr`) → `"correspondence"` — loose on purpose
+  (also catches the "CORRESONDENCE" typo seen live); only used for the "drafted, not
+  filed" message, never gate-determining, so the looseness carries little risk.
+- Anything else that matched SOA_NOW_PATTERN but none of the above → `"other"` —
+  still surfaced to the human (e.g. a document sitting loose in the matter root), just
+  doesn't satisfy the gate on its own.
+
+**Filename itself is a second signal, layered on top of folder classification —
+added 2026-09-22 (Ted gave the firm's file-naming convention and asked to rerun the
+bulk report to check for differences).** The firm's own standard,
+`YY.MM.DD Party.DocType.Description.Status` (e.g. `25.07.15 CL.SOA.Conf.pdf`), when a
+filename follows it, states both whose document it is (`CL`/`OP`/`OC`/`CT`/`AT`/`TP`)
+and its filing status (`Exec`=signed only, `Conf`=confirmed/filed, `Rec`=received
+only, `Draft`) independent of which folder it's sitting in — and folder placement
+alone can be wrong. Live-confirmed on HOANG, JENNIFER: `26.01.06 OP.SOA.Exec.pdf`
+sits in a plain "PLEADINGS" folder (which folder classification alone calls
+"filed"), but its own filename says it's the **opposing party's** copy and only
+**signed, not filed** — this matter doesn't split "PLEADINGS" into separate
+our-side/their-side subfolders, so folder location alone can't tell them apart.
+`_parse_naming_convention_tokens()` splits a filename on whitespace/`.`/`_`/`-` and
+looks for a whole token matching a party or status abbreviation;
+`_refine_classification()` combines that with the folder classification, and can
+only ever *downgrade* a "filed" folder classification, never upgrade a non-filed
+one (an absent or unrecognized token means "the filename doesn't say," not
+"confirmed ours and filed"):
+- An explicit `OP` party token → always `"opposing"`, full stop, regardless of
+  folder or status — confirmed live this catches a real case folder-only
+  classification got wrong (KENDRO, JILL's `26.04.03 OP.SOA.Conf.pdf` sits in
+  "PLEADINGS" and even says `Conf`, but it's the *opposing party's* confirmed
+  filing, not the client's).
+- An explicit `Exec`/`Rec`/`Draft` status where the folder said "filed" →
+  downgrades to a new classification, `"unfiled"` — the document is explicitly
+  declaring itself not filed yet, no matter which folder it's in.
+- Anything else → the folder classification stands unchanged.
+
+Rerunning the full ~50-matter bulk report after this change found **zero matters
+where the overall closeable/not-closeable verdict flipped** — every matter that had
+a genuinely-filed `CL...Conf` match also kept at least one after the more precise
+check — but did correct several individual *findings* that were previously
+mislabeled "filed" (the HOANG and KENDRO cases above, plus a similar case on REED,
+BRITTNEY and VISWANATHAN, VIDYA), meaning the reasoning shown to staff is now more
+trustworthy even though this round of results happened not to change any actual
+close/no-close decision.
+
+**429 retry added to these bulk-read calls, 2026-09-22** — the folder-tree and
+document fetches (`_fetch_matter_folder_tree()`, `find_soa_now_documents()`,
+`matter_has_any_documents()`) had no rate-limit retry at all, unlike
+`update_matter_field()`'s PATCH — a real gap against this project's own stated
+safety rule ("Retry on rate limit (429)"), only surfaced because the bulk report
+below makes enough back-to-back calls in one run to actually hit Clio's limit
+(confirmed live: several matters errored with `429 RateLimited` partway through a
+~50-matter run). Fixed with a shared `_get_with_retry()` helper (same
+`RETRY_DELAYS = [5, 15, 30]` backoff as the PATCH path) used by all three.
+
+`find_soa_now_documents()` now returns `{"name", "path", "folder_id", "classification",
+"folder_classification", "party_token", "status_token"}` per match — `path` is the
+real folder breadcrumb (e.g. `"DCSS > PLEADINGS"`) built from the ancestry walk, this
+is also what answers "show me the path" for the bulk report below; `folder_id`
+(added 2026-09-22 for `soa_now_audit.py`, see `reference/soa-now-audit.md`) is the
+document's immediate containing folder id, for building a direct
+`document_management?folder_id=...` link into Clio;
+`folder_classification`/`party_token`/`status_token` are kept alongside the final
+`classification` so a human (or a report) can see *why* it landed where it did, not
+just the end result. `evaluate_close_readiness()` still reduces this to `can_close`
+(true only if any match classified `"filed"`), `filed`, and `unfiled` (everything
+else, including the new `"unfiled"` classification). Matching itself
+(`SOA_NOW_PATTERN`) is unchanged from the 2026-09-21 widening: the
+bare abbreviation ("SOA", "NOW", `\b`-wrapped so they don't match inside ordinary
+words like "know" or "renowned"), the shorthand phrase ("Sub of Atty" / "Sub. of
+Atty."), or the full term ("Substitution of Attorney" / "Notice of Withdrawal").
+
+Three outcomes, only one of which allows the close to proceed without the override:
+- **A "filed" classification exists** → closeable. The modal lists the filed
+  document(s) and their path, and a "Close Matter" button appears — the only path
+  that reaches `POST /assignments/close` without `override=true`.
+- **Something matched, but nothing classified "filed"** → blocked. The modal shows
+  each match's classification and path (e.g. "opposing", "correspondence") so staff
+  can see why it didn't count.
+- **Nothing matched at all** → blocked with a plain "not found" message. If the
+  matter also has **zero documents in Clio at all**
+  (`client_assignment.matter_has_any_documents()`, only checked in this
+  empty-findings case to save the extra API call), the modal adds a note that the
+  matter's files may still be on the legacy Y: drive — confirmed as a real, common
+  pattern across the bulk report (26 of 52 matters checked had zero Clio documents).
+
+**Still just a filename search, not proof of anything actually filed with the
+court** — a "filed" classification doesn't guarantee the document is genuinely a
+filed SoA/NoW, and the reverse doesn't guarantee nothing was filed under a folder or
+filename this pattern doesn't recognize. **Re-checked server-side in
+`/assignments/close` itself** (same "validate again on the server, don't just trust
+the client" posture as `/assignments/set`'s roster check) whenever `override` isn't
+set — a request that reaches that route without a live "filed" match and without
+`override=true` gets rejected with a 400, not just gated by the modal's own JS.
+
+**One modal for the whole flow, not `alert()`/`confirm()`, added 2026-09-21** —
+originally built on plain browser dialogs, revised the same day so the status message
+could carry a real link: `#close-modal-overlay` (in `client_assignment.html`) shows the
+check-in-progress state, then the outcome message, and always an **"Open this matter's
+Documents in Clio"** link (`{{ clio_base_url }}/nc/#/matters/{matter_id}/document_management`
+— confirmed live 2026-09-21 by clicking into the Documents tab on the designated test
+matter, DOE JANE, and reading the resulting URL; this is the correct deep link to a
+matter's document listing, opens directly with no intermediate click needed) so staff
+can go verify in Clio without leaving the check. `confirm()` is still used, but only as
+a final "are you sure" gate on the two buttons that actually close something (Close
+Matter, Close Anyway), not to display the status itself.
+
+**"Close Anyway" override, added 2026-09-21 (Ted)** — a button inside the same modal
+(shown only once the check comes back blocked) that skips the filed-folder check
+entirely (`POST /assignments/close` with `override=true`). Exists because the filename
+scan is real but not exhaustive — a genuine filing can still be missed (different
+wording than `SOA_NOW_PATTERN` covers, a scanned image with no searchable filename,
+filed somewhere the scan doesn't look, or the file is only on the legacy Y: drive) and
+staff need a way through that isn't "rename a file in Clio to satisfy a regex." Still
+gated by its own `confirm()` (states plainly that it's skipping the check), and every
+override is logged at `logging.WARNING` (`"Matter {id} closed via override —
+SoA/NoW-in-Pleadings check was bypassed"`) rather than the ordinary-close `INFO` level,
+specifically so a bypass stands out in the log file rather than blending into routine
+closes — matches this project's Development Philosophy #1 (auditability): the check
+being skippable doesn't mean the skip itself goes unrecorded.
 
 ## Case Load
 
