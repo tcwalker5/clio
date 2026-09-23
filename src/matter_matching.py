@@ -16,12 +16,33 @@ the client's name:
 
 import logging
 import re
+import time
 
 import requests
 
 BASE_URL_DEFAULT = "https://app.clio.com"
 MATTERS_FIELDS = "id,display_number,custom_number,status"
 MATTERS_PAGE_SIZE = 200
+RETRY_DELAYS = [5, 15, 30]  # seconds between retries on 429, same backoff used elsewhere in this project
+
+
+def _get_with_retry(session: requests.Session, url: str, params: dict | None = None) -> requests.Response:
+    """GET with a 429 retry/backoff — added 2026-09-23 after a real live
+    failure paging through RingCentral Directory Sync's matter fetch (this
+    function is shared by printer_expenses.py, bradford_invoice.py,
+    court_calendar/matcher.py, client_assignment.py, and
+    ringcentral_directory.py — none of them had any 429 retry here before,
+    a real gap against this project's own stated safety rule). Does NOT
+    raise on a non-2xx/429 status — callers still check resp.status_code
+    themselves, same as before this helper existed."""
+    for attempt, delay in enumerate([0, *RETRY_DELAYS], start=1):
+        if delay:
+            logging.warning("Rate limited on %s — waiting %ds (attempt %d)", url, delay, attempt)
+            time.sleep(delay)
+        resp = session.get(url, params=params)
+        if resp.status_code != 429:
+            return resp
+    return resp
 
 
 def normalize_name(raw: str) -> str:
@@ -64,14 +85,14 @@ def fetch_open_matters(
         # passing the whole URL back as a "page_token" value is what Clio's
         # API rejects with "page_token is invalid" once there's a page 2.
         if next_url:
-            resp = session.get(next_url)
+            resp = _get_with_retry(session, next_url)
         else:
             params = {
                 "status": status,
                 "fields": fields,
                 "limit": MATTERS_PAGE_SIZE,
             }
-            resp = session.get(matters_endpoint, params=params)
+            resp = _get_with_retry(session, matters_endpoint, params=params)
 
         if resp.status_code != 200:
             raise RuntimeError(f"Failed to fetch matters (page {page}): {resp.status_code} {resp.text[:200]}")

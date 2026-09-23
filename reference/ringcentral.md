@@ -99,6 +99,22 @@ change worth re-uploading, not silently treated as a no-op. Live-tested 2026-08-
 against real data — all 4 known multi-number contacts came through with both
 numbers in separate columns, zero drops.
 
+**429 retry added 2026-09-23** after a real live failure: this account has enough
+contacts that `fetch_contacts()` paging through all of them (no server-side "id in
+(...)" filter exists to narrow the request — see that function's own docstring)
+hit Clio's rate limit partway through (`Failed to fetch contacts (page 3): 429`),
+with nothing here to retry it — a real gap against this project's own stated safety
+rule ("Retry on rate limit (429)"), since none of this script's Clio reads had ever
+needed it before. Fixed with the same `RETRY_DELAYS = [5, 15, 30]` backoff used
+elsewhere in this project, applied via a local `_get_with_retry()` helper. The same
+fix was applied at the same time to the two other Clio-paging functions this
+pipeline also calls and which had the identical gap: `matter_matching.fetch_open_matters()`
+(shared by printer_expenses.py, bradford_invoice.py, court_calendar/matcher.py, and
+client_assignment.py too — fixing it here benefits all of them) and
+`outlook_calendar/relationships.fetch_oc_op_contacts()`. Live-tested end to end after
+the fix: a full run (185 matters, 240 OC/OP contacts, 12 contact pages, 339 resolved)
+completed clean.
+
 **Change detection:** RingCentral's import isn't a literal wipe-and-recreate — it
 reconciles by matching key (the `External ID` column, set to the Clio contact ID)
 and only touches what actually differs: new rows get added, rows with no match in

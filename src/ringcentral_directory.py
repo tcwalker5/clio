@@ -36,6 +36,7 @@ import json
 import logging
 import os
 import sys
+import time
 import webbrowser
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -66,6 +67,7 @@ CONTACTS_FIELDS = (
 )
 CONTACTS_PAGE_SIZE = 200
 MATTER_FIELDS_WITH_CLIENT = "id,display_number,custom_number,status,client{id}"
+RETRY_DELAYS = [5, 15, 30]  # seconds between retries on 429, same backoff used elsewhere in this project
 
 # Real-data check (2026-07-21): every one of this firm's phone conflicts turned
 # out to be Opposing Counsel at the same firm sharing a general office line —
@@ -240,6 +242,24 @@ def gather_target_contact_ids(session: requests.Session) -> set[int]:
     return client_ids | oc_op_ids
 
 
+def _get_with_retry(session: requests.Session, url: str, params: dict | None = None) -> requests.Response:
+    """GET with a 429 retry/backoff (RETRY_DELAYS) — added 2026-09-23 after
+    a real live failure: this account has enough contacts that paging
+    through all of them (fetch_contacts() below has no server-side filter
+    to narrow the request) ran into Clio's rate limit partway through,
+    with nothing here to retry it. Does NOT raise on a non-2xx/429 status —
+    callers still check resp.status_code themselves, same as before this
+    helper existed."""
+    for attempt, delay in enumerate([0, *RETRY_DELAYS], start=1):
+        if delay:
+            logging.warning("Rate limited on %s — waiting %ds (attempt %d)", url, delay, attempt)
+            time.sleep(delay)
+        resp = session.get(url, params=params)
+        if resp.status_code != 429:
+            return resp
+    return resp
+
+
 def fetch_contacts(session: requests.Session, contact_ids: set[int]) -> list[DirectoryContact]:
     """Fetch name/type/phone/company for exactly the contact IDs already known
     to be needed. Clio has no server-side "id in (...)" filter for an arbitrary
@@ -253,9 +273,9 @@ def fetch_contacts(session: requests.Session, contact_ids: set[int]) -> list[Dir
 
     while True:
         if next_url:
-            resp = session.get(next_url)
+            resp = _get_with_retry(session, next_url)
         else:
-            resp = session.get(CONTACTS_ENDPOINT, params={"fields": CONTACTS_FIELDS, "limit": CONTACTS_PAGE_SIZE})
+            resp = _get_with_retry(session, CONTACTS_ENDPOINT, params={"fields": CONTACTS_FIELDS, "limit": CONTACTS_PAGE_SIZE})
 
         if resp.status_code != 200:
             raise RuntimeError(f"Failed to fetch contacts (page {page}): {resp.status_code} {resp.text[:200]}")

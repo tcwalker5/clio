@@ -105,6 +105,12 @@ to the regular open-matters-only client match). Report-only: nothing here is
 auto-imported, and when a text matches more than one distinct (contact, matter) pair,
 every candidate is listed in `note` rather than silently picking one.
 
+**429 retry added 2026-09-23** — `fetch_oc_op_contacts()`'s paging loop had no
+rate-limit retry at all (found while fixing the identical gap in RingCentral
+Directory Sync's own Clio calls, see `reference/ringcentral.md`); now uses the same
+`RETRY_DELAYS = [5, 15, 30]` backoff as the rest of this project via a local
+`_get_with_retry()` helper.
+
 **Calls report + interactive resolution (`outlook_calendar/calls_report.py`,
 `interactive_resolve.py`, `call_overrides.py`):** every TCON/OCON call *and* DUE
 deadline reminder (see below) the migration finds — regardless of outcome — also

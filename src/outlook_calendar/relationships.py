@@ -20,6 +20,7 @@ regex here, not an exact-string set.
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass
 
 import requests
@@ -28,6 +29,23 @@ BASE_URL = os.getenv("CLIO_BASE_URL", "https://app.clio.com").rstrip("/")
 RELATIONSHIPS_ENDPOINT = f"{BASE_URL}/api/v4/relationships.json"
 RELATIONSHIPS_FIELDS = "id,description,matter{id,display_number,status},contact{id,name}"
 PAGE_SIZE = 200
+RETRY_DELAYS = [5, 15, 30]  # seconds between retries on 429, same backoff used elsewhere in this project
+
+
+def _get_with_retry(session: requests.Session, url: str, params: dict | None = None) -> requests.Response:
+    """GET with a 429 retry/backoff — added 2026-09-23 alongside the same
+    fix in matter_matching.py/ringcentral_directory.py, after a real live
+    429 hit RingCentral Directory Sync's pipeline (which also calls this
+    function). Does NOT raise on a non-2xx/429 status — callers still
+    check resp.status_code themselves, same as before this helper existed."""
+    for attempt, delay in enumerate([0, *RETRY_DELAYS], start=1):
+        if delay:
+            logging.warning("Rate limited on %s — waiting %ds (attempt %d)", url, delay, attempt)
+            time.sleep(delay)
+        resp = session.get(url, params=params)
+        if resp.status_code != 429:
+            return resp
+    return resp
 
 _OC_RE = re.compile(r"\bOC\b|OPPOSING\s+COUNSEL", re.IGNORECASE)
 _OP_RE = re.compile(r"\bOP\b|OPPOSING\s+PART(Y|IES)", re.IGNORECASE)
@@ -56,9 +74,9 @@ def fetch_oc_op_contacts(session: requests.Session) -> list[OcOpContact]:
     page = 1
     while True:
         if next_url:
-            resp = session.get(next_url)
+            resp = _get_with_retry(session, next_url)
         else:
-            resp = session.get(RELATIONSHIPS_ENDPOINT, params={"fields": RELATIONSHIPS_FIELDS, "limit": PAGE_SIZE})
+            resp = _get_with_retry(session, RELATIONSHIPS_ENDPOINT, params={"fields": RELATIONSHIPS_FIELDS, "limit": PAGE_SIZE})
         if resp.status_code != 200:
             raise RuntimeError(f"Failed to fetch relationships (page {page}): {resp.status_code} {resp.text[:200]}")
 
