@@ -249,6 +249,12 @@ feature N+1. Two independent, native-Windows mechanisms instead:
    launching a doomed second instance. It also now prints the post-start
    `LastTaskResult` instead of unconditionally claiming "Restarted."
 
+   **`logs\last-restart.txt`, added 2026-09-22 (Ted: "I'd like to see when it was
+   last restarted")** — `restart-dashboard.bat` overwrites this one-line file
+   (timestamp + `LastTaskResult`) at the end of every run, so "when was this last
+   restarted" has an answer without digging through the dated
+   `dashboard_service_*.log` files. History-of-one, not a log — each run replaces it.
+
 2. **Scheduled/unattended jobs — per-feature Windows Scheduled Tasks, not a shared
    scheduler.** Generalizes RingCentral's own pattern below, which predates this
    decision and was the direct precedent for it: one small `.bat` (`uv run

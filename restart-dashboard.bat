@@ -37,6 +37,15 @@ if errorlevel 1 (
 echo Starting CAP Dashboard task...
 powershell -NoProfile -Command "Start-ScheduledTask -TaskName 'CAP Dashboard'"
 timeout /t 3 /nobreak >nul
-powershell -NoProfile -Command "$info = Get-ScheduledTaskInfo -TaskName 'CAP Dashboard'; Write-Host \"Task last result: $($info.LastTaskResult) (0 = launched OK so far; nonzero means it failed, e.g. still couldn't bind the port)\""
 
-echo Restarted. Give it a few seconds, then check http://cap.lan:8421/
+REM Record when this restart happened, not just print it -- the console
+REM window closes, but logs\last-restart.txt sticks around so "when was
+REM this last restarted" has an answer without digging through the dated
+REM dashboard_service_*.log files. Overwritten each run (last restart only,
+REM not a history) -- through PowerShell for a locale-independent stamp,
+REM same reasoning start-dashboard-service.bat already uses for its own
+REM DATESTAMP rather than trusting %date%/%time% directly.
+if not exist logs mkdir logs
+powershell -NoProfile -Command "$info = Get-ScheduledTaskInfo -TaskName 'CAP Dashboard'; $stamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'; Write-Host \"Task last result: $($info.LastTaskResult) (0 = launched OK so far; nonzero means it failed, e.g. still couldn't bind the port)\"; \"$stamp -- Start-ScheduledTask issued (LastTaskResult: $($info.LastTaskResult))\" | Set-Content 'logs\last-restart.txt'; Write-Host \"Restarted at $stamp\""
+
+echo Give it a few seconds, then check http://cap.lan:8421/
