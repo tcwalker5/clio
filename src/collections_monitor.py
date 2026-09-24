@@ -44,7 +44,7 @@ BASE_URL = os.getenv("CLIO_BASE_URL", "https://app.clio.com").rstrip("/")
 ACCESS_TOKEN = os.getenv("CLIO_ACCESS_TOKEN", "")
 
 BILLS_ENDPOINT = f"{BASE_URL}/api/v4/bills.json"
-BILLS_FIELDS = "id,number,issued_at,due_at,total,balance,kind,client{id,name},matters{id,display_number}"
+BILLS_FIELDS = "id,number,issued_at,due_at,total,balance,kind,client{id,name},matters{id,display_number,status}"
 BILL_STATE = "awaiting_payment"
 
 # Used only by fetch_matter_trust_balance below, to catch a CLIENT-level
@@ -186,6 +186,7 @@ class UnpaidBill:
     total: float
     balance: float
     kind: str = ""  # Clio's own Bill.kind — "trust_kind" for a trust deposit/replenishment request, "revenue_kind" for billed work
+    matter_status: str = ""  # lowercased Clio matter status ("open"/"pending"/"closed") — "" when no matter is linked to this bill at all
 
     @property
     def is_trust_request(self) -> bool:
@@ -271,6 +272,16 @@ class MatterBillSummary:
         — see _last_first. Matter-backed summaries never need this (their
         display_number is already "Last, First")."""
         return self.display_number if self.display_number else _last_first(self.client_name)
+
+    @property
+    def matter_status(self) -> str:
+        """Lowercased Clio matter status ("open"/"pending"/"closed"), or ""
+        for a matter-less summary (a client-level trust deposit — matter
+        status doesn't apply, see UnpaidBill.matter_status). Computed from
+        the bills already on hand rather than stored separately — every
+        bill in one summary shares the same matter, so any of them carries
+        the same status."""
+        return self.bills[0].matter_status if self.bills else ""
 
     @property
     def total_balance(self) -> float:
@@ -411,6 +422,7 @@ def fetch_unpaid_bills(session: requests.Session) -> list[UnpaidBill]:
                 total=float(b.get("total") or 0),
                 balance=float(b.get("balance") or 0),
                 kind=b.get("kind", ""),
+                matter_status=(matter.get("status") or "").lower(),
             ))
         next_url = (body.get("meta") or {}).get("paging", {}).get("next")
         logging.info("Fetched unpaid bills page %d (%d so far)", page, len(bills))

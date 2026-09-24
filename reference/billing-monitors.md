@@ -488,6 +488,60 @@ a checkbox here. Current design:
   (`{"id": "checkbox-1122682188", "value": false}`) rather than re-using the
   `custom_field: {id}` create-shape a second time.
 
+**Open/Closed/All matter-status filter, added 2026-09-23** — `/collections` never
+filtered by the underlying matter's status at all before this: `fetch_unpaid_bills()`
+queries `bills.json?state=awaiting_payment` directly, which has no matter-status
+concept, so every unpaid bill showed regardless of whether its matter was open,
+pending, or closed. Live-checked when adding the filter: **26 of 124 real matter
+summaries (95 open, 3 matter-less) were already closed matters still carrying an
+unpaid balance** — exactly
+the case this filter exists to let staff separate from active collections work.
+
+Client-side only (same pattern as the existing "Show only past-due matters"
+checkbox) — `BILLS_FIELDS` now pulls `matters{id,display_number,status}` (was missing
+`status` entirely), `UnpaidBill.matter_status` and `MatterBillSummary.matter_status`
+(a computed property off `bills[0]`, since every bill in one summary shares the same
+matter) carry it through, and the template stamps each summary row with
+`data-matter-status`. No new route, no server-side re-fetch on filter change — this
+was a data-completeness gap (matter status was never fetched at all), not a query
+scoping problem, and everything needed was already coming back on every page load.
+
+**"Pending" folds into "Open," not a hidden third bucket** — a two-option
+Open/Closed dropdown that did an exact status match would silently exclude a Pending
+matter from *both* options (only visible under "All"), which reads as a bug more
+than a feature. Matches this project's own existing convention elsewhere (e.g.
+`soa_now_audit.py`'s `"open,pending"` treated as one active bucket) of treating
+Pending as "still active work," not a status worth its own dropdown option. A
+matter-less summary (a client-level trust deposit, no matter at all) always shows
+regardless of which option is selected — the distinction doesn't apply to it, so
+it's "not covered" by the filter rather than "excluded" by it.
+
+The existing CSV export and print report (`/collections/download`,
+`/collections/action-report`) are unaffected by this filter, same as they already
+were by the pre-existing "Show only past-due matters" checkbox — both are separate
+server-rendered routes over the full unfiltered list, not a snapshot of whatever the
+page's client-side filters currently show.
+
+**Summary-bar totals and the past-due count now recompute from whatever's visible,
+same day (Ted: "The summaries at the top of the page need to match the filtered rows
+below")** — a real gap in the first cut of this filter: the three `summary-bar`
+figures (earned & owed / replenishment / new client retainers) were rendered once
+server-side from the *full* unfiltered list and never updated, so switching to
+"Closed" showed a Closed-only table under Open+Closed+matter-less totals. Fixed
+client-side, no new server call: each summary row now also carries
+`data-earned`/`data-replenishment`/`data-new-trust` (its own `MatterBillSummary`
+values), and `filterResults()` sums only the currently-visible rows into
+`#stat-earned`/`#stat-replenishment`/`#stat-new-trust` every time either filter
+changes, formatted through a small `formatMoney()` matching the server's own
+`|money` filter (`toLocaleString` with 2 decimals) so the two never visibly differ.
+Live-verified the two agree: summing every row's `data-earned` by hand against the
+server-rendered `$344,176.95` on an unfiltered load matched to the cent (same for
+replenishment and new-trust). The "Show only past-due matters (N)" count is also
+now recomputed, but deliberately only against the **Open/Closed filter**, not
+compounded with the overdue-only checkbox itself — it answers "how many would show
+if I checked this," not "how many are showing right now with it already checked,"
+which would otherwise count down to itself the moment it's checked.
+
 ## Workflow
 ```powershell
 # Read-only report (writes output/collections_monitor_YYYY-MM-DD.csv + a log)

@@ -12,15 +12,23 @@
 {% if summaries is not none %}
 <div class="panel" id="results">
   <div class="summary-bar">
-    <div class="summary-stat" title="Billed work with a balance due — the actual collections AR"><strong>${{ total_balance|money }}</strong>earned &amp; owed</div>
-    <div class="summary-stat" title="Trust top-up requests on existing matters — we care about these, but they aren't earned yet"><strong>${{ replenishment_balance|money }}</strong>replenishment</div>
-    <div class="summary-stat" title="New clients' initial retainers — not subject to collections"><strong>${{ new_trust_balance|money }}</strong>new client retainers</div>
+    <div class="summary-stat" title="Billed work with a balance due — the actual collections AR"><strong id="stat-earned">${{ total_balance|money }}</strong>earned &amp; owed</div>
+    <div class="summary-stat" title="Trust top-up requests on existing matters — we care about these, but they aren't earned yet"><strong id="stat-replenishment">${{ replenishment_balance|money }}</strong>replenishment</div>
+    <div class="summary-stat" title="New clients' initial retainers — not subject to collections"><strong id="stat-new-trust">${{ new_trust_balance|money }}</strong>new client retainers</div>
   </div>
 
   <div style="display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap;margin-bottom:0.75rem;">
     <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.9rem;">
       <input type="checkbox" id="overdue-only" onchange="filterResults()">
-      Show only past-due matters ({{ overdue_count }})
+      Show only past-due matters (<span id="overdue-count-label">{{ overdue_count }}</span>)
+    </label>
+    <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.9rem;">
+      Matter status:
+      <select id="matter-status-filter" onchange="filterResults()" style="padding:0.3rem 0.4rem;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text);font-size:0.85rem;">
+        <option value="all" selected>All</option>
+        <option value="open">Open</option>
+        <option value="closed">Closed</option>
+      </select>
     </label>
     <a class="btn secondary" href="/collections/download">Download CSV</a>
     <a class="btn secondary" href="/collections/action-report" target="_blank">Print report for review</a>
@@ -43,7 +51,7 @@
     <tbody>
       {% for s in summaries %}
       {% set group_id = "collections-group-" ~ loop.index %}
-      <tr class="summary-row" data-overdue="{{ 'yes' if s.overdue else 'no' }}" data-group="{{ group_id }}">
+      <tr class="summary-row" data-overdue="{{ 'yes' if s.overdue else 'no' }}" data-matter-status="{{ s.matter_status }}" data-earned="{{ s.earned_balance }}" data-replenishment="{{ s.replenishment_balance }}" data-new-trust="{{ s.new_trust_balance }}" data-group="{{ group_id }}">
         <td class="expand-icon" style="cursor:pointer;" onclick="toggleDetail('{{ group_id }}')"><span id="collections-icon-{{ loop.index }}">&#9656;</span></td>
         <td>{% if s.all_trust %}<span class="badge warn" title="{{ 'New client retainer — not subject to collections' if s.matter_id is none else 'Trust replenishment request' }}">Trust request</span>{% if s.trust_level_mismatch %} <span class="badge err" title="This client's own matter already holds ${{ s.matter_trust_balance|money }} in trust — the deposit may have been recorded at the matter level instead of applied to this client-level request. Verify in Clio before treating this as still owed.">⚠ Check trust level</span>{% endif %}{% elif s.overdue %}<span class="badge err">{{ s.max_days_overdue }}d past due</span>{% else %}<span class="badge ok">Current</span>{% endif %}</td>
         <td data-sort="{{ s.display_name }}" style="cursor:pointer;" onclick="toggleDetail('{{ group_id }}')">{% if s.display_number %}{{ s.display_number }}{% else %}<span title="No matter linked to this bill in Clio — showing the client name instead">{{ s.display_name }}</span>{% endif %} <span style="color:var(--text-muted);font-size:0.8rem;">({{ s.bills|length }} bill{{ "s" if s.bills|length != 1 else "" }})</span></td>
@@ -140,15 +148,58 @@ function toggleDetail(groupId) {
   icon.innerHTML = expanded ? "&#9656;" : "&#9662;";
 }
 
+function formatMoney(value) {
+  return value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+// The summary-bar totals and the "(N)" past-due count are recomputed from
+// whatever's actually visible every time this runs (Ted, 2026-09-23: "The
+// summaries at the top of the page need to match the filtered rows
+// below") - they used to be a static snapshot of the FULL unfiltered list,
+// rendered once server-side, which drifted from the table the moment
+// either filter hid a row. The "(N)" count specifically reflects the
+// Open/Closed filter only, not the overdue-only checkbox itself - it's
+// telling you how many WOULD show if you checked that box, not shrinking
+// as a side effect of checking it.
 function filterResults() {
   const onlyOverdue = document.getElementById("overdue-only").checked;
+  const matterStatusFilter = document.getElementById("matter-status-filter").value;
+  let visibleEarned = 0, visibleReplenishment = 0, visibleNewTrust = 0, overdueInStatusFilter = 0;
+
   document.querySelectorAll("#results tbody tr.summary-row[data-overdue]").forEach((row) => {
-    const hide = onlyOverdue && row.dataset.overdue === "no";
+    // A matter-less summary (client-level trust deposit, no matter_status
+    // at all) is always shown regardless of the Open/Closed filter — that
+    // filter genuinely doesn't apply to it, so it's not "excluded", it's
+    // "not covered" by the Open/Closed distinction. "Pending" folds into
+    // "Open" here, same as this project's own "open,pending" convention
+    // used elsewhere (e.g. soa_now_audit.py) — a Pending matter reads as
+    // still-active work, not a third hidden bucket a two-option filter
+    // would otherwise silently exclude from both Open and Closed.
+    const status = row.dataset.matterStatus;
+    const bucket = status === "" ? "" : (status === "closed" ? "closed" : "open");
+    const statusHide = matterStatusFilter !== "all" && bucket !== "" && bucket !== matterStatusFilter;
+    const overdueHide = onlyOverdue && row.dataset.overdue === "no";
+    const hide = overdueHide || statusHide;
+
     row.style.display = hide ? "none" : "";
     document.querySelectorAll(`tr.bill-row[data-group="${row.dataset.group}"]`).forEach((d) => {
       d.style.display = hide ? "none" : "";
     });
+
+    if (!statusHide && row.dataset.overdue === "yes") {
+      overdueInStatusFilter++;
+    }
+    if (!hide) {
+      visibleEarned += parseFloat(row.dataset.earned || "0");
+      visibleReplenishment += parseFloat(row.dataset.replenishment || "0");
+      visibleNewTrust += parseFloat(row.dataset.newTrust || "0");
+    }
   });
+
+  document.getElementById("stat-earned").textContent = `$${formatMoney(visibleEarned)}`;
+  document.getElementById("stat-replenishment").textContent = `$${formatMoney(visibleReplenishment)}`;
+  document.getElementById("stat-new-trust").textContent = `$${formatMoney(visibleNewTrust)}`;
+  document.getElementById("overdue-count-label").textContent = overdueInStatusFilter;
 }
 filterResults();
 
