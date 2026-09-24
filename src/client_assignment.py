@@ -81,6 +81,16 @@ def _get_with_retry(session: requests.Session, url: str, params: dict | None = N
 ATTORNEY_NAMES = ["Heidi Collier", "Dahann Bowers", "Pamela Bradford"]
 PARALEGAL_NAMES = ["Misty Sherman", "Patricia Payne", "Sandy Cressey"]
 
+# Matters that are never real client work and should never show up as
+# "missing an assignment" (Ted, 2026-09-24: "internal accounts and test
+# accounts"). Matched against display_number, case-insensitive — DOE, JANE
+# is this whole project's own designated live-testing matter (see root
+# CLAUDE.md's "Designated test matter" section), and NON-BILLABLE, ADMIN is
+# an internal bucket, not a client matter. Compared uppercase since
+# display_number is already uppercase in practice but this doesn't rely on
+# that.
+EXCLUDED_MATTER_NAMES = {"DOE, JANE", "NON-BILLABLE, ADMIN"}
+
 ASSIGNMENT_FIELDS = ("originating_attorney", "responsible_attorney", "responsible_staff")
 FIELD_ROSTER = {
     "responsible_attorney": "attorney",
@@ -177,10 +187,15 @@ def fetch_matters_for_assignment(session: requests.Session) -> list[MatterAssign
     2026-09-16 (Ted) from an earlier most-incomplete-first grouping, which
     visually scattered same-client matters (e.g. two "COLTON, ANN" matters
     landing in different missing-count groups) instead of keeping the list
-    in a single predictable last-name order."""
+    in a single predictable last-name order. Excludes EXCLUDED_MATTER_NAMES
+    (test/internal matters, added 2026-09-24) before anything else sees the
+    list — they never show up as "missing an assignment" here, on the print
+    report, on the CSV export, or in the Case Load counts."""
     matters = fetch_open_matters(session, fields=MATTER_ASSIGNMENT_FIELDS)
     result = []
     for m in matters:
+        if (m.get("display_number") or "").strip().upper() in EXCLUDED_MATTER_NAMES:
+            continue
         ra = m.get("responsible_attorney") or {}
         oa = m.get("originating_attorney") or {}
         rs = m.get("responsible_staff") or {}
@@ -283,7 +298,19 @@ def build_caseload(matters: list[MatterAssignment]) -> tuple[list[tuple[str, int
 # scope/parent_id needed) and classifying every ancestor of a matching
 # document by name pattern, not just its immediate top-level folder. See
 # _classify_folder_path() below.
-CONFORMED_NAME_PATTERN = re.compile(r"^conformed\b", re.IGNORECASE)
+# Anywhere-in-name, not prefix-anchored like the patterns below (widened
+# 2026-09-24 after a reverse scan across all open matters — not just the
+# hand-picked list — found CARTER, DARLENE's genuine filed copy sitting in
+# a folder named "OUR PLEADINGS > COURT CONFORMED COPIES": "conformed"
+# isn't at the start of that folder's name, so the old `^conformed\b`
+# prefix anchor would have missed it (it only classified "filed" here by
+# luck, via the filename's own "filed" word instead). "Conformed copies"
+# is specific enough a legal term that matching it anywhere in a folder
+# name carries negligible false-positive risk, unlike the prefix-anchored
+# patterns below (Pleadings/Correspondence/opposing), which deliberately
+# stay anchored so a folder like "THEIR PLEADINGS AND CORRESPONDENCE"
+# doesn't get credit just for containing those words mid-name.
+CONFORMED_NAME_PATTERN = re.compile(r"\bconformed\b", re.IGNORECASE)
 FILED_NAME_PATTERN = re.compile(r"^(our\s+)?pleadings\b", re.IGNORECASE)
 CORRESPONDENCE_NAME_PATTERN = re.compile(r"^corr", re.IGNORECASE)  # loose prefix, not gate-determining — also catches the "CORRESONDENCE" typo seen live
 OPPOSING_NAME_PATTERN = re.compile(r"^their\b|^op\b|^opposing\b", re.IGNORECASE)
@@ -454,7 +481,7 @@ def _classify_folder_path(tree: dict[int, dict], parent_id: int | None) -> tuple
 
     if any(OPPOSING_NAME_PATTERN.match(n) for n in names):
         return "opposing", path
-    if any(CONFORMED_NAME_PATTERN.match(n) for n in names):
+    if any(CONFORMED_NAME_PATTERN.search(n) for n in names):
         return "filed", path
     if any(FILED_NAME_PATTERN.match(n) for n in names):
         return "prepared", path

@@ -306,7 +306,7 @@ def _classify_y_drive_path(rel_path: str) -> str:
     parts = rel_path.replace("/", "\\").split("\\")[:-1]
     if any(ca.OPPOSING_NAME_PATTERN.match(p) for p in parts):
         return "opposing"
-    if any(ca.CONFORMED_NAME_PATTERN.match(p) for p in parts):
+    if any(ca.CONFORMED_NAME_PATTERN.search(p) for p in parts):
         return "filed"
     if any(ca.FILED_NAME_PATTERN.match(p) for p in parts):
         return "filed" if ca.FILED_WORD_PATTERN.search(filename) else "prepared"

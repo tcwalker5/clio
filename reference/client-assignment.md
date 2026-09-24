@@ -110,6 +110,22 @@ before downloading the other one. **Case Load below was explicitly excluded** fr
 this same request — it's a pie chart, not a list, so a CSV export wasn't judged
 worth building for it.
 
+**Excluded test/internal matters, added 2026-09-24 (Ted: "internal accounts and test
+accounts")** — `EXCLUDED_MATTER_NAMES` (`{"DOE, JANE", "NON-BILLABLE, ADMIN"}`) is
+checked in `fetch_matters_for_assignment()` itself, before anything downstream sees
+the list — the single shared loader every `/assignments` route (`routes_
+client_assignment.py`'s `_load()`) calls, so the exclusion applies everywhere at
+once: the main "missing an assignment" table, the print report, the CSV export, and
+Case Load's counts. DOE, JANE is this whole project's own designated
+live-Clio-testing matter (root `CLAUDE.md`'s "Designated test matter" section) —
+real writes get made to it routinely for testing across every subproject, which was
+showing up here as "missing an assignment" like any other client matter. NON-
+BILLABLE, ADMIN is an internal bucket, not a client matter — same one already
+excluded from `soa_now_audit.py`'s own SoA/NoW checks for the same reason. Matched
+against `display_number`, uppercased for the comparison (not relying on Clio always
+returning it uppercase, just not assuming otherwise). Confirmed live: 176 open
+matters came back with both names confirmed absent from the result.
+
 ## Close matter
 
 **"Close" button per row, added 2026-09-21 (Ted)** — a fast way to cull the
@@ -259,9 +275,9 @@ match in "Pleadings"/"Our Pleadings" and a match in "Conformed Copies" were both
 `"filed"` — but a document sitting loose in Our Pleadings only proves we
 drafted/lodged it, not that the court actually has it; Conformed Copies specifically
 holds the court-stamped copy, which is real evidence. Now the folder walk
-distinguishes them: `CONFORMED_NAME_PATTERN` (`^conformed\b` — loose prefix,
-confirmed live it needs to catch a bare "CONFORMED" folder as well as "CONFORMED
-COPIES", real variant seen on MAYHAR, RONNI) → `"filed"`; a bare
+distinguishes them: `CONFORMED_NAME_PATTERN` (`\bconformed\b`, matched anywhere in
+the folder name via `.search()`, not prefix-anchored via `.match()` — widened
+2026-09-24, see below) → `"filed"`; a bare
 `FILED_NAME_PATTERN` match (now just `^(our\s+)?pleadings\b`, Conformed Copies split
 out of it) → the new `"prepared"` classification — found, drafted, not gate-passing
 on its own. The naming-convention refinement (`_refine_classification()`) now works
@@ -298,6 +314,41 @@ MIKELS, and SMITH VANESSA ANN genuinely have no such wording in any match and
 correctly stayed "prepared." WELLS, BRITTNEY (the match that started this whole
 correction) has no "filed" word in any of its 4 filenames either and correctly
 stays excluded — confirmed live this doesn't regress the original fix.
+
+**`CONFORMED_NAME_PATTERN` widened from prefix-anchored to anywhere-in-name,
+2026-09-24** — found via a one-off exploratory scan (see "Reverse scan" below), not
+a bug report: the original `^conformed\b` (checked via `.match()`, so only a folder
+whose name *starts* with "conformed") missed CARTER, DARLENE's genuine filed copy,
+sitting in a folder named "OUR PLEADINGS > COURT CONFORMED COPIES" — "conformed"
+isn't at the start there. That one still classified "filed" correctly, but only by
+luck — its filename also happened to contain the word "filed," triggering the
+separate word-signal upgrade instead of the folder match. Widened to `\bconformed\b`
+via `.search()` (matches anywhere in the name) — confirmed live this now classifies
+CARTER, DARLENE's match as "filed" via the folder itself
+(`folder_classification: "filed"`), not just via the word-signal rescue. Judged safe
+to widen (unlike the prefix-anchored `FILED_NAME_PATTERN`/`CORRESPONDENCE_NAME_PATTERN`/
+`OPPOSING_NAME_PATTERN`, deliberately left anchored so a folder like "THEIR PLEADINGS
+AND CORRESPONDENCE" doesn't get "filed"/"correspondence" credit just for containing
+those words mid-name) — "conformed" is specific enough a legal term that matching it
+anywhere in a folder name carries negligible false-positive risk.
+
+**Reverse scan, 2026-09-24 (Ted: "reverse the script and find open matters that
+should be closed... let's do this on a scratchpad... I want to see if it's worth
+it")** — a one-off, uncommitted scratch script (not a shipped tool) that ran the
+same classification across **every currently open matter** (175, after excluding
+DOE JANE/NON-BILLABLE) instead of a hand-picked list, looking for any that already
+have a genuinely filed SoA/NoW despite still being open. Result: **27 of 175** did —
+and **26 of those 27 were never surfaced by Client Assignment's own "missing
+Responsible Staff" heuristic at all** (only 1 overlapped with the existing
+`soa_now_audit.py` hand-picked list). Spot-checked 6 at random, all held up as real
+evidence, including one three folder levels deep under a sub-case folder that the
+full-tree walk correctly found. This is the finding that justifies building
+`soa_now_audit.py`'s deferred "live query instead of a hardcoded list" direction
+(see that file's own module docstring) — "missing staff" and "has a filed SoA/NoW"
+are almost entirely different matter populations, so a real periodic audit tool
+needs to scan broadly, not extend the hand-picked list forever. Not yet built as of
+this writing — the scan lives only in a scratchpad, kept here as the record of why
+it's worth doing.
 
 **One modal for the whole flow, not `alert()`/`confirm()`, added 2026-09-21** —
 originally built on plain browser dialogs, revised the same day so the status message
