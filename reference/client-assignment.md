@@ -342,13 +342,13 @@ and **26 of those 27 were never surfaced by Client Assignment's own "missing
 Responsible Staff" heuristic at all** (only 1 overlapped with the existing
 `soa_now_audit.py` hand-picked list). Spot-checked 6 at random, all held up as real
 evidence, including one three folder levels deep under a sub-case folder that the
-full-tree walk correctly found. This is the finding that justifies building
-`soa_now_audit.py`'s deferred "live query instead of a hardcoded list" direction
-(see that file's own module docstring) — "missing staff" and "has a filed SoA/NoW"
-are almost entirely different matter populations, so a real periodic audit tool
-needs to scan broadly, not extend the hand-picked list forever. Not yet built as of
-this writing — the scan lives only in a scratchpad, kept here as the record of why
-it's worth doing.
+full-tree walk correctly found. This is the finding that justified building
+`soa_now_audit.py`'s "live query instead of a hardcoded list" rewrite — "missing
+staff" and "has a filed SoA/NoW" are almost entirely different matter populations,
+so a real audit tool needs to scan broadly, not extend the hand-picked list forever.
+**Built same day, see `reference/soa-now-audit.md`** — the rewritten page's own live
+run through the real HTTP route reproduced this scratch scan's numbers exactly (27
+filed, 40 needs-review, 67 total matches out of 175 scanned).
 
 **One modal for the whole flow, not `alert()`/`confirm()`, added 2026-09-21** —
 originally built on plain browser dialogs, revised the same day so the status message
