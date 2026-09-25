@@ -31,7 +31,7 @@
       </select>
     </label>
     <a class="btn secondary" href="/collections/download">Download CSV</a>
-    <a class="btn secondary" href="/collections/action-report" target="_blank">Print report for review</a>
+    <a class="btn secondary" id="print-report-link" href="/collections/action-report" target="_blank">Print report for review</a>
   </div>
 
   {% if summaries %}
@@ -200,6 +200,15 @@ function filterResults() {
   document.getElementById("stat-replenishment").textContent = `$${formatMoney(visibleReplenishment)}`;
   document.getElementById("stat-new-trust").textContent = `$${formatMoney(visibleNewTrust)}`;
   document.getElementById("overdue-count-label").textContent = overdueInStatusFilter;
+
+  // Print report opens fresh in its own tab and re-runs the pipeline itself
+  // (see routes_collections.py's action_report()), so it can't just read this
+  // page's DOM — carry the current Matter status choice over as a query
+  // param instead, so what you're looking at here is what prints (Ted,
+  // 2026-09-25). The report page also has its own selector defaulting to
+  // this value, so it's changeable there too without bouncing back here.
+  document.getElementById("print-report-link").href =
+    `/collections/action-report?matter_status=${encodeURIComponent(matterStatusFilter)}`;
 }
 filterResults();
 

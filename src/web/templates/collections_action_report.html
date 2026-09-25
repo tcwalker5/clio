@@ -20,6 +20,14 @@
     <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.9rem;">
       <input type="checkbox" id="section-trust" checked onchange="applySectionFilter()"> Trust Requests
     </label>
+    <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.9rem;">
+      Matter status:
+      <select onchange="location.href='/collections/action-report?matter_status=' + this.value" style="padding:0.3rem 0.4rem;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text);font-size:0.85rem;">
+        <option value="all" {% if matter_status == "all" %}selected{% endif %}>All</option>
+        <option value="open" {% if matter_status == "open" %}selected{% endif %}>Open</option>
+        <option value="closed" {% if matter_status == "closed" %}selected{% endif %}>Closed</option>
+      </select>
+    </label>
   </div>
 
   {% if summaries %}

@@ -129,9 +129,26 @@ async def set_action(matter_id: int = Form(...), action: str = Form(""), _: None
     return JSONResponse({"success": True})
 
 
+def _passes_matter_status_filter(summary: collections_monitor.MatterBillSummary, matter_status_filter: str) -> bool:
+    """Same Open/Closed/All bucketing as collections.html's own filterResults()
+    JS (Pending folds into Open; a matter-less summary — a client-level trust
+    deposit with no matter_status at all — always passes, since the
+    distinction genuinely doesn't apply to it)."""
+    if matter_status_filter == "all":
+        return True
+    status = summary.matter_status
+    if status == "":
+        return True
+    bucket = "closed" if status == "closed" else "open"
+    return bucket == matter_status_filter
+
+
 @router.get("/action-report", response_class=HTMLResponse)
-async def action_report(request: Request, _: None = Depends(require_auth)):
+async def action_report(request: Request, matter_status: str = "all", _: None = Depends(require_auth)):
     from web.app import render
+
+    if matter_status not in ("all", "open", "closed"):
+        matter_status = "all"
 
     try:
         bills = await run_in_threadpool(collections_monitor.run_pipeline)
@@ -140,6 +157,7 @@ async def action_report(request: Request, _: None = Depends(require_auth)):
 
     summaries = collections_monitor.build_matter_summaries(bills)
     await run_in_threadpool(_attach_actions, summaries)
+    summaries = [s for s in summaries if _passes_matter_status_filter(s, matter_status)]
 
     # Split trust requests into their own alphabetical block, separate from
     # actual invoices (Ted, 2026-09-09) — sorting the whole list together by
@@ -162,6 +180,7 @@ async def action_report(request: Request, _: None = Depends(require_auth)):
     return render(
         request, "collections_action_report.html", error=None, summaries=summaries,
         invoice_summaries=invoice_summaries, trust_summaries=trust_summaries, clio_base_url=CLIO_BASE_URL,
+        matter_status=matter_status,
     )
 
 

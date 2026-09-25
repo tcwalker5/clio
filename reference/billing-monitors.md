@@ -516,11 +516,46 @@ matter-less summary (a client-level trust deposit, no matter at all) always show
 regardless of which option is selected — the distinction doesn't apply to it, so
 it's "not covered" by the filter rather than "excluded" by it.
 
-The existing CSV export and print report (`/collections/download`,
-`/collections/action-report`) are unaffected by this filter, same as they already
-were by the pre-existing "Show only past-due matters" checkbox — both are separate
-server-rendered routes over the full unfiltered list, not a snapshot of whatever the
-page's client-side filters currently show.
+The bill-level CSV export (`/collections/download`) is unaffected by this filter,
+same as it already was by the pre-existing "Show only past-due matters" checkbox —
+it's a separate server-rendered route over the full unfiltered list, not a snapshot
+of whatever the page's client-side filters currently show. **The print report
+(`/collections/action-report`) picked up its own version of this filter on
+2026-09-25 — see below** (it used to be unaffected too, same as the CSV, until Ted
+asked for it to match).
+
+**Print report matter-status filter, added 2026-09-25 (Ted: "if I select closed
+matters the print report should show the same").** Unlike the main page's filter
+above, this one can't be pure client-side JS — the report opens in its own tab and
+re-runs `collections_monitor.run_pipeline()` fresh on every view (see "Print report
+for review" above), so there's no existing DOM to read a filter back from. Two
+cooperating pieces instead:
+- `action_report()` now takes a `?matter_status=all|open|closed` query param and
+  filters `MatterBillSummary` objects with it (`_passes_matter_status_filter()`,
+  same Open/Closed bucketing as `/collections`' own `filterResults()` — Pending
+  folds into Open, a matter-less summary always passes) before splitting into
+  `invoice_summaries`/`trust_summaries` and writing the CSV, so the downloaded CSV
+  matches whatever the report page is currently showing.
+- The report page itself carries its own Matter status `<select>` (defaulting to
+  whatever came in via the query param), navigating via `location.href` on change —
+  a real page reload, not a client-side toggle, since the report has to re-fetch
+  live from Clio regardless.
+
+**Considered inheriting the main page's filter silently instead of a visible
+selector, rejected** — asked Ted which he'd prefer rather than assuming: a print
+report opened in its own tab, possibly printed/saved/reopened later without the
+main page's state in view, showing a curiously incomplete list with no visible
+reason why would read as a bug more than a feature. Landed on both: the "Print
+report for review" link on `/collections` now appends the current dropdown's value
+to the URL (so clicking through gives you what you had selected), *and* the report
+page has its own selector so it's changeable there directly too, without bouncing
+back to `/collections` first.
+
+Live-verified 2026-09-25 against the real account: `?matter_status=all` → 121 matter
+rows, `?matter_status=open` → 92, `?matter_status=closed` → 32 — 92 + 32 = 124, the
+extra 3 over the unfiltered 121 being the matter-less trust summaries that
+correctly appear in *both* the open and closed reports (they always pass, per the
+bucketing rule above), confirming the arithmetic lines up exactly.
 
 **Summary-bar totals and the past-due count now recompute from whatever's visible,
 same day (Ted: "The summaries at the top of the page need to match the filtered rows
