@@ -202,6 +202,53 @@ table.detail-table td:nth-child(4) { white-space: normal; }
      screen-only skim aid (see toggleReportDetail's JS comment), never a way
      to accidentally omit a matter's bills from the printed page. */
   tr.bill-subrow.hidden { display: table-row; }
+
+  /* Real root cause of "cuts off the right margin, need 62% zoom to fit"
+     (Ted, 2026-09-25): main.wide's 1800px max-width and .table-scroll's
+     fit-content sizing (both in style.css, screen-only rules with no print
+     override) were carrying straight through into the print layout — the
+     browser rendered the page at up to 1800 CSS px wide and then clipped
+     whatever didn't fit the physical paper at 100% scale, rather than
+     reflowing to it. Forcing both back to the page's own width here is what
+     actually lets the column-width tightening below do anything; without
+     this the columns could be tightened arbitrarily and the table would
+     still be laid out against an 1800px-wide canvas. Deliberately not a
+     smaller font — Ted specifically didn't want that; this reclaims space
+     from the page's true width and from padding/column allocation instead. */
+  main.wide, main { max-width: none !important; width: 100% !important; }
+  .table-scroll { width: 100% !important; max-width: 100% !important; overflow: visible !important; }
+
+  /* table-layout: fixed turns each column width below into a real cap
+     instead of a suggestion auto-layout can override based on content —
+     without it, the browser sizes columns off their nowrap content (a long
+     "+ $X new client retainer" line, a badge-laden Matter cell) and any
+     leftover width — inflated by the 1800px canvas above — gets spread
+     across every column including the short date ones, which is what
+     actually produced the wide gap between Issued and Due. Matter and Total
+     Balance need white-space: normal here (Handling/Confirmed already had
+     it, see the non-print rule above) since a fixed column width does
+     nothing to wrap nowrap content — it would just overflow the cell
+     instead of respecting the width. */
+  #report-table { table-layout: fixed; width: 100%; }
+  #report-table th, #report-table td { padding: 0.3rem 0.4rem; }
+  #report-table th:nth-child(1), #report-table td:nth-child(1) { width: 2%; }
+  #report-table th:nth-child(2), #report-table td:nth-child(2) { width: 33%; white-space: normal; }
+  #report-table th:nth-child(3), #report-table td:nth-child(3) { width: 10%; }
+  #report-table th:nth-child(4), #report-table td:nth-child(4) { width: 15%; white-space: normal; }
+  #report-table th:nth-child(5), #report-table td:nth-child(5) { width: 20%; }
+  #report-table th:nth-child(6), #report-table td:nth-child(6) { width: 20%; }
+
+  /* Bill sub-table — the specific "space between Issued and Due" Ted
+     flagged. Same fixed-layout fix, tight percentages sized to what a date
+     or a dollar figure actually needs, not what leftover-width
+     auto-distribution handed it. */
+  table.detail-table { table-layout: fixed; width: 100%; }
+  table.detail-table th, table.detail-table td { padding: 0.3rem 0.4rem; }
+  table.detail-table th:nth-child(1), table.detail-table td:nth-child(1) { width: 16%; }
+  table.detail-table th:nth-child(2), table.detail-table td:nth-child(2) { width: 20%; }
+  table.detail-table th:nth-child(3), table.detail-table td:nth-child(3) { width: 20%; }
+  table.detail-table th:nth-child(4), table.detail-table td:nth-child(4) { width: 22%; }
+  table.detail-table th:nth-child(5), table.detail-table td:nth-child(5) { width: 22%; }
 }
 </style>
 {% endblock %}
