@@ -143,6 +143,63 @@ Bradford/Printer there's no separate confirm step, since this never writes to Cl
 RingCentral. The dashboard never calls `webbrowser.open()` itself (it's also reachable
 over Tailscale from other devices) — it shows the import-page link instead.
 
+**Added/removed/modified diff, added 2026-09-25 (Ted: "I'd like to show what is being
+added or removed... When I click sync now, only the changes should show. When it runs
+automatically, the diffs should show by default").** Before this, `changed` was the
+only signal — true/false, no detail on what actually differed. Landed as one design
+that satisfies both halves of the ask at once: `/ringcentral` always renders the diff
+of whatever the **most recent** run found, whether that run was a manual "Sync now"
+click or the unattended daily Scheduled Task — so a manual click's own result is
+exactly that diff, and an overnight automatic run's diff is already sitting there the
+next time anyone opens the page, no extra click needed.
+
+- `ringcentral_sync_runs` gained two columns (`web/db.py`'s `CORE_SCHEMA_COLUMNS`,
+  same `_ensure_column` migration pattern as `staff_cache.is_attorney`):
+  **`rows_json`** — this run's own directory row snapshot, kept *only* so the next
+  run can diff against it. Deliberately not read back from the day's CSV file
+  (`output/ringcentral_directory_{date}.csv`) — that file is named by date only, so a
+  second run on the same day (an automatic 7am run followed by a manual "Sync now"
+  later) would have already overwritten it by the time a diff needs the prior state.
+  **`diff_json`** — the diff against the previous run's `rows_json`, precomputed at
+  run time (`ringcentral_directory.diff_rows()`) rather than recomputed on every page
+  view.
+- Diffing key is each row's own `External ID` — the same reconciliation key
+  RingCentral's own import matches on (see "Change detection" above), so the
+  dashboard's diff mirrors what RingCentral will actually do with the new CSV rather
+  than some other notion of row identity. A merged multi-contact row's External ID is
+  already `|`-joined across every contact it represents; if that grouping itself
+  changes (a third person joins a shared line), the old and new IDs simply won't
+  match — correctly shows as one row removed and one added, since it genuinely is a
+  different row identity from RingCentral's point of view, not an in-place edit.
+- **Three buckets, not just added/removed** — `modified` (same External ID, any
+  field differs — e.g. a phone number changed) was added alongside the two Ted named,
+  since it's the natural third case of "what changed" and the existing `changed` flag
+  already covered it in aggregate with no detail. `describe_row()` renders each entry
+  as a `(name, phone)` pair for display — falls back to Company when First/Last Name
+  are blank (a merged row), and to whichever phone column is actually filled.
+- **Real edge case hit and fixed the same day:** this account's sync history predates
+  these two columns, so the first run after shipping this had a previous run row with
+  no `rows_json` to diff against. Treating that as "empty previous state" would have
+  reported everything as freshly "added" while `changed` correctly said "No" (a real,
+  confirmed-live contradiction: "306 added" alongside "changed: No", from a run where
+  the directory genuinely hadn't changed at all — there was just no snapshot yet to
+  compare it to). Fixed with a third diff state — `None`, meaning "no comparison basis
+  exists this time," rendered as "No previous snapshot to compare against yet," not
+  "empty" (`{added: [], removed: [], modified: []}`) and not "everything's new." Only
+  a genuinely first-ever run (no previous row at all) diffs against a truly empty
+  previous state. Self-heals from the next run onward once that run's own `rows_json`
+  becomes the previous snapshot.
+- Each run also logs every added/removed/modified contact by name/phone
+  (`logs/ringcentral_directory_YYYYMMDD.log`), not just the aggregate counts already
+  in the "Summary" line — same auditability posture as the rest of this project.
+- Live-verified 2026-09-25 against the real account: first post-upgrade run correctly
+  showed "no previous snapshot" (not a phantom 306-added) despite `changed: No`; a
+  second run immediately after correctly diffed against the first run's real snapshot
+  and showed no changes (accurate — nothing in Clio changed between the two runs).
+  Tuple destructuring in the template (`{% set name, phone = describe_row(r) %}`) and
+  all three badge types (Added/Removed/Modified) were also confirmed to render
+  correctly with synthetic data before relying on it.
+
 **Outputs:**
 - `output/ringcentral_directory_{date}.csv` — ready to upload (RingCentral's own
   documented column order + instruction-header preamble)

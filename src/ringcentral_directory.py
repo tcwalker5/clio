@@ -14,7 +14,9 @@ Writes:
   output/ringcentral_conflicts_YYYY-MM-DD.csv   unresolved same-phone contacts (if any)
   logs/ringcentral_directory_YYYYMMDD.log
   data/clio_dashboard.db (ringcentral_sync_runs) — one row per run, including a hash
-    of the built directory, so a run with no real change can be detected and skipped
+    of the built directory (so a run with no real change can be detected and skipped),
+    a snapshot of that run's own rows (for the NEXT run to diff against), and the
+    added/removed/modified diff against the previous run (see diff_rows())
 
 RingCentral has no REST API for the shared company directory (only per-user personal
 contacts support API writes — confirmed via RingCentral's own developer docs). The CSV
@@ -569,6 +571,50 @@ def compute_snapshot_hash(rows: list[dict]) -> str:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
+def describe_row(row: dict) -> tuple[str, str]:
+    """(name, phone) for one directory row, for display in a diff list — a
+    merged multi-contact row (see build_directory_rows) has blank First/Last
+    Name, so falls back to Company; a phone is whichever column is actually
+    filled, checked in the order a caller-ID lookup would matter most."""
+    name = f"{row.get('First Name', '')} {row.get('Last Name', '')}".strip()
+    if not name:
+        name = row.get("Company") or "(unnamed)"
+    phone = next(
+        (row[col] for col in ("Mobile Number", "Business Number", "Home Number", "Company Main Number") if row.get(col)),
+        "",
+    )
+    return name, phone
+
+
+def diff_rows(previous_rows: list[dict], current_rows: list[dict]) -> dict:
+    """Added/removed/modified rows between two directory snapshots, keyed by
+    each row's own External ID — the same reconciliation key RingCentral's
+    own import matches on (see "Change detection" in reference/ringcentral.md),
+    so this mirrors what RingCentral will actually do with the new CSV
+    rather than diffing some other, unrelated notion of identity. A merged
+    row's External ID is already "|"-joined across every contact it
+    represents (build_directory_rows) — if that grouping itself changes
+    (e.g. a third person joins a shared line), the old and new IDs simply
+    won't match, which correctly shows as one row removed and one added
+    rather than a same-row modification, since it genuinely is a different
+    row identity from RingCentral's point of view.
+
+    On the very first run ever (no previous snapshot), everything is
+    reported "added" — expected: real numbers from that first migration
+    (2026-07-22) were 321 new against a previously-empty comparison base."""
+    prev_by_id = {r.get("External ID", ""): r for r in previous_rows}
+    curr_by_id = {r.get("External ID", ""): r for r in current_rows}
+
+    added = [curr_by_id[k] for k in curr_by_id if k not in prev_by_id]
+    removed = [prev_by_id[k] for k in prev_by_id if k not in curr_by_id]
+    modified = [
+        {"external_id": k, "before": prev_by_id[k], "after": curr_by_id[k]}
+        for k in curr_by_id
+        if k in prev_by_id and curr_by_id[k] != prev_by_id[k]
+    ]
+    return {"added": added, "removed": removed, "modified": modified}
+
+
 # ---------------------------------------------------------------------------
 # Pipeline (shared by the CLI and the web dashboard)
 # ---------------------------------------------------------------------------
@@ -581,6 +627,7 @@ class RunResult:
     csv_path: Path | None = None
     conflicts_path: Path | None = None
     run_at: str = ""
+    diff: dict | None = None
 
 
 def run_pipeline(output_dir: Path = Path("output"), data_dir: Path = Path("data")) -> RunResult:
@@ -622,15 +669,46 @@ def run_pipeline(output_dir: Path = Path("output"), data_dir: Path = Path("data"
     conn = get_connection()
     try:
         last = conn.execute(
-            "SELECT snapshot_hash FROM ringcentral_sync_runs ORDER BY id DESC LIMIT 1"
+            "SELECT snapshot_hash, rows_json FROM ringcentral_sync_runs ORDER BY id DESC LIMIT 1"
         ).fetchone()
         changed = last is None or last["snapshot_hash"] != snapshot_hash
+        # Diffed against the PREVIOUS run's own persisted row snapshot, not
+        # its CSV file — that file is named by date only and this run's
+        # write_directory_csv() call above may have already overwritten it
+        # if this is a second run today (e.g. an automatic 7am run followed
+        # by a manual "Sync now" later), so it can't be read back reliably.
+        #
+        # last being present but rows_json None means this account has
+        # sync history predating the rows_json/diff_json columns (added
+        # 2026-09-25) — that run's actual rows were never saved, so there's
+        # nothing real to diff against. Reporting "everything added" there
+        # would be actively wrong (confirmed live: the very first run after
+        # adding this showed "306 added" while changed correctly said "No"
+        # — the directory hadn't changed at all, there was just no snapshot
+        # yet to compare it to). diff=None means exactly that: no
+        # comparison basis exists this time, not "nothing changed" and not
+        # "everything is new" — it self-heals from the next run onward once
+        # this run's own rows_json is the previous run to diff against.
+        if last is None:
+            diff = diff_rows([], rows)
+        elif last["rows_json"] is None:
+            diff = None
+        else:
+            diff = diff_rows(json.loads(last["rows_json"]), rows)
+        if diff is not None:
+            for r in diff["added"]:
+                logging.info("  + added: %s (%s)", *describe_row(r))
+            for r in diff["removed"]:
+                logging.info("  - removed: %s (%s)", *describe_row(r))
+            for m in diff["modified"]:
+                logging.info("  ~ modified: %s (%s)", *describe_row(m["after"]))
         conn.execute(
             """INSERT INTO ringcentral_sync_runs
-               (changed, included_count, conflict_count, csv_path, conflicts_path, snapshot_hash)
-               VALUES (?, ?, ?, ?, ?, ?)""",
+               (changed, included_count, conflict_count, csv_path, conflicts_path, snapshot_hash, rows_json, diff_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (int(changed), len(rows), len(conflicts),
-             str(csv_path), str(conflicts_path) if conflicts_path else None, snapshot_hash),
+             str(csv_path), str(conflicts_path) if conflicts_path else None, snapshot_hash,
+             json.dumps(rows), json.dumps(diff) if diff is not None else None),
         )
         conn.commit()
         run_at = conn.execute(
@@ -639,11 +717,15 @@ def run_pipeline(output_dir: Path = Path("output"), data_dir: Path = Path("data"
     finally:
         conn.close()
 
-    logging.info("Summary: %d contacts resolved, %d directory rows, %d conflicts, changed=%s",
-                 len(contacts), len(rows), len(conflicts), changed)
+    diff_summary = (
+        f"added={len(diff['added'])} removed={len(diff['removed'])} modified={len(diff['modified'])}"
+        if diff is not None else "no previous snapshot to diff against"
+    )
+    logging.info("Summary: %d contacts resolved, %d directory rows, %d conflicts, changed=%s, %s",
+                 len(contacts), len(rows), len(conflicts), changed, diff_summary)
 
     return RunResult(rows=rows, conflicts=conflicts, changed=changed,
-                      csv_path=csv_path, conflicts_path=conflicts_path, run_at=run_at)
+                      csv_path=csv_path, conflicts_path=conflicts_path, run_at=run_at, diff=diff)
 
 
 # ---------------------------------------------------------------------------

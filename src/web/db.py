@@ -189,6 +189,15 @@ CREATE INDEX IF NOT EXISTS idx_trust_requests_matter_status ON trust_requests(ma
 
 CORE_SCHEMA_COLUMNS = [
     ("staff_cache", "is_attorney", "INTEGER DEFAULT 0"),
+    # Added 2026-09-25 for the RingCentral diff view (Ted: show what's being
+    # added/removed) — rows_json is this run's own directory snapshot, kept
+    # so the NEXT run can diff against it (the same-day CSV file gets
+    # overwritten by filename, so it can't be read back for that); diff_json
+    # is that comparison already computed against the previous run's
+    # rows_json, precomputed at run time rather than recomputed on every
+    # page view. See ringcentral_directory.py's diff_rows().
+    ("ringcentral_sync_runs", "rows_json", "TEXT"),
+    ("ringcentral_sync_runs", "diff_json", "TEXT"),
 ]
 
 # Every subproject's schema fragment, applied in this order. Each entry is

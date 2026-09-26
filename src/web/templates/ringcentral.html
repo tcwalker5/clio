@@ -41,6 +41,41 @@
   </form>
 </div>
 
+{% if last_run %}
+<div class="panel">
+  <h3>Changes since the previous sync</h3>
+  {% set diff = last_run.diff %}
+  {% if diff is none %}
+  <p class="subtitle">No previous snapshot to compare against yet — this will show starting with the next sync.</p>
+  {% elif diff.added or diff.removed or diff.modified %}
+  <div class="summary-bar">
+    <div class="summary-stat"><strong>{{ diff.added|length }}</strong>added</div>
+    <div class="summary-stat"><strong>{{ diff.removed|length }}</strong>removed</div>
+    <div class="summary-stat"><strong>{{ diff.modified|length }}</strong>modified</div>
+  </div>
+  <table>
+    <thead><tr><th>Change</th><th>Name</th><th>Phone</th></tr></thead>
+    <tbody>
+      {% for r in diff.added %}
+      {% set name, phone = describe_row(r) %}
+      <tr><td><span class="badge ok">Added</span></td><td>{{ name }}</td><td>{{ phone }}</td></tr>
+      {% endfor %}
+      {% for r in diff.removed %}
+      {% set name, phone = describe_row(r) %}
+      <tr><td><span class="badge err">Removed</span></td><td>{{ name }}</td><td>{{ phone }}</td></tr>
+      {% endfor %}
+      {% for m in diff.modified %}
+      {% set name, phone = describe_row(m.after) %}
+      <tr><td><span class="badge warn">Modified</span></td><td>{{ name }}</td><td>{{ phone }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="subtitle">No changes since the previous sync.</p>
+  {% endif %}
+</div>
+{% endif %}
+
 {% if conflicts %}
 <div class="panel">
   <h3>Conflicts <span class="badge warn">needs manual resolution</span></h3>

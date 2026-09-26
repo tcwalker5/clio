@@ -11,6 +11,7 @@ the page surfaces the RingCentral import-page link instead, for the person at th
 keyboard to click.
 """
 
+import json
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Request
@@ -34,6 +35,14 @@ def _last_run() -> dict | None:
             return None
         data = dict(row)
         data["csv_filename"] = Path(data["csv_path"]).name if data.get("csv_path") else None
+        # Shows by default on every page load, not just right after a manual
+        # "Sync now" click (Ted, 2026-09-25) — this is whatever the most
+        # recent run found, whether that run was triggered here or by the
+        # unattended daily Scheduled Task. rows_json is the heavier full
+        # snapshot kept only so the NEXT run can diff against it; the
+        # template never needs it, so it's left out of the context.
+        data["diff"] = json.loads(data["diff_json"]) if data.get("diff_json") else None
+        data.pop("rows_json", None)
         return data
     finally:
         conn.close()
@@ -47,6 +56,7 @@ def _render(request: Request, **overrides):
         "error": None,
         "conflicts": None,
         "import_url": ringcentral_directory.RINGCENTRAL_IMPORT_URL,
+        "describe_row": ringcentral_directory.describe_row,
     }
     context.update(overrides)
     return render(request, "ringcentral.html", **context)
