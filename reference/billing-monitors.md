@@ -557,6 +557,27 @@ extra 3 over the unfiltered 121 being the matter-less trust summaries that
 correctly appear in *both* the open and closed reports (they always pass, per the
 bucketing rule above), confirming the arithmetic lines up exactly.
 
+**Print margin cutoff, fixed same day (Ted: "The print report cuts off the right
+margin. If I reduce it 62% it all fits. I don't want the text to be smaller...").**
+Real cause: `main.wide`'s 1800px `max-width` and `.table-scroll`'s fit-content
+sizing (`style.css`, both screen-only rules with no print override) carried
+straight through into the print layout — the browser rendered the page at up to
+1800 CSS px wide and clipped whatever didn't fit the physical paper at 100% scale,
+instead of reflowing to it. `collections_action_report.html`'s own `@media print`
+block now forces both back to the page's true width
+(`main.wide, main { max-width: none !important; width: 100% !important; }`,
+`.table-scroll { width: 100% !important; ... }`), and both the outer report table
+and the nested bill sub-table get `table-layout: fixed` with explicit per-column
+percentage widths (plus tighter padding) instead of letting auto-layout spread
+whatever width was left over across every column — including the short date
+columns, which is what had produced the wide, specific gap between Issued and Due
+Ted flagged. Font size deliberately untouched throughout, per Ted's own constraint —
+this reclaims space from the oversized container and column allocation, not by
+shrinking anything. Matter and Total Balance also needed `white-space: normal`
+added for print (Handling/Confirmed already had it) since a fixed column width
+does nothing to wrap `nowrap` content on its own — it would just overflow the cell
+instead of respecting the width.
+
 **Summary-bar totals and the past-due count now recompute from whatever's visible,
 same day (Ted: "The summaries at the top of the page need to match the filtered rows
 below")** — a real gap in the first cut of this filter: the three `summary-bar`
