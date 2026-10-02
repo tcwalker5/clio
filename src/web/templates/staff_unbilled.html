@@ -2,7 +2,7 @@
 {% block title %}Staff Unbilled{% endblock %}
 {% block content %}
 <h1>Staff Unbilled Report</h1>
-<p class="subtitle">Who's billing time that's at risk of not getting collected. Already filtered to matters where the client's trust balance no longer covers the matter's real WIP (unbilled activity + any draft/awaiting-approval bill total) — matters with retainer funds still available to cover the work aren't shown at all. One row per staff member — click to expand into the at-risk matters behind that total. "Owed"/"Matter WIP"/"Trust Balance" are matter-level figures, not per-user splits — if two staff both have unbilled time on the same matter, both see the same values for it, so don't sum those columns across staff.</p>
+<p class="subtitle">Who's billing time that's at risk of not getting collected. Already filtered to matters where the client's trust balance no longer covers the matter's real WIP (unbilled activity + any draft/awaiting-approval bill total) — matters with retainer funds still available to cover the work aren't shown at all. One row per staff member — click to expand into the at-risk matters behind that total. "Owed"/"Matter WIP"/"Trust Balance" are matter-level figures, not per-user splits — if two staff both have unbilled time on the same matter, both see the same values for it, so don't sum those columns across staff. "Client-Level Trust" is money Clio holds on the client contact itself rather than on any matter — usually a retainer that should be moved onto the matter. Shortfall already counts it, and any matter with some is flagged.</p>
 
 {% if error %}
 <div class="panel"><p class="error-text">{{ error }}</p></div>
@@ -47,17 +47,18 @@
           <table class="nowrap detail-table">
             <thead><tr>
               <th>Matter</th><th>Client</th><th>Unbilled Activity</th>
-              <th>Matter WIP</th><th>Trust Balance</th><th>Shortfall</th>
+              <th>Matter WIP</th><th>Trust Balance</th><th>Client-Level Trust</th><th>Shortfall</th>
               <th>Owed (Outstanding Bills)</th>
             </tr></thead>
             <tbody>
               {% for r in s.rows %}
               <tr>
-                <td>{{ r.display_number }}</td>
+                <td>{{ r.display_number }}{% if r.funds_at_client_level %} <span class="badge err" title="${{ r.client_trust_balance|money }} is held in trust on the client, not on this matter — likely needs to be moved to the matter in Clio. If this client has more than one matter, the same amount shows on each.">⚠ Trust at client level</span>{% endif %}</td>
                 <td>{{ r.client_name }}</td>
                 <td>${{ r.total_unbilled|money }}</td>
                 <td>${{ r.matter_wip|money }}</td>
                 <td>${{ r.matter_trust_balance|money }}</td>
+                <td>{% if r.funds_at_client_level %}${{ r.client_trust_balance|money }}{% else %}—{% endif %}</td>
                 <td>${{ r.shortfall|money }}</td>
                 <td>${{ r.total_owed|money }}</td>
               </tr>

@@ -689,6 +689,31 @@ across rows for a genuine per-staff total.
 a non-open matter is skipped and counted in the log rather than silently
 dropped.
 
+**Client-level trust, added 2026-09-28 (Ted: "I ran across one that had the
+funds in the wrong place"):** Clio can hold trust on the client contact
+itself, not on any matter — typically a client-level trust request paid
+before the matter existed and never moved over (the same mixup
+`/collections`' "⚠ Check trust level" badge watches for, from the other
+side). Each at-risk row now also carries a **Client-Level Trust** figure,
+read from `Contact.account_balances{type=Trust}` — **not documented on
+Contact in `reference/openapi.json`**, confirmed live the same day that it
+works and holds client-level funds only, separate from the matters'
+balances (SAMANTHA CASTILLO: $198.36 on the contact vs. a separate
+$1,419.80 across her matters). Only 3 of 2,216 contacts held any that day.
+- The at-risk filter is **unchanged** (matter trust vs. WIP), so a matter
+  whose retainer is sitting at the client level still appears — flagged
+  with a red "⚠ Trust at client level" badge — instead of dropping out as
+  "covered." Surfacing that misplacement is the point.
+- **Shortfall now nets client-level trust out** (`WIP − matter trust −
+  client trust`, floored at 0), since that money does exist once moved.
+  Confirmed live: SEWARD, KIMBERLEY (WIP $1,435, matter trust $0, client
+  trust $7,935) and SANTOS, PRISCILLA (WIP $2,855, $0, $7,995) both show
+  flagged with $0 shortfall.
+- Client-level trust is per client, not per matter — a client with two
+  at-risk matters shows the same amount on both rows (tooltip says so).
+- Fetched only for the at-risk rows' clients (`contacts.json?ids[]=…`), not
+  a firm-wide contacts sweep. Also a new CSV column.
+
 ## Workflow
 ```powershell
 # Read-only report (writes output/staff_unbilled_YYYY-MM-DD.csv + a log)

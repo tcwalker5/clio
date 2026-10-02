@@ -46,6 +46,22 @@ trust/WIP/outstanding footprint) are skipped here too for the same reason
 — reusing trust_monitor.build_trust_statuses() directly rather than
 reimplementing its exclusions.
 
+**Client-level trust (2026-09-28, Ted):** Clio can hold trust on the
+client contact itself, not allocated to any matter — e.g. a client-level
+trust request paid before the matter existed and never moved over. Ted
+found a real at-risk row whose retainer was sitting there instead of on
+the matter. Every at-risk row now also carries its client's client-level
+trust (`client_trust_balance`), read from Contact.account_balances — a
+field reference/openapi.json does NOT document on Contact; confirmed live
+2026-09-28 that it works and is client-level only (SAMANTHA CASTILLO:
+$198.36 on the contact, a separate $1,419.80 across her matters; 3 of
+2,216 contacts held any client-level trust that day). The at-risk filter
+itself is unchanged (matter trust vs. WIP) so misplaced funds still
+surface as a flagged row rather than hiding it; Shortfall nets
+client-level trust out, since that money does exist to cover the work
+once moved. Fetched only for at-risk rows' clients (ids[] calls), not a
+firm-wide contacts sweep.
+
 Usage:
   uv run src/staff_unbilled_monitor.py
 """
@@ -87,6 +103,11 @@ ACTIVITIES_ENDPOINT = f"{BASE_URL}/api/v4/activities.json"
 ACTIVITIES_FIELDS = "id,type,total,matter{id},user{id,name}"
 ACTIVITIES_STATUS = "unbilled"
 
+CONTACTS_ENDPOINT = f"{BASE_URL}/api/v4/contacts.json"
+# account_balances on a Contact is undocumented in reference/openapi.json —
+# confirmed live 2026-09-28, see module docstring.
+CONTACTS_FIELDS = "id,account_balances{id,balance,type,name}"
+
 PAGE_SIZE = 200
 
 
@@ -111,11 +132,16 @@ class StaffUnbilledRow:
     user_name: str
     matter_id: int
     display_number: str
+    client_id: int | None
     client_name: str
     total_unbilled: float
     total_owed: float  # matter-level, NOT per-user — see module docstring
     matter_wip: float  # matter-level — trust_monitor's WIP (unbilled + draft/awaiting-approval bills)
     matter_trust_balance: float  # matter-level — Clio Trust account balance
+    # client-level trust held on the contact, not on any matter — filled in
+    # by attach_client_trust() for at-risk rows only. Shared across all of
+    # that client's matters, so it repeats on each of their rows.
+    client_trust_balance: float = 0.0
 
     @property
     def cushion(self) -> float:
@@ -123,14 +149,21 @@ class StaffUnbilledRow:
 
     @property
     def at_risk(self) -> bool:
-        """Trust doesn't even cover WIP — see module docstring for why this
-        is a stricter, buffer-free condition than trust_monitor.py's own
-        $2,500-cushion "flagged" check."""
+        """Matter trust doesn't even cover WIP — see module docstring for
+        why this is a stricter, buffer-free condition than trust_monitor.py's
+        own $2,500-cushion "flagged" check. Deliberately matter trust only:
+        a row covered only by client-level trust still shows, flagged, so
+        the misplaced funds get noticed and moved."""
         return self.cushion < 0
 
     @property
     def shortfall(self) -> float:
-        return max(0.0, -self.cushion)
+        """What's still uncovered after counting client-level trust too."""
+        return max(0.0, -(self.cushion + self.client_trust_balance))
+
+    @property
+    def funds_at_client_level(self) -> bool:
+        return self.client_trust_balance > 0.004
 
 
 @dataclass
@@ -234,6 +267,7 @@ def build_rows(
             user_name=user_names.get(uid, ""),
             matter_id=mid,
             display_number=m.get("display_number", ""),
+            client_id=client.get("id"),
             client_name=client.get("name", ""),
             total_unbilled=total,
             total_owed=outstanding_by_matter.get(mid, 0.0),
@@ -247,6 +281,32 @@ def build_rows(
             skipped_no_trust_status,
         )
     return rows
+
+
+def fetch_client_trust_balances(session: requests.Session, client_ids: set[int]) -> dict[int, float]:
+    """Client-level Trust balance per contact (see module docstring) for
+    just the given clients — ids[] calls in chunks of PAGE_SIZE, not a
+    firm-wide contacts sweep. Clients with none are simply absent."""
+    balances: dict[int, float] = {}
+    ids = sorted(client_ids)
+    for start in range(0, len(ids), PAGE_SIZE):
+        chunk = ids[start:start + PAGE_SIZE]
+        resp = session.get(
+            CONTACTS_ENDPOINT,
+            params={"fields": CONTACTS_FIELDS, "ids[]": chunk, "limit": PAGE_SIZE},
+        )
+        if resp.status_code != 200:
+            raise RuntimeError(f"Failed to fetch client trust balances: {resp.status_code} {resp.text[:200]}")
+        for c in resp.json().get("data", []):
+            trust = sum((b.get("balance") or 0.0) for b in (c.get("account_balances") or []) if b.get("type") == "Trust")
+            if trust:
+                balances[c["id"]] = float(trust)
+    return balances
+
+
+def attach_client_trust(rows: list[StaffUnbilledRow], client_balances: dict[int, float]) -> None:
+    for r in rows:
+        r.client_trust_balance = client_balances.get(r.client_id, 0.0)
 
 
 def build_user_summaries(rows: list[StaffUnbilledRow]) -> list[UserSummary]:
@@ -279,13 +339,14 @@ def write_report_csv(rows: list[StaffUnbilledRow], path: Path) -> None:
         writer = csv.writer(f)
         writer.writerow([
             "User", "Matter", "Client", "Unbilled Activity",
-            "Matter WIP", "Trust Balance", "Shortfall", "Owed (Outstanding Bills)",
+            "Matter WIP", "Trust Balance", "Client-Level Trust", "Shortfall", "Owed (Outstanding Bills)",
         ])
         for r in sorted(rows, key=lambda r: (r.user_name, -r.shortfall)):
             writer.writerow([
                 r.user_name, r.display_number, r.client_name,
                 f"{r.total_unbilled:.2f}",
-                f"{r.matter_wip:.2f}", f"{r.matter_trust_balance:.2f}", f"{r.shortfall:.2f}",
+                f"{r.matter_wip:.2f}", f"{r.matter_trust_balance:.2f}",
+                f"{r.client_trust_balance:.2f}", f"{r.shortfall:.2f}",
                 f"{r.total_owed:.2f}",
             ])
 
@@ -313,6 +374,10 @@ def run_pipeline(output_dir: Path = Path("output")) -> list[StaffUnbilledRow]:
 
     all_rows = build_rows(matters, activities, outstanding_by_matter, trust_statuses)
     rows = [r for r in all_rows if r.at_risk]
+    attach_client_trust(rows, fetch_client_trust_balances(session, {r.client_id for r in rows if r.client_id}))
+    misplaced = {r.matter_id for r in rows if r.funds_at_client_level}
+    if misplaced:
+        logging.info("%d at-risk matter(s) have trust held at the client level, not on the matter", len(misplaced))
 
     today = datetime.today().strftime("%Y-%m-%d")
     output_dir.mkdir(exist_ok=True)
