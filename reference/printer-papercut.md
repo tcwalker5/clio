@@ -75,9 +75,15 @@ Was `"Prints/Copies/Scans — <month>: N pages (...)"` (2026-09-01–2026-09-09)
 wording, check all three.
 
 **Outputs:**
-- `output/expenses_YYYY-MM.json` — API payloads (always written)
-- `output/exceptions_YYYY-MM.csv` — names that didn't match (manual resolution needed)
+- `output/expenses_<from>_to_<to>.json` — API payloads (always written), e.g.
+  `expenses_2026-09-01_to_2026-09-15.json`
+- `output/exceptions_<from>_to_<to>.csv` — names that didn't match (manual resolution needed)
 - `logs/printer_expenses_YYYYMMDD.log`
+
+Named by the report's From/To range since 2026-10-01 (Ted) — was `expenses_YYYY-MM.json`
+/ `exceptions_YYYY-MM.csv`, which meant an end-of-month run silently overwrote that
+month's mid-month files. Falls back to `YYYY-MM` only if the header range can't be
+read. Files from before this date keep their old month-only names.
 
 ## Manual overrides
 When a name doesn't auto-match (different spelling, joint client, etc.), add it to
@@ -92,7 +98,7 @@ MANUAL_MATTER_MAP: dict[str, int] = {
 ```powershell
 # 1. Drop new Papercut export into data/
 
-# 2. Dry run — check output/exceptions_YYYY-MM.csv for unmatched names
+# 2. Dry run — check output/exceptions_<from>_to_<to>.csv for unmatched names
 uv run src/printer_expenses.py --dry-run
 
 # 3. Fix exceptions: add matter IDs to MANUAL_MATTER_MAP, re-run dry-run
