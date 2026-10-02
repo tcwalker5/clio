@@ -292,7 +292,9 @@ hard to audit) — not before.
   `reference/printer-papercut.md`), dashboard page only, no unattended schedule yet
 - RingCentral contact synchronization — built, has a dashboard page (`/ringcentral`)
   *and* its own standalone daily Windows Scheduled Task (`sync-ringcentral.bat`) — the
-  precedent that became the decided pattern above (#2)
+  precedent that became the decided pattern above (#2). **That task was disabled
+  2026-09-29** — the final upload step is manual anyway, so the sync is now run by
+  hand from `/ringcentral` (see `reference/ringcentral.md`)
 - Matter-based print cost exports — built as Printer Expenses, dashboard page only,
   no scheduling yet
 - Client Assignment — built (see `reference/client-assignment.md`), dashboard page

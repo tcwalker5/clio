@@ -226,6 +226,14 @@ schtasks /create /tn "Clio RingCentral Sync" /tr "C:\Users\TEDMINI\projects\clio
 Registering this is a deliberate, one-time manual step (persistent OS-level
 automation is confirmed with the user before being created, not silently set up).
 
+**Disabled 2026-09-29 (Ted) — sync is now fully manual.** The last step (uploading
+the CSV to RingCentral) is always manual anyway, so a nightly build bought nothing;
+Ted also noted the browser-on-change never actually popped up from the scheduled run.
+Use `/ringcentral`'s "Sync now" (or the CLI) when contacts change, then upload. The
+task was **disabled, not deleted** — `Enable-ScheduledTask -TaskName "Clio RingCentral
+Sync"` turns it back on. Text above describing "the unattended daily Scheduled Task"
+/ "an automatic 7am run" is historical as of this date.
+
 **Permission note:** `/contacts.json` wasn't exercised anywhere in this repo before
 this subproject and there was some doubt it might need a separate **Contacts**
 permission checked in the Clio Developer Portal (this app's confirmed-granted scopes
