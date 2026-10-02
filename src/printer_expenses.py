@@ -258,16 +258,45 @@ def setup_logging(log_dir: Path) -> None:
 # Parse printer report
 # ---------------------------------------------------------------------------
 
-def parse_printer_report(csv_path: Path) -> tuple[str, bool, str, dict[str, dict]]:
+def report_period_label(header_line: str) -> str | None:
+    """The header's From/To range as note text — "Sep 1-15, 2026",
+    "Aug 2 - Sep 1, 2026", "Dec 16, 2026 - Jan 15, 2027", or a single
+    "Sep 22, 2026". Added 2026-10-01 (Ted) so a mid-month and an
+    end-of-month entry on the same matter aren't both just "Sep 2026".
+    Plain hyphens, not en dashes, to keep the Clio note plain ASCII.
+    None if the header can't be read (caller falls back to the month)."""
+    match = re.search(
+        r"From date\s*=\s*([A-Za-z]+\s+\d+,\s*\d{4}).*?To date\s*=\s*([A-Za-z]+\s+\d+,\s*\d{4})",
+        header_line,
+    )
+    if not match:
+        return None
+    try:
+        from_dt = datetime.strptime(match.group(1).strip(), "%b %d, %Y")
+        to_dt = datetime.strptime(match.group(2).strip(), "%b %d, %Y")
+    except ValueError:
+        return None
+
+    if from_dt == to_dt:
+        return f"{from_dt:%b} {from_dt.day}, {from_dt.year}"
+    if from_dt.year != to_dt.year:
+        return f"{from_dt:%b} {from_dt.day}, {from_dt.year} - {to_dt:%b} {to_dt.day}, {to_dt.year}"
+    if from_dt.month != to_dt.month:
+        return f"{from_dt:%b} {from_dt.day} - {to_dt:%b} {to_dt.day}, {to_dt.year}"
+    return f"{from_dt:%b} {from_dt.day}-{to_dt.day}, {to_dt.year}"
+
+
+def parse_printer_report(csv_path: Path) -> tuple[str, str, bool, str, dict[str, dict]]:
     """
-    Returns (report_date_iso, period_ok, period_note, aggregated) where
-    aggregated is:
+    Returns (report_date_iso, period_label, period_ok, period_note, aggregated)
+    where aggregated is:
       { normalized_name: { "print": int, "scan": int, "copy": int, "total": int } }
     """
     if not csv_path.exists():
         raise FileNotFoundError(f"Printer CSV not found: {csv_path}")
 
     report_date = datetime.today().strftime("%Y-%m-%d")
+    period_label = None
     period_ok, period_note = False, "Could not read the report period from the file header."
     aggregated: dict[str, dict] = {}
 
@@ -278,7 +307,10 @@ def parse_printer_report(csv_path: Path) -> tuple[str, bool, str, dict[str, dict
     for line in lines[:2]:
         if "To date" in line:
             report_date = extract_report_date(line)
+            period_label = report_period_label(line)
             period_ok, period_note = check_report_period(line)
+    if period_label is None:
+        period_label = datetime.strptime(report_date, "%Y-%m-%d").strftime("%b %Y")
 
     # Find the header row — skip comment lines (may be bare or quoted with #)
     data_lines = [l for l in lines if not l.strip().lstrip('"').lstrip("'").startswith("#")]
@@ -313,19 +345,18 @@ def parse_printer_report(csv_path: Path) -> tuple[str, bool, str, dict[str, dict
         logging.info("Report period OK: %s", period_note)
     else:
         logging.warning("Report period MISMATCH: %s", period_note)
-    return report_date, period_ok, period_note, aggregated
+    return report_date, period_label, period_ok, period_note, aggregated
 
 
 # ---------------------------------------------------------------------------
 # Match and build payloads
 # ---------------------------------------------------------------------------
 
-def build_note(name: str, data: dict, report_date: str) -> str:
+def build_note(name: str, data: dict, period_label: str) -> str:
     """Note text alongside the entry's Printing/Scanning/Copying expense
     category (EXPENSE_CATEGORY_ID) — no category-name prefix needed here
-    since Clio already shows the category, so this is just the month total
-    and its breakdown by job type."""
-    month_label = datetime.strptime(report_date, "%Y-%m-%d").strftime("%b %Y")
+    since Clio already shows the category, so this is just the report's
+    date range (see report_period_label), total, and breakdown by job type."""
     parts = []
     if data["print"]:
         parts.append(f"Print: {data['print']}")
@@ -334,12 +365,13 @@ def build_note(name: str, data: dict, report_date: str) -> str:
     if data["copy"]:
         parts.append(f"Copy: {data['copy']}")
     breakdown = ", ".join(parts)
-    return f"{month_label}: {data['total']} pages ({breakdown})"
+    return f"{period_label}: {data['total']} pages ({breakdown})"
 
 
 def match_and_build(
     aggregated: dict,
     report_date: str,
+    period_label: str,
     matters: dict[str, int | None],
     manual_map: dict[str, int] | None = None,
 ) -> tuple[list[dict], list[dict]]:
@@ -400,7 +432,7 @@ def match_and_build(
                 "expense_category": {"id": EXPENSE_CATEGORY_ID},
                 "quantity": total,
                 "price": PRICE_PER_PAGE,
-                "note": build_note(name, data, report_date),
+                "note": build_note(name, data, period_label),
             }
         })
 
@@ -489,7 +521,7 @@ def run_pipeline(
         "Content-Type": "application/json",
     })
 
-    report_date, period_ok, period_note, aggregated = parse_printer_report(input_path)
+    report_date, period_label, period_ok, period_note, aggregated = parse_printer_report(input_path)
 
     if matter_filter:
         filter_key = matter_filter.upper()
@@ -500,7 +532,7 @@ def run_pipeline(
 
     matters_raw = fetch_open_matters(session)
     matters = index_by_display_name(matters_raw)
-    payloads, exceptions = match_and_build(aggregated, report_date, matters, effective_manual_matter_map())
+    payloads, exceptions = match_and_build(aggregated, report_date, period_label, matters, effective_manual_matter_map())
 
     output_dir.mkdir(exist_ok=True)
     period = report_date[:7]  # YYYY-MM

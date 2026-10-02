@@ -58,8 +58,17 @@ here). Without an `expense_category`, Clio prefixes the entry with the generic
 `"Reimbursable Expense: "` instead of showing it under its real category — Ted
 caught this live in Clio and asked for the category to be set explicitly.
 
-**Note text (changed 2026-09-09, again 2026-09-01):** now just `"<month>: N pages
-(...)"` — no category-name prefix, since the expense category above already shows
+**Note text — date range, not month (changed 2026-10-01, Ted):** the note now
+starts with the report's actual From/To range (`report_period_label()`), e.g.
+`"Sep 1-15, 2026: 120 pages (Print: 100, Scan: 12, Copy: 8)"`, `"Sep 16-30, 2026: ..."`,
+a single `"Sep 22, 2026: ..."` for a one-day final bill, or `"Aug 2 - Sep 1, 2026: ..."`
+across months. With mid-month and end-of-month bills, a month-only label made a
+matter's two entries look identical. Plain hyphens to keep the note ASCII; falls back
+to the old `"Sep 2026"` month label only if the header's range can't be read.
+Entries posted before this date say just the month.
+
+**Note text history (changed 2026-09-09, again 2026-09-01):** was `"<month>: N pages
+(...)"` until 2026-10-01 — no category-name prefix, since the expense category above already shows
 "Printing/Scanning/Copying" in Clio and repeating it in the note would be redundant.
 Was `"Prints/Copies/Scans — <month>: N pages (...)"` (2026-09-01–2026-09-09), and
 `"Copies/Printing — ..."` before that — if grepping old logs/Clio notes for prior
