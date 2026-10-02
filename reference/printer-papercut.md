@@ -26,15 +26,28 @@ mislabeled a whole month's expenses: "From date = Aug 2, 2026 ..., To date = Sep
 2026" was actually August's usage (30 of its 31 days), not September; taking "To date"
 alone would have posted it as "Sep 2026".
 
-**Report period sanity check (added 2026-09-01):** `check_report_period()` separately
-flags anything other than the full prior calendar month as a banner in the dashboard
-preview (`period_ok`/`period_note` on `RunResult`) — this import always represents last
-month's usage, run early the following month, so a partial pull, the wrong month, or a
-stale re-upload of an old file is worth catching loudly before posting rather than
-silently billing the wrong period. Separate from `extract_report_date()`'s own tolerant
-fallback (which still produces a best-guess date even from an odd range) — this is
-purely an FYI check on top of that, same relationship Legs' reconciliation check has to
-its own posting logic.
+**Mid-month pulls (2026-10-01, Ted — mid-month bills going forward):** if the "To
+date" falls inside the chosen billing month, the expense is dated the "To date"
+itself rather than that month's last day. Surfaced by a real Sep 1–15 pull that
+posted as 9/30 (removed from Clio by hand; that month was rerun as a full bill).
+Full-month and one-day-over ranges are unaffected: Aug 1–31 → 8/31, Aug 2–Sep 1 →
+8/31, Sep 1–15 → 9/15.
+
+**Report period sanity check (added 2026-09-01, reworked 2026-10-01):**
+`check_report_period()` flags a non-standard period as a banner in the dashboard
+preview (`period_ok`/`period_note` on `RunResult`). Originally it expected only the full
+prior calendar month; reworked when the firm moved to **mid-month and end-of-month
+bills** (Ted). Standard now = within one month, **1st–15th** (mid-month), **16th–last
+day** (end of month), or **1st–last day** (full month) — `MID_MONTH_DAY` constant.
+Also flagged: an end date in the future, or a standard period that ended more than
+`STALE_REPORT_DAYS` (31) ago (likely a stale re-upload). The third real scenario — a
+**final bill for a client closed out on a random date** — is deliberately allowed, not
+blocked: a flagged period adds a required "I've checked the report period… post it
+anyway" checkbox above Confirm & Post (`printer.html`), so it's an explicit
+acknowledgment rather than a banner that's easy to scroll past. The CLI only logs the
+warning, as before. Separate from `extract_report_date()`'s own tolerant fallback
+(which still produces a best-guess date even from an odd range) — same relationship
+Legs' reconciliation check has to its own posting logic.
 
 **Expense Category (added 2026-09-09):** every payload now sets
 `"expense_category": {"id": EXPENSE_CATEGORY_ID}` (`6218073`, Clio's existing

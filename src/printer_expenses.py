@@ -29,7 +29,7 @@ import re
 import sys
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 import requests
@@ -144,6 +144,12 @@ def extract_report_date(header_line: str) -> str:
     in each month picks August here, while still correctly picking June for
     a cleanly-aligned range like 'From date = May 31 ..., To date = Jun 30'
     (1 day in May, 30 in June).
+
+    If the "To date" itself falls inside that billing month, it's used
+    instead of the month's last day (2026-10-01, Ted: mid-month bills going
+    forward) — a Sep 1–15 pull posts as 9/15, not a future-dated 9/30.
+    Full-month ranges are unchanged (Aug 1–31 -> 8/31), and a range pulled
+    a day past month end (Aug 2–Sep 1) still lands on 8/31.
     """
     match = re.search(
         r"From date\s*=\s*([A-Za-z]+\s+\d+,\s*\d{4}).*?To date\s*=\s*([A-Za-z]+\s+\d+,\s*\d{4})",
@@ -162,48 +168,75 @@ def extract_report_date(header_line: str) -> str:
             month_start_to = datetime(to_dt.year, to_dt.month, 1)
             days_in_to_month = (to_dt - max(from_dt, month_start_to)).days + 1
             anchor = from_dt if days_in_from_month >= days_in_to_month else to_dt
+            if (to_dt.year, to_dt.month) == (anchor.year, anchor.month):
+                return to_dt.strftime("%Y-%m-%d")
             last_day = calendar.monthrange(anchor.year, anchor.month)[1]
             return datetime(anchor.year, anchor.month, last_day).strftime("%Y-%m-%d")
     logging.warning("Could not parse report date from header; using today.")
     return datetime.today().strftime("%Y-%m-%d")
 
 
-def check_report_period(header_line: str) -> tuple[bool, str]:
-    """Sanity-checks the header's From/To range against the full prior
-    calendar month — this import always represents last month's usage, run
-    early the following month, so anything else (a partial pull, the wrong
-    month, a stale re-upload of an old file) is worth flagging loudly before
-    posting rather than silently billing the wrong period. Separate from
-    extract_report_date()'s own tolerant fallback (which still produces a
-    best-guess date even from an odd range) — this is purely an FYI check on
-    top of that, same relationship as Legs' reconciliation check."""
-    today = datetime.today()
-    first_of_this_month = datetime(today.year, today.month, 1)
-    last_of_prev_month = first_of_this_month - timedelta(days=1)
-    first_of_prev_month = datetime(last_of_prev_month.year, last_of_prev_month.month, 1)
-    expected_label = first_of_prev_month.strftime("%b %Y")
+# Standard billing periods (2026-10-01, Ted): the firm bills mid-month and at
+# end of month, so a report is "standard" when it covers, within one month:
+#   1st–15th (mid-month), 16th–last day (end of month), or 1st–last day
+#   (full month, e.g. a month the mid-month run was skipped).
+# Anything else is most likely a final bill for a client closed out on a
+# random date — allowed, but the preview makes the user acknowledge it first.
+MID_MONTH_DAY = 15
+STALE_REPORT_DAYS = 31  # a standard period ending longer ago than this is probably an old file
 
+
+def check_report_period(header_line: str) -> tuple[bool, str]:
+    """Sanity-checks the header's From/To range against the firm's standard
+    billing periods (see MID_MONTH_DAY above) and flags anything else, plus
+    an end date in the future or a standard period ending more than
+    STALE_REPORT_DAYS ago (a stale re-upload). Separate from
+    extract_report_date()'s own tolerant fallback (which still produces a
+    best-guess date even from an odd range) — this is an FYI check on top
+    of that; a False result never blocks posting, the dashboard just asks
+    for an explicit acknowledgment first (see printer.html)."""
     match = re.search(
         r"From date\s*=\s*([A-Za-z]+\s+\d+,\s*\d{4}).*?To date\s*=\s*([A-Za-z]+\s+\d+,\s*\d{4})",
         header_line,
     )
     if not match:
-        return False, f"Could not read the report period from the file header — expected {expected_label}."
+        return False, "Could not read the report period from the file header."
 
     try:
         from_dt = datetime.strptime(match.group(1).strip(), "%b %d, %Y")
         to_dt = datetime.strptime(match.group(2).strip(), "%b %d, %Y")
     except ValueError:
-        return False, f"Could not read the report period from the file header — expected {expected_label}."
+        return False, "Could not read the report period from the file header."
 
-    if from_dt != first_of_prev_month or to_dt != last_of_prev_month:
+    period = f"{from_dt.strftime('%b %d, %Y')} to {to_dt.strftime('%b %d, %Y')}"
+    today = datetime.today()
+
+    if to_dt.date() > today.date():
+        return False, f"Report period is {period} — it ends in the future. Double-check this is the right file."
+
+    last_day = calendar.monthrange(to_dt.year, to_dt.month)[1]
+    same_month = (from_dt.year, from_dt.month) == (to_dt.year, to_dt.month)
+    kind = None
+    if same_month:
+        if from_dt.day == 1 and to_dt.day == MID_MONTH_DAY:
+            kind = "mid-month bill"
+        elif from_dt.day == MID_MONTH_DAY + 1 and to_dt.day == last_day:
+            kind = "end-of-month bill"
+        elif from_dt.day == 1 and to_dt.day == last_day:
+            kind = "full-month bill"
+
+    if kind is None:
         return False, (
-            f"Report period is {from_dt.strftime('%b %d, %Y')} to {to_dt.strftime('%b %d, %Y')} — "
-            f"expected the full prior month, {first_of_prev_month.strftime('%b %d')} to "
-            f"{last_of_prev_month.strftime('%b %d, %Y')}. Double-check this is the right file "
-            f"before posting."
+            f"Report period is {period}, which isn't a standard mid-month (1st–15th) or "
+            f"end-of-month (16th–end) period. If this is a final bill for a client being "
+            f"closed out, that's fine — confirm below to proceed."
         )
-    return True, f"Report period matches the expected prior month ({expected_label})."
+    if (today - to_dt).days > STALE_REPORT_DAYS:
+        return False, (
+            f"Report period is {period} ({kind}), which ended more than {STALE_REPORT_DAYS} days "
+            f"ago. Double-check this isn't an old file that's already been posted."
+        )
+    return True, f"Report period {period} — {kind}."
 
 
 def setup_logging(log_dir: Path) -> None:

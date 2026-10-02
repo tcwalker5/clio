@@ -33,7 +33,7 @@
   {% endif %}
 
   {% if not result.period_ok %}
-  <p class="error-text">Report period mismatch — {{ result.period_note }}</p>
+  <p class="error-text">Check the report period — {{ result.period_note }}</p>
   {% else %}
   <p class="subtitle">{{ result.period_note }}</p>
   {% endif %}
@@ -87,6 +87,11 @@
   {% if not live and token and result.payloads %}
   <form method="post" action="/printer/confirm" style="margin-top:1rem;">
     <input type="hidden" name="token" value="{{ token }}">
+    {% if not result.period_ok %}
+    <label style="display:block; margin-bottom:0.5rem;">
+      <input type="checkbox" required> I've checked the report period above and want to post it anyway (e.g. a final bill for a closed-out client)
+    </label>
+    {% endif %}
     <button type="submit">Confirm &amp; Post {{ result.payloads|length }} Entries to Clio</button>
   </form>
   {% endif %}
