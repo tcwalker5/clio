@@ -1,8 +1,16 @@
 """
-soa_now_audit.py — SoA/NoW Close Audit: scans every currently open (or
-pending) matter for a filed Substitution of Attorney or Notice of
-Withdrawal, and surfaces the ones that already have one — a real, direct
-signal that the matter is probably done and was never closed.
+soa_now_audit.py — Case Closing (formerly "SoA/NoW Close Audit"): scans
+every currently open (or pending) matter for a filed Substitution of
+Attorney, Notice of Withdrawal, or Request for Dismissal, and surfaces the
+ones that already have one — a real, direct signal that the matter is
+probably done and was never closed. Also lists closed matters whose final
+bill is settled but still hold trust funds, so the refund gets processed
+(fetch_refund_candidates()).
+
+**Dismissal + trust refunds added 2026-10-14 (Ted: "a case can be closed if
+we have the NoW or SoA, or it is dismissed... if there are trust funds
+available to refund after a final bill, flag that so I can process the
+refund").** See DISMISSAL_PATTERN and fetch_refund_candidates() below.
 
 Standalone from Client Assignment on purpose (Ted, 2026-09-22) — this page
 doesn't concern itself with attorney/staff assignment at all, only with
@@ -61,11 +69,14 @@ original ask on 2026-09-22.
 
 import logging
 import re
+from dataclasses import dataclass
 
 import requests
 
 import client_assignment as ca
 import matter_matching
+import trust_monitor
+from staff_unbilled_monitor import fetch_client_trust_balances
 
 BASE_URL = ca.BASE_URL
 
@@ -83,6 +94,42 @@ BASE_URL = ca.BASE_URL
 # plain-English "filed" word match (client_assignment.FILED_WORD_PATTERN),
 # which Ted did not name here — only sign(ed)/conformed/conf.
 DISPLAY_SIGNAL_PATTERN = re.compile(r"\bsigned?\b|\bconformed\b|\bconf\b", re.IGNORECASE)
+
+# Request for Dismissal (Judicial Council CIV-110) — the document that
+# actually ends a case. Derived from a read-only scratch scan of every
+# open/closed matter (2026-10-14, 267 matters, 65 filenames containing
+# "dismiss"): the bare word is far too broad — most hits were PARTIAL
+# dismissals that don't end the case (a TRO/DVTRO/DVRO or one RFO
+# dismissed, a 401K joinder dismissed) or court notices of a 5-/3-year
+# dismissal deadline. Real case-ending filenames seen: "26.07.21 Request for
+# Dismissal.Conf.pdf", "26.09.04 Req for Dismissal Conf. - Sabbara.pdf",
+# "Original - CIV_110_Request_for_Dismissal.pdf".
+DISMISSAL_PATTERN = re.compile(
+    r"\breq(uest)?\.?[\s_-]+(for[\s_-]+)?dismissal"
+    r"|\bciv[\s_-]*110\b",
+    re.IGNORECASE,
+)
+PARTIAL_DISMISSAL_PATTERN = re.compile(
+    r"\b(dv)?tro\b|\bdvro\b|\brfo\b|joinder|401k"
+    r"|\b\d+[\s-]*year\b|\b(three|five)[\s-]+year\b",
+    re.IGNORECASE,
+)
+# One documents pass per matter covers both kinds — a full scan is already
+# minutes long under Clio's rate limit, and fetching every matter's
+# documents twice would double it. Each finding is tagged with its kind
+# afterward (_finding_kind()).
+CLOSING_DOC_PATTERN = re.compile(
+    f"{ca.SOA_NOW_PATTERN.pattern}|{DISMISSAL_PATTERN.pattern}", re.IGNORECASE
+)
+
+
+def _finding_kind(name: str) -> str | None:
+    """"soa_now" | "dismissal" | None (a partial dismissal — dropped)."""
+    if ca.SOA_NOW_PATTERN.search(name):
+        return "soa_now"
+    if DISMISSAL_PATTERN.search(name) and not PARTIAL_DISMISSAL_PATTERN.search(name):
+        return "dismissal"
+    return None
 
 # "Mark SoA/NoW Filed" writes straight to Clio's own "NoW or SoA filed"
 # matter custom field. Confirmed live 2026-09-23 this field already
@@ -231,8 +278,84 @@ def run_audit(session: requests.Session) -> list[AuditMatter]:
     every page view."""
     matters = fetch_open_matters_for_audit(session)
     for m in matters:
-        findings = ca.find_soa_now_documents(session, m.matter_id)
+        findings = []
+        for f in ca.find_soa_now_documents(session, m.matter_id, pattern=CLOSING_DOC_PATTERN):
+            f["kind"] = _finding_kind(f["name"])
+            if f["kind"]:
+                findings.append(f)
         readiness = ca.evaluate_close_readiness(findings)
         m.findings = findings
         m.can_close = readiness["can_close"]
     return matters
+
+
+# ---------------------------------------------------------------------------
+# Trust refunds — closed matters with a settled final bill but money left
+# in trust (added 2026-10-14). Ted's rule: closed, no unbilled work (WIP =
+# 0, which includes draft/awaiting-approval bills), no unpaid revenue bill,
+# and trust > 0 — that leftover is the refund. Flag only; the refund itself
+# is processed by hand in Clio. Reuses trust_monitor.py's own already-
+# audited WIP/trust/outstanding math rather than re-deriving it.
+# ---------------------------------------------------------------------------
+
+REFUND_EPSILON = 0.005  # ignore sub-cent float residue
+
+
+@dataclass
+class RefundCandidate:
+    matter_id: int
+    display_number: str
+    client_id: int
+    client_name: str
+    attorney_name: str
+    matter_trust: float
+    # held on the contact, not any matter — shown in its own column, since
+    # it's one balance shared by every matter that client has
+    client_trust: float
+
+
+def fetch_refund_candidates(session: requests.Session) -> list[RefundCandidate]:
+    """Closed matters meeting the refund rule above. Client-level trust
+    (Contact.account_balances, via staff_unbilled_monitor) is shown
+    alongside and can qualify a matter on its own — money stuck on the
+    contact is just as refundable once the work is done — except when that
+    client still has an open/pending matter, where it may still be working."""
+    closed = matter_matching.fetch_open_matters(session, fields=trust_monitor.MATTERS_FIELDS, status="closed")
+    never_billed = trust_monitor.fetch_billable_matters_unbilled(session)
+    bill_wip = trust_monitor.fetch_bills_by_matter(session, trust_monitor.BILL_WIP_STATES, "total")
+    outstanding = trust_monitor.fetch_bills_by_matter(session, trust_monitor.BILL_OUTSTANDING_STATES, "balance")
+
+    client_ids = {int(m["client"]["id"]) for m in closed if (m.get("client") or {}).get("id")}
+    client_trust = fetch_client_trust_balances(session, client_ids)
+    active = matter_matching.fetch_open_matters(session, fields="id,client{id}", status="open,pending")
+    clients_with_active = {int(m["client"]["id"]) for m in active if (m.get("client") or {}).get("id")}
+
+    results: list[RefundCandidate] = []
+    for m in closed:
+        if (m.get("display_number") or "").strip().upper() in ca.EXCLUDED_MATTER_NAMES:
+            continue
+        client = m.get("client") or {}
+        cid = int(client["id"]) if client.get("id") else 0
+        if cid in trust_monitor.FIRM_OVERHEAD_CLIENT_IDS:
+            continue
+        mid = m["id"]
+        wip = never_billed.get(mid, 0.0) + bill_wip.get(mid, 0.0)
+        if wip > REFUND_EPSILON or outstanding.get(mid, 0.0) > REFUND_EPSILON:
+            continue  # final bill not settled yet
+        m_trust = float(next(
+            (b.get("balance") or 0.0 for b in (m.get("account_balances") or []) if b.get("type") == "Trust"), 0.0
+        ))
+        c_trust = client_trust.get(cid, 0.0)
+        if m_trust <= REFUND_EPSILON and (c_trust <= REFUND_EPSILON or cid in clients_with_active):
+            continue
+        results.append(RefundCandidate(
+            matter_id=mid,
+            display_number=m.get("display_number") or "",
+            client_id=cid,
+            client_name=client.get("name") or "",
+            attorney_name=(m.get("responsible_attorney") or {}).get("name") or "",
+            matter_trust=m_trust,
+            client_trust=c_trust,
+        ))
+    logging.info("Trust refund check: %d closed matters, %d with trust to refund", len(closed), len(results))
+    return sorted(results, key=lambda r: -(r.matter_trust + r.client_trust))

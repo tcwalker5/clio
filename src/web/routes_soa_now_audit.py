@@ -1,7 +1,10 @@
 """
-routes_soa_now_audit.py — SoA/NoW Close Audit page: every open/pending
-matter, checked for a filed Substitution of Attorney or Notice of
-Withdrawal, with a Close Case action and a "Mark SoA/NoW Filed" checkbox.
+routes_soa_now_audit.py — Case Closing page (formerly "SoA/NoW Close
+Audit"; URL kept as /soa-now-audit so existing bookmarks still work): every
+open/pending matter, checked for a filed Substitution of Attorney, Notice
+of Withdrawal, or Request for Dismissal, with a Close Case action and a
+"Mark SoA/NoW Filed" checkbox — plus a Trust Refunds section listing closed
+matters whose final bill is settled but still hold trust (added 2026-10-14).
 
 See soa_now_audit.py's module docstring for why this is deliberately
 separate from Client Assignment (no attorney/staff-assignment concerns
@@ -47,6 +50,13 @@ _last_scanned_count: int | None = None
 # expectations before clicking Run Audit again (Ted, 2026-09-24).
 _last_run_duration_seconds: float | None = None
 
+# Trust Refunds section — its own button and cache, not part of Run Audit:
+# the refund check is a handful of batched calls (seconds), while the
+# document scan is minutes, and nobody should wait on the slow one just to
+# see who's owed a refund.
+_last_refunds: list[soa_now_audit.RefundCandidate] | None = None
+_last_refunds_at: datetime | None = None
+
 
 def _run_audit_now() -> list[soa_now_audit.AuditMatter]:
     session = client_assignment.build_session()
@@ -78,7 +88,24 @@ async def soa_now_audit_home(request: Request, _: None = Depends(require_auth)):
         matters=matters_sorted, stats=stats, last_run_at=_last_run_at,
         scanned_count=_last_scanned_count, duration_text=duration_text,
         clio_folder_url=soa_now_audit.clio_folder_url,
+        refunds=_last_refunds, refunds_at=_last_refunds_at,
+        refund_total=sum(r.matter_trust + r.client_trust for r in _last_refunds) if _last_refunds else 0.0,
     )
+
+
+@router.post("/refunds")
+async def soa_now_audit_refunds(_: None = Depends(require_auth)):
+    global _last_refunds, _last_refunds_at
+
+    def _do() -> list[soa_now_audit.RefundCandidate]:
+        return soa_now_audit.fetch_refund_candidates(client_assignment.build_session())
+
+    try:
+        _last_refunds = await run_in_threadpool(_do)
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+    _last_refunds_at = datetime.now()
+    return JSONResponse({"success": True, "count": len(_last_refunds)})
 
 
 @router.post("/run")

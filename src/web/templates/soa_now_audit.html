@@ -1,14 +1,15 @@
 {% extends "base.html" %}
-{% block title %}SoA/NoW Close Audit{% endblock %}
+{% block title %}Case Closing{% endblock %}
 {% block main_class %}wide{% endblock %}
 {% block content %}
-<h1>SoA/NoW Close Audit</h1>
-<p class="subtitle">Every open or pending matter, checked for a filed Substitution of Attorney or Notice of Withdrawal — a real signal a matter is probably done and was never closed. Only matters with a signed/conformed/conf document on our side are listed below — a bare mention, an unsigned draft, or something found only in OP's own pleadings isn't shown. Not every matter needs one (dismissals, flat-fee matters) — Close Case is never blocked on anything found here, this is a checklist, not a gate. A full scan takes several minutes across the whole caseload, so it only runs when you click Run Audit, not on every page visit.</p>
+<h1>Case Closing</h1>
+<p class="subtitle">Two steps in closing a case. <strong>Ready to close:</strong> every open or pending matter, checked for a filed Substitution of Attorney, Notice of Withdrawal, or Request for Dismissal (CIV-110) — a real signal a matter is done and was never closed. Only matters with a signed/conformed/conf document on our side are listed — an unsigned draft, a partial dismissal (TRO, RFO, joinder), or something found only in OP's own pleadings isn't shown. Close Case is never blocked on anything found here; this is a checklist, not a gate. A full scan takes several minutes, so it only runs when you click Run Audit. <strong>Trust to refund:</strong> closed matters with no unbilled work and no unpaid bills that still hold trust — process the refund in Clio.</p>
 
 {% if error %}
 <div class="panel"><p class="error-text">{{ error }}</p></div>
 {% endif %}
 
+<h2>Ready to close</h2>
 <div class="panel" id="results">
   <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;margin-bottom:0.75rem;">
     <button type="button" class="btn" id="run-audit-btn" onclick="runAudit(this)">{{ "Re-run Audit" if matters is not none else "Run Audit" }}</button>
@@ -32,6 +33,9 @@
     <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.6rem;">
       <div>
         <strong>{{ m.name }}</strong>
+        {% for kind in m.findings|map(attribute="kind")|unique %}
+          <span class="badge">{{ "Dismissal" if kind == "dismissal" else "SoA/NoW" }}</span>
+        {% endfor %}
         {% if m.can_close %}
           <span class="badge ok">Filed in Clio</span>
         {% else %}
@@ -40,10 +44,12 @@
       </div>
 
       <div style="display:flex;gap:0.5rem;align-items:center;">
+        {% if m.soa_now_marked or "soa_now" in m.findings|map(attribute="kind") %}
         <label style="display:flex;align-items:center;gap:0.35rem;font-size:0.85rem;">
           <input type="checkbox" class="mark-filed" data-matter-id="{{ m.matter_id }}" {% if m.soa_now_marked %}checked{% endif %} onchange="markFiled(this)">
           Mark SoA/NoW Filed
         </label>
+        {% endif %}
         <a class="btn secondary" href="https://app.clio.com/nc/#/matters/{{ m.matter_id }}/document_management" target="_blank" rel="noopener">Open matter</a>
         <button type="button" class="btn secondary close-btn" data-matter-id="{{ m.matter_id }}" onclick="closeCase(this)">Close Case</button>
       </div>
@@ -65,7 +71,59 @@
   {% endif %}
 </div>
 
+<h2>Trust to refund</h2>
+<div class="panel" id="refunds">
+  <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;margin-bottom:0.75rem;">
+    <button type="button" class="btn" onclick="checkRefunds(this)">{{ "Re-check Refunds" if refunds is not none else "Check Refunds" }}</button>
+    {% if refunds_at %}
+    <span style="font-size:0.85rem;color:var(--text-muted);">Last checked: {{ refunds_at.strftime("%Y-%m-%d %I:%M %p") }}</span>
+    {% endif %}
+  </div>
+
+  {% if refunds is none %}
+  <p class="subtitle">Not checked yet this session — click Check Refunds. Takes a few seconds.</p>
+  {% elif not refunds %}
+  <p class="subtitle">No closed matters with trust left to refund.</p>
+  {% else %}
+  <div class="summary-bar">
+    <div class="summary-stat"><strong>{{ refunds|length }}</strong>closed matters</div>
+    <div class="summary-stat"><strong>${{ "{:,.2f}".format(refund_total) }}</strong>to refund</div>
+  </div>
+  <table>
+    <thead><tr><th>Matter</th><th>Attorney</th><th style="text-align:right;">Matter trust</th><th style="text-align:right;">Client-level trust</th><th></th></tr></thead>
+    <tbody>
+    {% for r in refunds %}
+    <tr>
+      <td><strong>{{ r.display_number }}</strong></td>
+      <td>{{ r.attorney_name }}</td>
+      <td style="text-align:right;">${{ "{:,.2f}".format(r.matter_trust) }}</td>
+      <td style="text-align:right;">{% if r.client_trust > 0.004 %}${{ "{:,.2f}".format(r.client_trust) }}{% else %}<span style="color:var(--text-muted);">—</span>{% endif %}</td>
+      <td><a class="btn secondary" href="https://app.clio.com/nc/#/matters/{{ r.matter_id }}/transactions" target="_blank" rel="noopener">Open in Clio</a></td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+
 <script>
+async function checkRefunds(button) {
+  button.disabled = true;
+  const originalLabel = button.textContent;
+  button.textContent = "Checking...";
+  try {
+    const resp = await fetch("/soa-now-audit/refunds", { method: "POST" });
+    const body = await resp.json();
+    if (!resp.ok || !body.success) throw new Error(body.error || "Check failed");
+  } catch (e) {
+    button.disabled = false;
+    button.textContent = originalLabel;
+    alert(`Couldn't check refunds: ${e.message}`);
+    return;
+  }
+  window.location.reload();
+}
+
 async function runAudit(button) {
   button.disabled = true;
   const originalLabel = button.textContent;

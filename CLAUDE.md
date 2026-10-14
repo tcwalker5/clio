@@ -112,7 +112,7 @@ clio/
 │   ├── collections_payment_plan.py  # Collections helper          → reference/billing-monitors.md
 │   ├── staff_unbilled_monitor.py # Staff Unbilled Report — unbilled activity by staff member (read-only) → reference/billing-monitors.md
 │   ├── client_assignment.py      # Client Assignment — Responsible/Originating Attorney, Responsible Staff → reference/client-assignment.md
-│   ├── soa_now_audit.py          # SoA/NoW Close Audit — verify a filed SoA/NoW before closing a fixed matter list → reference/soa-now-audit.md
+│   ├── soa_now_audit.py          # Case Closing — filed SoA/NoW/dismissal on open matters + closed-matter trust refunds → reference/soa-now-audit.md
 │   ├── date_calculator.py        # Date Calculator — two-date duration, length-of-marriage flag → reference/date-calculator.md
 │   ├── outlook_auth.py           # Outlook Calendar Migration (OAuth) → src/outlook_calendar/CLAUDE.md
 │   ├── outlook_migration.py      # Outlook Calendar Migration     → src/outlook_calendar/CLAUDE.md
@@ -202,7 +202,7 @@ The web dashboard (`src/web/app.py`) wraps every other subproject with a browser
 | RingCentral Directory Sync | `src/ringcentral_directory.py` | `reference/ringcentral.md` | No — open manually |
 | Trust Monitor, Collections, Staff Unbilled Report | `src/trust_monitor.py`, `src/collections_*.py`, `src/staff_unbilled_monitor.py` | `reference/billing-monitors.md` | No — open manually |
 | Client Assignment | `src/client_assignment.py` | `reference/client-assignment.md` | No — open manually |
-| SoA/NoW Close Audit | `src/soa_now_audit.py` | `reference/soa-now-audit.md` | No — open manually |
+| Case Closing (formerly SoA/NoW Close Audit) | `src/soa_now_audit.py` | `reference/soa-now-audit.md` | No — open manually |
 | Date Calculator | `src/date_calculator.py` | `reference/date-calculator.md` | No — open manually |
 | Clio API — full permission table, pagination gotcha | — | `reference/clio-api.md` | No — open manually, occasional reference |
 

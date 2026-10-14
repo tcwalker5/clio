@@ -2,7 +2,11 @@
 > a per-directory CLAUDE.md off of. Open this yourself before touching it.
 > Root map: `../CLAUDE.md`.
 
-# SoA/NoW Close Audit
+# Case Closing (formerly SoA/NoW Close Audit)
+
+> **Renamed and extended 2026-10-14** — see "Dismissals + Trust refunds" at the end.
+> URL stays `/soa-now-audit` and the module stays `soa_now_audit.py` so bookmarks
+> and history still line up; only the page title and dashboard tile changed.
 
 **Modules:** `src/soa_now_audit.py`, dashboard page at `/soa-now-audit`
 (`src/web/routes_soa_now_audit.py`, `src/web/templates/soa_now_audit.html`) — built
@@ -240,3 +244,54 @@ until it's done, then the page reloads with results. For each matter with a matc
 read the finding's path and open its folder in Clio (`document_management?folder_id=...`)
 to actually look at the document, then Mark SoA/NoW Filed and/or Close Case as
 appropriate — neither blocks the other, and closing removes the matter from the page.
+
+## Dismissals + Trust refunds (added 2026-10-14)
+
+Ted: "a case can be closed if we have the NoW or SoA, or it is dismissed... once it is
+filed, check for any open cases and prompt to close. Then if there are trust funds
+available to refund after a final bill, flag that so I can process the refund."
+Decided to grow this page in place rather than build a new app (same reasoning as the
+2026-09-24 rewrite: one job, "should this close," now with two steps).
+
+### Dismissals
+
+**Validated with a scratch scan first** — every open + closed matter (267), any
+filename containing "dismiss"/CIV-110/RFD: 65 hits on 25 matters, ~20 minutes under
+Clio's rate limit. The bare word "dismiss" is far too broad — most hits were
+**partial** dismissals that don't end the case (TRO/DVTRO/DVRO dismissed, an RFO
+dismissed, a 401K joinder dismissed) or court notices of a 5-/3-year dismissal
+deadline. So:
+
+- `DISMISSAL_PATTERN` — "Request/Req for Dismissal" or "CIV-110" only.
+- `PARTIAL_DISMISSAL_PATTERN` — drops TRO/DVTRO/DVRO/RFO/joinder/401K/N-year matches.
+- `CLOSING_DOC_PATTERN` — SoA/NoW + dismissal combined, passed as the new optional
+  `pattern=` arg to `client_assignment.find_soa_now_documents()` (default unchanged, so
+  `/assignments`' close gate behaves exactly as before). **One documents pass per
+  matter covers both** — doubling the fetch would double an already-minutes-long scan.
+  Each finding gets a `kind` (`"soa_now"`/`"dismissal"`) via `_finding_kind()`.
+- Same display filter as SoA/NoW (sign/conformed/conf on a non-opposing finding) — not
+  widened for dismissals. Known consequence: WELLS, BRITTNEY's "Request for Dismissal
+  filed 4.23.25.pdf" (sits in ORDERS, plain-English "filed" only) does **not** show.
+- On the scan's data, 4 open matters newly surface for dismissal: CHAMBERS, MARIA
+  (conf'd 2024-02-05, still open), COVARRUBIAS, ADRIANNA, PATEL, SANDEEP, SABBARA, LESLI.
+- "Mark SoA/NoW Filed" checkbox only renders on a card with an SoA/NoW finding (or
+  already marked) — it writes the SoA/NoW custom field, meaningless for a dismissal.
+
+### Trust to refund
+
+`soa_now_audit.fetch_refund_candidates()` — **closed** matters where WIP = 0 (never-
+billed + draft/awaiting-approval bills), no unpaid revenue bill (awaiting_payment),
+and trust > 0. Reuses `trust_monitor.py`'s fetchers/constants (same WIP/outstanding
+math as `/trust`) and `staff_unbilled_monitor.fetch_client_trust_balances()`.
+Client-level trust is its own column, and can qualify a matter alone — unless that
+client still has an open/pending matter (the money may still be working there).
+Flag only — the refund is processed by hand in Clio ("Open in Clio" links to the
+matter's Transactions tab).
+
+Own button + in-memory cache (`POST /soa-now-audit/refunds`), separate from Run
+Audit: the refund check is seconds, the document scan is minutes. First live run:
+94 closed matters → 6 to refund, $6,066.20 (FRANK, LINDA $2,050.00; ROGERS, CHAD
+$1,587.40; KENNEDY, KATHERINE $1,401.15; JACKSON, GREG $623.00; HARTMAN, NICOLA
+$223.85; COMER, MEGAN $180.80), no client-level trust on any of them. Same check
+found 32 closed matters still **owing** money — that's collections, deliberately not
+shown here.

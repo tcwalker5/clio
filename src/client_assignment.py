@@ -490,9 +490,11 @@ def _classify_folder_path(tree: dict[int, dict], parent_id: int | None) -> tuple
     return "other", path
 
 
-def find_soa_now_documents(session: requests.Session, matter_id: int) -> list[dict]:
+def find_soa_now_documents(session: requests.Session, matter_id: int, pattern: re.Pattern = SOA_NOW_PATTERN) -> list[dict]:
     """Searches every document in the matter (any folder, any depth) for a
-    name matching SOA_NOW_PATTERN, classifies each match by walking its
+    name matching `pattern` (SOA_NOW_PATTERN unless a caller widens it —
+    soa_now_audit.py passes one that also matches a Request for Dismissal,
+    so a single documents pass covers both instead of fetching twice), classifies each match by walking its
     folder ancestry (_classify_folder_path()), then refines that with
     whatever party/status tokens the filename itself carries per the firm's
     naming convention (_refine_classification()). Returns a list of
@@ -517,7 +519,7 @@ def find_soa_now_documents(session: requests.Session, matter_id: int) -> list[di
         body = resp.json()
         for doc in body.get("data", []):
             name = doc.get("name") or ""
-            if not SOA_NOW_PATTERN.search(name):
+            if not pattern.search(name):
                 continue
             parent = doc.get("parent") or {}
             folder_classification, path = _classify_folder_path(tree, parent.get("id"))
