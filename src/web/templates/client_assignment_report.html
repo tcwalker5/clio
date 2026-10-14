@@ -2,7 +2,8 @@
 {% block title %}Client Assignment Report{% endblock %}
 {% block content %}
 <h1>Client Assignment Report</h1>
-<p class="subtitle no-print">{% if view == "missing" %}Open matters still missing at least one assignment.{% else %}Every open matter, with its current assignments.{% endif %} Set/change an assignment on the <a href="/assignments">Client Assignment</a> page; this view is for printing/review.</p>
+{% set status_word = "" if matter_status == "all" else matter_status ~ " " %}
+<p class="subtitle no-print">{% if view == "missing" %}{{ status_word|capitalize or "All " }}matters still missing at least one assignment.{% else %}Every {{ status_word }}matter, with its current assignments.{% endif %} Set/change an assignment on the <a href="/assignments">Client Assignment</a> page; this view is for printing/review.</p>
 
 {% if error %}
 <div class="panel"><p class="error-text">{{ error }}</p></div>
@@ -12,7 +13,7 @@
 <div class="panel">
   <div class="no-print" style="display:flex;align-items:center;gap:1rem;margin-bottom:0.75rem;">
     <button type="button" class="btn secondary" onclick="window.print()">Print</button>
-    <a class="btn secondary" href="/assignments/report/download?view={{ view }}">Download CSV</a>
+    <a class="btn secondary" href="/assignments/report/download?view={{ view }}&status={{ matter_status }}">Download CSV</a>
   </div>
 
   {% if matters %}
@@ -34,7 +35,7 @@
   </table>
   </div>
   {% else %}
-  <p class="subtitle">{% if view == "missing" %}Nothing missing an assignment right now.{% else %}No open matters.{% endif %}</p>
+  <p class="subtitle">{% if view == "missing" %}Nothing missing an assignment right now.{% else %}No {{ status_word }}matters.{% endif %}</p>
   {% endif %}
 </div>
 

@@ -170,6 +170,7 @@ class MatterAssignment:
     originating_attorney_name: str
     responsible_staff_id: int | None
     responsible_staff_name: str
+    matter_status: str = "open"  # "open" | "pending" | "closed", lowercased
 
     @property
     def missing_count(self) -> int:
@@ -180,9 +181,21 @@ class MatterAssignment:
         return self.missing_count > 0
 
 
-def fetch_matters_for_assignment(session: requests.Session) -> list[MatterAssignment]:
-    """Open matters only (Ted, 2026-09-02) — matches the convention every
-    other monitor/report in this repo uses. Sorted alphabetically by matter
+# /assignments' matter-status dropdown (Ted, 2026-10-14: "all, open, closed.
+# Default to open") -> Clio's own comma-separated status filter. "all"
+# includes pending too, so nothing falls through the gap between the two.
+MATTER_STATUS_FILTERS = {
+    "open": "open",
+    "closed": "closed",
+    "all": "open,pending,closed",
+}
+
+
+def fetch_matters_for_assignment(session: requests.Session, status: str = "open") -> list[MatterAssignment]:
+    """Open matters by default (Ted, 2026-09-02) — matches the convention
+    every other monitor/report in this repo uses; `status` ("open"/"closed"/
+    "all", see MATTER_STATUS_FILTERS) widens it for /assignments' dropdown
+    (added 2026-10-14). Sorted alphabetically by matter
     (display_number is "LAST, FIRST", so this sorts by last name) — changed
     2026-09-16 (Ted) from an earlier most-incomplete-first grouping, which
     visually scattered same-client matters (e.g. two "COLTON, ANN" matters
@@ -191,7 +204,7 @@ def fetch_matters_for_assignment(session: requests.Session) -> list[MatterAssign
     (test/internal matters, added 2026-09-24) before anything else sees the
     list — they never show up as "missing an assignment" here, on the print
     report, on the CSV export, or in the Case Load counts."""
-    matters = fetch_open_matters(session, fields=MATTER_ASSIGNMENT_FIELDS)
+    matters = fetch_open_matters(session, fields=MATTER_ASSIGNMENT_FIELDS, status=MATTER_STATUS_FILTERS[status])
     result = []
     for m in matters:
         if (m.get("display_number") or "").strip().upper() in EXCLUDED_MATTER_NAMES:
@@ -210,6 +223,7 @@ def fetch_matters_for_assignment(session: requests.Session) -> list[MatterAssign
             originating_attorney_name=oa.get("name") or "",
             responsible_staff_id=rs.get("id"),
             responsible_staff_name=rs.get("name") or "",
+            matter_status=(m.get("status") or "").lower(),
         ))
     result.sort(key=lambda x: x.display_number)
     return result

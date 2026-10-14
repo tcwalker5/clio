@@ -79,21 +79,28 @@ def build_pie_chart(counts: list[tuple[str, int]], size: int = 200) -> dict:
     return {"slices": slices, "legend": legend, "total": total}
 
 
-def _load():
+def _load(status: str = "open"):
     session = client_assignment.build_session()
     attorneys, paralegals = client_assignment.get_assignable_users()
-    matters = client_assignment.fetch_matters_for_assignment(session)
+    matters = client_assignment.fetch_matters_for_assignment(session, status=status)
     return matters, attorneys, paralegals
 
 
+def _clean_status(status: str) -> str:
+    """Anything unrecognized falls back to the "open" default rather than
+    erroring — same posture as Collections' matter_status filter."""
+    return status if status in client_assignment.MATTER_STATUS_FILTERS else "open"
+
+
 @router.get("", response_class=HTMLResponse)
-async def assignments_home(request: Request, _: None = Depends(require_auth)):
+async def assignments_home(request: Request, status: str = "open", _: None = Depends(require_auth)):
     from web.app import render
 
+    status = _clean_status(status)
     try:
-        matters, attorneys, paralegals = await run_in_threadpool(_load)
+        matters, attorneys, paralegals = await run_in_threadpool(_load, status)
     except RuntimeError as e:
-        return render(request, "client_assignment.html", error=str(e), matters=None)
+        return render(request, "client_assignment.html", error=str(e), matters=None, matter_status=status)
 
     missing_count = sum(1 for m in matters if m.missing_any)
     return render(
@@ -101,6 +108,7 @@ async def assignments_home(request: Request, _: None = Depends(require_auth)):
         matters=matters, missing_count=missing_count,
         attorneys=attorneys, paralegals=paralegals,
         clio_base_url=client_assignment.BASE_URL,
+        matter_status=status,
     )
 
 
@@ -209,13 +217,14 @@ async def assignments_caseload(request: Request, _: None = Depends(require_auth)
 
 
 @router.get("/report", response_class=HTMLResponse)
-async def assignments_report(request: Request, view: str = "missing", _: None = Depends(require_auth)):
+async def assignments_report(request: Request, view: str = "missing", status: str = "open", _: None = Depends(require_auth)):
     from web.app import render
 
+    status = _clean_status(status)
     try:
-        matters, _, _ = await run_in_threadpool(_load)
+        matters, _, _ = await run_in_threadpool(_load, status)
     except RuntimeError as e:
-        return render(request, "client_assignment_report.html", error=str(e), matters=None)
+        return render(request, "client_assignment_report.html", error=str(e), matters=None, matter_status=status)
 
     if view == "missing":
         matters = [m for m in matters if m.missing_any]
@@ -224,19 +233,21 @@ async def assignments_report(request: Request, view: str = "missing", _: None = 
 
     # Written on every view so the download link always matches what's on
     # screen right now — keyed by `view` (missing/all) so switching views
-    # doesn't require re-visiting the page before downloading the other one.
-    csv_path = Path("output") / f"client_assignment_report_{view}_{datetime.today().strftime('%Y-%m-%d')}.csv"
+    # doesn't require re-visiting the page before downloading the other one
+    # (and by matter status, for the same reason).
+    csv_path = Path("output") / f"client_assignment_report_{view}_{status}_{datetime.today().strftime('%Y-%m-%d')}.csv"
     await run_in_threadpool(client_assignment.write_report_csv, matters_sorted, csv_path)
 
     return render(
         request, "client_assignment_report.html", error=None,
-        matters=matters_sorted, view=view,
+        matters=matters_sorted, view=view, matter_status=status,
     )
 
 
 @router.get("/report/download")
-async def assignments_report_download(view: str = "missing", _: None = Depends(require_auth)):
-    path = Path("output") / f"client_assignment_report_{view}_{datetime.today().strftime('%Y-%m-%d')}.csv"
+async def assignments_report_download(view: str = "missing", status: str = "open", _: None = Depends(require_auth)):
+    status = _clean_status(status)
+    path = Path("output") / f"client_assignment_report_{view}_{status}_{datetime.today().strftime('%Y-%m-%d')}.csv"
     if not path.exists():
         return HTMLResponse("No report generated yet — visit the report page first.", status_code=404)
     return FileResponse(path, filename=path.name, media_type="text/csv")

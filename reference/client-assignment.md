@@ -45,6 +45,16 @@ hardcoded ids, same reasoning `clio_users.py` itself was built for.
 "attorney" name isn't actually marked Attorney in Clio — a misspelled name here would
 otherwise silently vanish from the dropdown instead of erroring.
 
+**Matter-status dropdown, added 2026-10-14 (Ted: "all, open, closed. Default to
+open")** — `/assignments?status=open|closed|all` (same All/Open/Closed control as
+Collections' action report; anything unrecognized falls back to open). Maps through
+`client_assignment.MATTER_STATUS_FILTERS` to Clio's status filter — "all" is
+`open,pending,closed`. The print report and its CSV download carry the same
+`status` param (CSV filename includes it). Non-open rows get a status badge next to
+the matter name and no Close button. **Case Load stays open-only** — it measures
+current workload, and closed matters would inflate it. Live-checked: 171 open, 94
+closed, 265 all. Everything below about "open matters only" describes the default.
+
 **Scope — open matters only, any-field-missing** (both decided 2026-09-02, Ted):
 matches the convention every other monitor in this repo uses (Trust Monitor, Staff
 Unbilled, etc.), and a matter shows up on `/assignments` if it's missing even one of

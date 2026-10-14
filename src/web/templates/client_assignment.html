@@ -2,7 +2,7 @@
 {% block title %}Client Assignment{% endblock %}
 {% block content %}
 <h1>Client Assignment</h1>
-<p class="subtitle">Open matters missing a Responsible Attorney, Originating Attorney, or Responsible Staff assignment. Pick a name from any dropdown to save it immediately to Clio — note that a field can be reassigned later.</p>
+<p class="subtitle">Matters missing a Responsible Attorney, Originating Attorney, or Responsible Staff assignment. Pick a name from any dropdown to save it immediately to Clio — note that a field can be reassigned later.</p>
 
 {% if error %}
 <div class="panel"><p class="error-text">{{ error }}</p></div>
@@ -11,17 +11,25 @@
 {% if matters is not none %}
 <div class="panel" id="results">
   <div class="summary-bar">
-    <div class="summary-stat"><strong>{{ matters|length }}</strong>open matter(s)</div>
+    <div class="summary-stat"><strong>{{ matters|length }}</strong>{{ "" if matter_status == "all" else matter_status ~ " " }}matter(s)</div>
     <div class="summary-stat" id="missing-stat"><strong>{{ missing_count }}</strong>missing an assignment</div>
   </div>
 
   <div style="display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap;margin-bottom:0.75rem;">
     <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.9rem;">
+      Matter status:
+      <select onchange="location.href='/assignments?status=' + this.value" style="padding:0.3rem 0.4rem;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text);font-size:0.85rem;">
+        <option value="all" {% if matter_status == "all" %}selected{% endif %}>All</option>
+        <option value="open" {% if matter_status == "open" %}selected{% endif %}>Open</option>
+        <option value="closed" {% if matter_status == "closed" %}selected{% endif %}>Closed</option>
+      </select>
+    </label>
+    <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.9rem;">
       <input type="checkbox" id="missing-only" checked onchange="filterResults()">
       Show only matters missing an assignment
     </label>
-    <a class="btn secondary" href="/assignments/report?view=missing" target="_blank">Print unassigned only</a>
-    <a class="btn secondary" href="/assignments/report?view=all" target="_blank">Print full list</a>
+    <a class="btn secondary" href="/assignments/report?view=missing&status={{ matter_status }}" target="_blank">Print unassigned only</a>
+    <a class="btn secondary" href="/assignments/report?view=all&status={{ matter_status }}" target="_blank">Print full list</a>
     <a class="btn secondary" href="/assignments/caseload" target="_blank">Case Load</a>
   </div>
 
@@ -40,7 +48,7 @@
     <tbody>
       {% for m in matters %}
       <tr data-missing="{{ 'yes' if m.missing_any else 'no' }}" data-matter-id="{{ m.matter_id }}">
-        <td>{{ m.display_number }}</td>
+        <td>{{ m.display_number }}{% if m.matter_status != "open" %} <span class="badge">{{ m.matter_status|capitalize }}</span>{% endif %}</td>
         <td>{{ m.client_name }}</td>
         <td>
           <select class="assign-select" data-matter-id="{{ m.matter_id }}" data-field="originating_attorney" onchange="setAssignment(this)" style="padding:0.3rem 0.4rem;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text);font-size:0.85rem;">
@@ -70,7 +78,7 @@
           {% if m.missing_any %}<span class="badge warn">{{ m.missing_count }} missing</span>
           {% else %}<span class="badge ok">Complete</span>{% endif %}
         </td>
-        <td><button type="button" class="btn secondary" onclick="closeMatter(this)">Close</button></td>
+        <td>{% if m.matter_status != "closed" %}<button type="button" class="btn secondary" onclick="closeMatter(this)">Close</button>{% endif %}</td>
       </tr>
       {% endfor %}
     </tbody>
