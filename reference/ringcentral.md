@@ -32,6 +32,22 @@ Matter→client linkage uses `matter_matching.fetch_open_matters()` with its `fi
 param extended to include `client{id}` (the same nested-field-selection syntax
 `relationships.py` already used) — a small additive change, not a new pattern.
 
+**Closed matters added 2026-10-09 (Ted: "I want to add closed contacts as well").**
+Scope is now open, pending, *and* closed matters — both default clients and OC/OP —
+controlled by one constant, `TARGET_MATTER_STATUSES = "open,pending,closed"`, which
+feeds both the matters fetch (`status=`) and the OC/OP filter. Former clients and
+old opposing parties still call in, and caller ID should still recognize them. First
+run: 262 clients + 245 OC/OP targeted (was 171 + 189), 418 rows (was 316), 0
+conflicts. Diff showed 105 added / 3 "removed" — the 3 were not drops: each was an
+existing single-contact row whose phone a newly-included closed-matter contact
+shares, so it became a merged row with a new `|`-joined External ID (see Phone dedup
+below). Expect that pattern whenever scope widens.
+
+Remember the CSV only reaches RingCentral when someone uploads it — a contact that
+appears in `output/ringcentral_directory_{date}.csv` but not on the phones (real
+case, same day: CASTRUITA, ESTER, whose matter/phone postdated the last uploaded
+file) just needs the newest file uploaded, not a code fix.
+
 **Contact field shapes** (confirmed live against this account, not guessed): a plain
 `fields=phone_numbers` only returns `{id, etag}` stubs — needs explicit subfield
 selection, `phone_numbers{name,number,default_number}`. `type` (`"Person"`/`"Company"`)

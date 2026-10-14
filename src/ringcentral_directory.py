@@ -2,10 +2,11 @@
 ringcentral_directory.py — Clio contacts/matters -> RingCentral company directory CSV.
 
 Reads (Clio API, live — no manual export step):
-  Open matters + their default client   matter_matching.fetch_open_matters()
-                                         (fields extended with client{id})
+  Open + closed matters' default client matter_matching.fetch_open_matters()
+                                         (fields extended with client{id},
+                                         status=TARGET_MATTER_STATUSES)
   Opposing Counsel / Opposing Party      outlook_calendar.relationships.fetch_oc_op_contacts()
-                                         (filtered to open matters here)
+                                         (filtered to TARGET_MATTER_STATUSES here)
   Contact detail for every resolved ID   fetch_contacts() in this file
                                          (name, type, phone_numbers, company)
 
@@ -69,6 +70,12 @@ CONTACTS_FIELDS = (
 )
 CONTACTS_PAGE_SIZE = 200
 MATTER_FIELDS_WITH_CLIENT = "id,display_number,custom_number,status,client{id}"
+# Which matters' clients and OC/OP belong in the directory. Closed matters were
+# added 2026-10-09 (Ted) — former clients and opposing parties still call in,
+# and caller ID should still recognize them. Clio's comma-separated status
+# syntax; the OC/OP filter below uses the same set (title-cased, as Clio
+# returns matter.status).
+TARGET_MATTER_STATUSES = "open,pending,closed"
 RETRY_DELAYS = [5, 15, 30]  # seconds between retries on 429, same backoff used elsewhere in this project
 
 # Real-data check (2026-07-21): every one of this firm's phone conflicts turned
@@ -233,14 +240,16 @@ class DirectoryContact:
 
 def gather_target_contact_ids(session: requests.Session) -> set[int]:
     """Every Clio contact ID that belongs in the directory: the default client
-    on an open matter, or Opposing Counsel/Opposing Party on an open matter."""
-    matters = fetch_open_matters(session, fields=MATTER_FIELDS_WITH_CLIENT)
+    on any matter in TARGET_MATTER_STATUSES (open, pending, or closed), or
+    Opposing Counsel/Opposing Party on one."""
+    matters = fetch_open_matters(session, fields=MATTER_FIELDS_WITH_CLIENT, status=TARGET_MATTER_STATUSES)
     client_ids = {int(m["client"]["id"]) for m in matters if (m.get("client") or {}).get("id")}
 
+    statuses = {s.strip().title() for s in TARGET_MATTER_STATUSES.split(",")}
     oc_op = fetch_oc_op_contacts(session)
-    oc_op_ids = {c.contact_id for c in oc_op if c.matter_status == "Open" and c.contact_id}
+    oc_op_ids = {c.contact_id for c in oc_op if c.matter_status in statuses and c.contact_id}
 
-    logging.info("Target contacts: %d open-matter clients, %d open-matter OC/OP", len(client_ids), len(oc_op_ids))
+    logging.info("Target contacts: %d clients, %d OC/OP (matter status: %s)", len(client_ids), len(oc_op_ids), TARGET_MATTER_STATUSES)
     return client_ids | oc_op_ids
 
 
