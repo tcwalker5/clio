@@ -2,17 +2,18 @@
 ringcentral_directory.py — Clio contacts/matters -> RingCentral company directory CSV.
 
 Reads (Clio API, live — no manual export step):
-  Open + closed matters' default client matter_matching.fetch_open_matters()
-                                         (fields extended with client{id},
-                                         status=TARGET_MATTER_STATUSES)
-  Opposing Counsel / Opposing Party      outlook_calendar.relationships.fetch_oc_op_contacts()
-                                         (filtered to TARGET_MATTER_STATUSES here)
-  Contact detail for every resolved ID   fetch_contacts() in this file
+  Every Clio contact with a phone        fetch_contacts() in this file
                                          (name, type, phone_numbers, company)
+  Job Title label per contact            fetch_contact_labels() in this file:
+                                         CLIENT for a matter's default client
+                                         (matter_matching.fetch_open_matters(),
+                                         status=TARGET_MATTER_STATUSES), plus every
+                                         Relationship description (CLIENT'S MOTHER,
+                                         OPPOSING COUNSEL, ...)
 
 Writes:
   output/ringcentral_directory_YYYY-MM-DD.csv   RingCentral-ready import file
-  output/ringcentral_conflicts_YYYY-MM-DD.csv   unresolved same-phone contacts (if any)
+  output/ringcentral_conflicts_YYYY-MM-DD.csv   same-phone contacts merged with no firm/KB match (review)
   logs/ringcentral_directory_YYYYMMDD.log
   data/clio_dashboard.db (ringcentral_sync_runs) — one row per run, including a hash
     of the built directory (so a run with no real change can be detected and skipped),
@@ -48,11 +49,12 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
+from clio_token import CLIO_AUTH
+
 ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 load_dotenv(ENV_PATH)
 
 from matter_matching import fetch_open_matters  # noqa: E402
-from outlook_calendar.relationships import fetch_oc_op_contacts  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Clio API
@@ -69,12 +71,13 @@ CONTACTS_FIELDS = (
     "email_addresses{address}"
 )
 CONTACTS_PAGE_SIZE = 200
+RELATIONSHIPS_ENDPOINT = f"{BASE_URL}/api/v4/relationships.json"
+RELATIONSHIPS_FIELDS = "id,description,contact{id}"
 MATTER_FIELDS_WITH_CLIENT = "id,display_number,custom_number,status,client{id}"
-# Which matters' clients and OC/OP belong in the directory. Closed matters were
-# added 2026-10-09 (Ted) — former clients and opposing parties still call in,
-# and caller ID should still recognize them. Clio's comma-separated status
-# syntax; the OC/OP filter below uses the same set (title-cased, as Clio
-# returns matter.status).
+# Scope widened 2026-10-23 (Ted: "add all users"): every Clio contact with a
+# phone goes in the directory, not just clients and OC/OP — family members,
+# minor's counsel, experts etc. call in too. These statuses now only decide
+# which matters' default clients get the CLIENT Job Title label.
 TARGET_MATTER_STATUSES = "open,pending,closed"
 RETRY_DELAYS = [5, 15, 30]  # seconds between retries on 429, same backoff used elsewhere in this project
 
@@ -156,6 +159,14 @@ RC_HEADER_PREAMBLE = (
 
 KB_COLUMNS = ["Phone", "First Name", "Last Name", "Job Title", "Company", "Email"]
 
+# Confirmed live 2026-10-23: a 65-char External ID (six merged Clio IDs) is
+# rejected per row with "Parameter [External ID] value is invalid." while 54
+# chars (five IDs) passes. The same upload WITH a 68-char Job Title failed
+# outright ("The uploaded file cannot be parsed") and passed once Job Title was
+# blanked, so Job Title is held to the same 64. Last Name is NOT limited this
+# way — 120-char merged names were accepted.
+RC_FIELD_MAX = 64
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -236,21 +247,70 @@ class DirectoryContact:
     phone: str  # normalized E.164 — the primary/default number
     email_domain: str | None = None  # non-personal domain, if any
     extra_phones: list[tuple[str, str]] = field(default_factory=list)  # (Clio label lowercased, E.164), any additional distinct numbers beyond the primary
+    job_title: str = ""  # CLIENT and/or this contact's Relationship descriptions, comma-separated
 
 
-def gather_target_contact_ids(session: requests.Session) -> set[int]:
-    """Every Clio contact ID that belongs in the directory: the default client
-    on any matter in TARGET_MATTER_STATUSES (open, pending, or closed), or
-    Opposing Counsel/Opposing Party on one."""
+def _join_within(parts: list[str], sep: str) -> str:
+    """Join parts in order, stopping before the first one that would push the
+    result past RC_FIELD_MAX. Callers put the most important part first
+    (CLIENT for labels), so dropping from the end keeps the useful ones."""
+    out = ""
+    for part in parts:
+        candidate = f"{out}{sep}{part}" if out else part
+        if len(candidate) > RC_FIELD_MAX:
+            break
+        out = candidate
+    return out
+
+
+def _label_from_description(desc: str) -> str:
+    """Relationship descriptions are free text staff type by hand — real data
+    has "Client's mother" / "CLIENT'S MOTHER" / "Opposing Counsel" /
+    "OPPOSING COUNSEL" side by side. Uppercasing and collapsing whitespace
+    folds those case variants together; anything more creative ("Our CL's
+    Mother") is kept as typed rather than guessed at."""
+    return " ".join(sanitize_text(desc.upper()).split())
+
+
+def fetch_contact_labels(session: requests.Session) -> dict[int, str]:
+    """Contact ID -> Job Title label for the directory row: CLIENT for the
+    default client on a matter in TARGET_MATTER_STATUSES, plus every distinct
+    Relationship description the contact has on any matter. Contacts with
+    neither get no entry (blank Job Title) but are still in the directory."""
+    labels: dict[int, set[str]] = {}
+
     matters = fetch_open_matters(session, fields=MATTER_FIELDS_WITH_CLIENT, status=TARGET_MATTER_STATUSES)
-    client_ids = {int(m["client"]["id"]) for m in matters if (m.get("client") or {}).get("id")}
+    for m in matters:
+        cid = (m.get("client") or {}).get("id")
+        if cid:
+            labels.setdefault(int(cid), set()).add("CLIENT")
 
-    statuses = {s.strip().title() for s in TARGET_MATTER_STATUSES.split(",")}
-    oc_op = fetch_oc_op_contacts(session)
-    oc_op_ids = {c.contact_id for c in oc_op if c.matter_status in statuses and c.contact_id}
+    next_url: str | None = None
+    page = 1
+    while True:
+        if next_url:
+            resp = _get_with_retry(session, next_url)
+        else:
+            resp = _get_with_retry(session, RELATIONSHIPS_ENDPOINT,
+                                   params={"fields": RELATIONSHIPS_FIELDS, "limit": CONTACTS_PAGE_SIZE})
+        if resp.status_code != 200:
+            raise RuntimeError(f"Failed to fetch relationships (page {page}): {resp.status_code} {resp.text[:200]}")
+        body = resp.json()
+        for r in body.get("data", []):
+            cid = (r.get("contact") or {}).get("id")
+            label = _label_from_description(r.get("description") or "")
+            if cid and label:
+                labels.setdefault(int(cid), set()).add(label)
+        next_url = (body.get("meta") or {}).get("paging", {}).get("next")
+        page += 1
+        if not next_url:
+            break
 
-    logging.info("Target contacts: %d clients, %d OC/OP (matter status: %s)", len(client_ids), len(oc_op_ids), TARGET_MATTER_STATUSES)
-    return client_ids | oc_op_ids
+    # CLIENT first (the label that matters most when a client calls), rest alphabetical.
+    result = {cid: _join_within(sorted(ls, key=lambda s: (s != "CLIENT", s)), ", ") for cid, ls in labels.items()}
+    logging.info("Job Title labels for %d contacts (%d distinct labels)",
+                 len(result), len({lbl for ls in labels.values() for lbl in ls}))
+    return result
 
 
 def _get_with_retry(session: requests.Session, url: str, params: dict | None = None) -> requests.Response:
@@ -271,16 +331,14 @@ def _get_with_retry(session: requests.Session, url: str, params: dict | None = N
     return resp
 
 
-def fetch_contacts(session: requests.Session, contact_ids: set[int]) -> list[DirectoryContact]:
-    """Fetch name/type/phone/company for exactly the contact IDs already known
-    to be needed. Clio has no server-side "id in (...)" filter for an arbitrary
-    set on this endpoint, so this pages through all contacts once and keeps only
-    matches — the same approach clio_users.fetch_staff_directory() uses for the
-    (smaller) users list."""
+def fetch_contacts(session: requests.Session, labels: dict[int, str]) -> list[DirectoryContact]:
+    """Fetch name/type/phone/company for every Clio contact, keeping those with
+    a usable phone number. `labels` (from fetch_contact_labels()) supplies each
+    contact's Job Title."""
     results: list[DirectoryContact] = []
     next_url: str | None = None
     page = 1
-    matched = 0
+    total = 0
 
     while True:
         if next_url:
@@ -294,9 +352,9 @@ def fetch_contacts(session: requests.Session, contact_ids: set[int]) -> list[Dir
         body = resp.json()
         for c in body.get("data", []):
             cid = c.get("id")
-            if not cid or int(cid) not in contact_ids:
+            if not cid:
                 continue
-            matched += 1
+            total += 1
 
             phones_raw = c.get("phone_numbers") or []
             ordered = sorted(phones_raw, key=lambda p: not p.get("default_number", False))
@@ -327,6 +385,7 @@ def fetch_contacts(session: requests.Session, contact_ids: set[int]) -> list[Dir
                 phone=phone,
                 email_domain=email_domain,
                 extra_phones=phones[1:],
+                job_title=labels.get(int(cid), ""),
             ))
 
         next_url = (body.get("meta") or {}).get("paging", {}).get("next")
@@ -335,7 +394,7 @@ def fetch_contacts(session: requests.Session, contact_ids: set[int]) -> list[Dir
         if not next_url:
             break
 
-    logging.info("Resolved %d/%d target contacts with a usable phone", len(results), len(contact_ids))
+    logging.info("Resolved %d/%d Clio contacts with a usable phone", len(results), total)
     return results
 
 
@@ -381,14 +440,14 @@ def load_knowledge_base(path: Path) -> dict[str, dict]:
 def _row_for_single(c: DirectoryContact) -> dict:
     if c.is_company:
         return {
-            "First Name": "", "Last Name": c.last_name, "Job Title": "",
+            "First Name": "", "Last Name": c.last_name, "Job Title": c.job_title,
             "Company": c.last_name, "Email": "",
             "Home Number": "", "Business Number": "",
             "Mobile Number": "", "Company Main Number": c.phone,
             "Source": "Clio Import", "External ID": str(c.contact_id),
         }
     return {
-        "First Name": c.first_name, "Last Name": c.last_name, "Job Title": "",
+        "First Name": c.first_name, "Last Name": c.last_name, "Job Title": c.job_title,
         "Company": c.company_name, "Email": "",
         "Home Number": "", "Business Number": "",
         "Mobile Number": c.phone, "Company Main Number": "",
@@ -460,6 +519,35 @@ def _merged_last_name(group: list[DirectoryContact]) -> str:
     return ", ".join(names)
 
 
+def _merged_job_title(group: list[DirectoryContact]) -> str:
+    """Every distinct label across the group, in first-seen order."""
+    labels: list[str] = []
+    for c in group:
+        for label in filter(None, (s.strip() for s in c.job_title.split(","))):
+            if label not in labels:
+                labels.append(label)
+    return _join_within(labels, ", ")
+
+
+def _merged_external_id(group: list[DirectoryContact]) -> str:
+    """'|'-joined Clio IDs, as many as fit RC_FIELD_MAX (six don't). Each
+    contact has one primary phone, so even a truncated ID list never collides
+    with another row's — it stays a unique, stable matching key. Order is
+    unchanged from before the cap so existing rows keep their IDs."""
+    return _join_within([str(c.contact_id) for c in group], "|")
+
+
+def _merged_row(group: list[DirectoryContact], phone: str, company: str) -> dict:
+    return {
+        "First Name": "", "Last Name": _merged_last_name(group), "Job Title": _merged_job_title(group),
+        "Company": company, "Email": "",
+        "Home Number": "", "Business Number": "",
+        "Mobile Number": "", "Company Main Number": phone,
+        "Source": "Clio Import",
+        "External ID": _merged_external_id(group),
+    }
+
+
 def build_directory_rows(
     contacts: list[DirectoryContact],
     knowledge_base: dict[str, dict],
@@ -469,8 +557,15 @@ def build_directory_rows(
     straight through; contacts that all share the same Clio Company collapse
     to one company row; contacts that agree on an email domain (even without
     a Clio Company set) collapse the same way; anything left consults the
-    knowledge base, falling through to an unresolved conflict for manual
-    review."""
+    knowledge base, and failing that is still merged into one row with every
+    name in Last Name — but also reported as a conflict for manual review.
+
+    That last fallback changed 2026-10-23 with the all-contacts scope: an
+    unresolved group used to be left OUT of the directory entirely. Dry run
+    against real data: 10 such phones, half the same person entered twice in
+    Clio, the rest spouses / attorney + assistant — all better recognized
+    under a combined name than not recognized at all. A knowledge-base entry
+    for the phone still overrides the merge."""
     by_phone: dict[str, dict[int, DirectoryContact]] = {}
     for c in contacts:
         by_phone.setdefault(c.phone, {}).setdefault(c.contact_id, c)
@@ -497,15 +592,7 @@ def build_directory_rows(
 
         company_ids = [c.company_id for c in group]
         if all(cid is not None for cid in company_ids) and len(set(company_ids)) == 1:
-            rep = group[0]
-            rows.append({
-                "First Name": "", "Last Name": _merged_last_name(group), "Job Title": "",
-                "Company": rep.company_name, "Email": "",
-                "Home Number": "", "Business Number": "",
-                "Mobile Number": "", "Company Main Number": phone,
-                "Source": "Clio Import",
-                "External ID": "|".join(str(c.contact_id) for c in group),
-            })
+            rows.append(_merged_row(group, phone, group[0].company_name))
             continue
 
         # Clio's own Company relationship is rarely set on OC/OP contacts even
@@ -516,22 +603,16 @@ def build_directory_rows(
         # this firm), but personal domains never count.
         label = _resolve_by_email_domain(group)
         if label:
-            rows.append({
-                "First Name": "", "Last Name": _merged_last_name(group), "Job Title": "",
-                "Company": label, "Email": "",
-                "Home Number": "", "Business Number": "",
-                "Mobile Number": "", "Company Main Number": phone,
-                "Source": "Clio Import",
-                "External ID": "|".join(str(c.contact_id) for c in group),
-            })
+            rows.append(_merged_row(group, phone, label))
             continue
 
         if phone in knowledge_base:
             entry = dict(knowledge_base[phone])
-            entry["External ID"] = "|".join(str(c.contact_id) for c in group)
+            entry["External ID"] = _merged_external_id(group)
             rows.append(entry)
             continue
 
+        rows.append(_merged_row(group, phone, ""))
         for c in group:
             conflicts.append({
                 "Phone": phone,
@@ -647,12 +728,12 @@ def run_pipeline(output_dir: Path = Path("output"), data_dir: Path = Path("data"
 
     session = requests.Session()
     session.headers.update({
-        "Authorization": f"Bearer {ACCESS_TOKEN}",
         "Content-Type": "application/json",
     })
+    session.auth = CLIO_AUTH
 
-    contact_ids = gather_target_contact_ids(session)
-    contacts = fetch_contacts(session, contact_ids)
+    labels = fetch_contact_labels(session)
+    contacts = fetch_contacts(session, labels)
 
     kb_path = data_dir / "ringcentral_phone_knowledge_base.csv"
     knowledge_base = load_knowledge_base(kb_path)

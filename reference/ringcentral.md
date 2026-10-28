@@ -43,6 +43,50 @@ existing single-contact row whose phone a newly-included closed-matter contact
 shares, so it became a merged row with a new `|`-joined External ID (see Phone dedup
 below). Expect that pattern whenever scope widens.
 
+**All contacts added 2026-10-23 (Ted: "add all users. We have a few categories such
+as clients mother").** Scope is now *every* Clio contact with a usable phone number —
+matter linkage no longer decides who's in, so family members, minor's counsel,
+experts, realtors etc. are included, as are contacts on no matter at all (Ted chose
+this over "every relationship type" to maximize caller-ID coverage). The two
+paragraphs above are history. `gather_target_contact_ids()` was replaced by
+`fetch_contact_labels()`, which only decides each row's **Job Title**: `CLIENT` for
+a default client on a `TARGET_MATTER_STATUSES` matter, plus every distinct
+Relationship description the contact has (uppercased/whitespace-collapsed so
+"Client's mother" and "CLIENT'S MOTHER" fold together; anything else kept as typed),
+comma-joined with CLIENT first. Merged rows carry the union of their members'
+labels. RingCentral shows Job Title on the contact card but doesn't search it.
+`fetch_oc_op_contacts()` is no longer used here (still used by the Outlook
+migration). Dry run against live data: 2,250 contacts, 828 with a phone → 771 rows,
+446 with a Job Title, 0 duplicate phones.
+
+Widening scope also changed the **last-resort conflict handling** (see Phone dedup
+below): 10 shared phones (20 contacts) matched no Company, email domain, or
+knowledge-base entry — half the same person entered twice in Clio, the rest spouses
+or attorney + assistant. These used to be left out of the directory; they're now
+merged into one row (all names in Last Name, blank Company) *and* still written to
+the conflicts CSV for review. A knowledge-base entry for the phone overrides the
+merge.
+
+**64-character field limit (confirmed live 2026-10-23).** The first all-contacts
+upload failed outright with "The uploaded file cannot be parsed." A copy with Job
+Title blanked *did* parse, with 3 row errors, `Parameter [External ID] value is
+invalid.` — each a firm line merged from six contacts, so a 65-char External ID
+(five IDs, 54 chars, passed). The only Job Title over 64 was 68 chars, so both are
+now capped at `RC_FIELD_MAX = 64` via `_join_within()`: Job Title drops trailing
+labels (CLIENT always sorts first), External ID drops trailing Clio IDs — still
+unique, since every contact has exactly one primary phone. Last Name is **not**
+limited: merged names up to 120 chars were accepted in the same upload.
+
+**Propagation delay after upload (2026-10-23).** RingCentral emails a confirmation
+("N new ... unchanged ... deleted") and the admin page count updates right away
+(Admin Portal → More → Account Settings → Directory Integration → External Shared
+Contacts Directory — count and upload buttons only, no contact list). But the
+desktop app and desk phones took a while longer to show new contacts. A
+contact that's in the uploaded CSV and counted in the email but not yet on phones
+just needs time (or an app restart / phone reboot), not a code fix. That upload
+reported 771 new / 0 unchanged / 427 deleted: adding Job Title changed every
+existing row, and RingCentral treats a changed row as delete + add.
+
 Remember the CSV only reaches RingCentral when someone uploads it — a contact that
 appears in `output/ringcentral_directory_{date}.csv` but not on the phones (real
 case, same day: CASTRUITA, ESTER, whose matter/phone postdated the last uploaded
@@ -80,9 +124,11 @@ number is technically in the directory. Anything still unresolved checks
 `data/ringcentral_phone_knowledge_base.csv` (manually-resolved canonical
 name/company per phone — empty template created on first run, not seeded from
 rolodex's old data since that existed to work around messy Word-doc-era conflicts
-that don't apply to clean API data) before falling through to
-`output/ringcentral_conflicts_{date}.csv` for manual review. In practice this chain
-resolved all 15 real conflicts found on this account's first run down to 0.
+that don't apply to clean API data) before falling through to a merged row with a
+blank Company, also listed in `output/ringcentral_conflicts_{date}.csv` for manual
+review (before 2026-10-23 these were left out of the directory — see All contacts
+above). In practice this chain resolved all 15 real conflicts found on this
+account's first run down to 0.
 
 **Multiple numbers on one contact (fixed 2026-08-25):** a single Clio contact can
 carry more than one `phone_numbers` entry — real examples on this account: Kevin

@@ -2,7 +2,7 @@
 {% block title %}RingCentral Directory{% endblock %}
 {% block content %}
 <h1>RingCentral Directory Sync</h1>
-<p class="subtitle">Keeps RingCentral's company phone directory in sync with Clio clients and opposing counsel/party contacts on open and closed matters.</p>
+<p class="subtitle">Keeps RingCentral's company phone directory in sync with every Clio contact that has a phone number. Job Title shows each contact's role (CLIENT, OPPOSING COUNSEL, CLIENT'S MOTHER, ...).</p>
 
 {% if error %}
 <div class="panel"><p class="error-text">{{ error }}</p></div>
@@ -78,10 +78,12 @@
 
 {% if conflicts %}
 <div class="panel">
-  <h3>Conflicts <span class="badge warn">needs manual resolution</span></h3>
-  <p>These contacts share a phone number with someone else and were omitted from the
-     directory CSV. Decide on a canonical name/company for the phone, then add one row
-     to <code>data/ringcentral_phone_knowledge_base.csv</code> and sync again.</p>
+  <h3>Conflicts <span class="badge warn">review</span></h3>
+  <p>These contacts share a phone number but aren't at the same firm, so they were
+     combined into one directory row listing every name. Often it's the same person
+     entered twice in Clio — merge those in Clio. To set a specific name/company for
+     the phone instead, add one row to
+     <code>data/ringcentral_phone_knowledge_base.csv</code> and sync again.</p>
   <table>
     <thead><tr><th>Phone</th><th>Clio ID</th><th>First Name</th><th>Last Name</th><th>Company</th></tr></thead>
     <tbody>
