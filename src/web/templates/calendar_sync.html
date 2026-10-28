@@ -137,7 +137,7 @@ function viewCourtCalendar() {
           </div>
         </td>
         <td>{{ r.matter_owner_initials or "—" }}</td>
-        <td>{{ r.match_method }}</td>
+        <td>{{ r.match_method }}{% if r.match_note %}<div class="reason-hint">{{ r.match_note }}</div>{% endif %}</td>
       </tr>
       {% endfor %}
     </tbody>
@@ -198,6 +198,38 @@ function filterResults() {
 filterResults();
 document.getElementById("results").scrollIntoView({ behavior: "smooth", block: "start" });
 </script>
+{% endif %}
+
+{% if conflicts is defined and conflicts is not none %}
+<div class="panel" id="conflicts">
+  <h2>Double-booked ({{ conflicts|length }})</h2>
+  <p class="subtitle">Times that overlap for the same attorney on different matters — hearings from the court
+     calendar plus anything else on their Clio calendar type (appointments, meetings). All-day deadlines are ignored;
+     a hearing with no Clio entry yet is counted as {{ court_default_minutes }} minutes.</p>
+  {% if conflicts %}
+  <div style="overflow-x:auto;">
+  <table class="nowrap">
+    <thead><tr><th>Attorney</th><th>Date</th><th>Event</th><th>Overlaps with</th></tr></thead>
+    <tbody>
+      {% for c in conflicts %}
+      <tr>
+        <td>{{ c.owner }}</td>
+        <td>{{ c.date }}</td>
+        {% for b in (c.first, c.second) %}
+        <td>
+          {{ b.time_range }} {{ b.label }}
+          <div class="reason-hint">{{ b.source }}</div>
+        </td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p>No overlapping bookings in this date range.</p>
+  {% endif %}
+</div>
 {% endif %}
 
 {% if events %}

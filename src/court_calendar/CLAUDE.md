@@ -50,6 +50,22 @@ This is more reliable than `calendar-check`'s original text-only approach whenev
 link a Matter on the calendar entry (which they usually do) — no free-text parsing needed
 for the common case.
 
+**Court party isn't always our client (added 2026-10-26):** the court calendar's party
+column is the *petitioner*, last name only — when we represent the respondent it's the
+other side, so no client name matches. `matcher._resolve_matter()` now tries, in order:
+1. **Case number** — exactly one open matter has the court's case number on file -> that
+   matter, even over a client-name match (`match_method="case_number"`).
+2. **Client name** — the original path above.
+3. **Opposing Party** — no client name matches, but an open matter's "Opposing Party"
+   Relationship contact (`outlook_calendar/relationships.fetch_oc_op_contacts()`, OP only)
+   contains every word of the party name, whole words only (`match_method=
+   "opposing_party"`). Several hits (live: JOHNSON was the OP on COHEN and SAWKA) narrow to
+   the matter with a Clio entry that day; otherwise "Ambiguous matter" listing them.
+Still nothing -> "No matter in Clio", plus a **"Possible match"** hint for any Clio entry at
+the same time (and dept, when the entry names one) on a matter no other hearing that day
+claimed — a hint only, never auto-matched (live: "Lorraine" 1:30 N-17 -> "Ahlquist FRC
+(N17)"). Fix it in Clio by adding the case number or the Opposing Party contact.
+
 **Combined appearances (fixed 2026-08-18):** `matcher.py`'s `compare_events()` sizes each
 matter/day's group of court-calendar hearings against how many Clio entries actually exist
 for that matter/day before matching. When there are fewer Clio entries than hearings — the
@@ -71,6 +87,27 @@ search for a name in the summary text. Note: `calendar_owner`/`attendees` are Cl
 Calendar/Attendee records, not User records, so there's no shared numeric ID to cross-
 reference against `/users.json`; the name Clio reports is used as-is.
 
+**Ownership = Clio event type; double-booking check (added 2026-10-26):** Clio is the
+master calendar (Outlook is out of scope here). Every entry is on the shared "Firm"
+calendar, so the entry's `calendar_entry_event_type` is who it belongs to:
+`schedule.ATTORNEY_EVENT_TYPES` maps Heidi Collier / Dahann Bowers / Pamela Bradford to
+types Heidi / Dahann / Pam. "Staff" is a catch-all placeholder and deliberately unmapped.
+The court calendar's attorney field is the attorney *of record*, not who appears — a live
+check found all 68 upcoming hearings listed Heidi while 26 of their entries were typed
+Dahann or Pam (covering). So:
+- Matching (`compare_events(check_types=True)`) prefers the attorney of record's type, then
+  any attorney's type, when a matter has several entries that day. A hearing whose entry
+  has no type or "Staff" gets the reason **"No attorney type"**; another attorney's type is
+  fine.
+- `schedule.find_conflicts()` builds each attorney's timeline — hearings (owner = matched
+  entry's type, else the attorney of record) plus every *other* timed Clio entry of their
+  type (doctor appointments, "Out", meetings, mediations) — and lists every pair that
+  overlaps on different matters in the **Double-booked** panel. Skipped: all-day entries
+  (L/D deadlines), same-matter overlaps (combined appearance), and two hearings sharing one
+  entry. A hearing with no Clio entry yet counts as `COURT_EVENT_DEFAULT_MINUTES` (60).
+  Same-time hearings in the same dept *are* listed — the staff decide whether a morning
+  calendar call is a real clash. Tests: `tests/test_court_calendar_schedule.py`.
+
 **Purpose code mappings:** `purpose_mappings` table in `data/clio_dashboard.db`, seeded
 from `calendar-check`'s original mapping list. Edit via SQLite directly if a new hearing
 type needs a code (no UI yet — matches this repo's "explicit mappings, edited directly"
@@ -83,6 +120,15 @@ button click in the comparison table — never automatic, never bulk. Everything
 `court_calendar/` only ever reads Clio. The custom field's numeric id is looked up once
 via `/custom_fields.json?parent_type=Matter&query=Court+Case+Number` and cached
 in-process (`_find_case_number_field_id()`) rather than re-fetched every call.
+
+**Case number field consolidated (2026-10-28):** "Court Case #" was a second matter custom
+field holding case numbers the sync never read. `src/court_case_number_migration.py` (one-time)
+copied it into "Court Case Number" wherever that was blank — 21 matters, open and closed —
+and flagged FULMER, VERNON (two different numbers) for a manual fix; "Court Case #" is to be
+deleted. The same run found the Update-in-Clio write had always failed on a matter that
+already had a Court Case Number value, even an empty one (422 "custom field value ...
+already exists"): `update_matter_case_number()` now looks up and sends the existing
+CustomFieldValue id.
 
 **Client court-date report:** `/calendar/client-list` (HTML preview) and
 `/calendar/client-list/download` (Word doc) — one section per client with their upcoming

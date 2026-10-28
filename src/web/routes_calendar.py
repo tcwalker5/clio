@@ -39,8 +39,10 @@ from court_calendar.matter_fields import (
     index_matter_owner_by_matter_id,
 )
 from court_calendar.normalizer import parse_court_calendar_line
+from court_calendar.schedule import COURT_EVENT_DEFAULT_MINUTES, find_conflicts
 from court_calendar.store import fetch_date_range, fetch_upcoming_events, get_purpose_mappings, upsert_court_events
 from matter_matching import fetch_open_matters, index_by_last_name_all
+from outlook_calendar.relationships import fetch_oc_op_contacts
 from web.preview_store import PREVIEWS
 
 router = APIRouter(prefix="/calendar", tags=["calendar"])
@@ -85,6 +87,7 @@ def _render_calendar_page(request: Request, **overrides):
         "selected_attorney": _default_attorney(names),
         "clio_base_url": CLIO_BASE_URL,
         "today": date.today().strftime("%B %d, %Y"),
+        "court_default_minutes": COURT_EVENT_DEFAULT_MINUTES,
         "events": fetch_upcoming_events(),  # plain, unfiltered — the "all events" copy/paste table
     }
     context.update(overrides)
@@ -149,7 +152,7 @@ def _run_comparison() -> dict:
     /compare (manual re-run against whatever's already stored, e.g. after
     fixing something in Clio without re-pasting court text). Returns a dict
     of template overrides — either {"error": ...} or {"results", "from_date",
-    "to_date"}."""
+    "to_date", "conflicts"}."""
     events = fetch_upcoming_events()
     date_range = fetch_date_range()
     if not date_range:
@@ -166,15 +169,22 @@ def _run_comparison() -> dict:
     matter_owner_by_matter = index_matter_owner_by_matter_id(matters)
     purpose_mappings = get_purpose_mappings()
     clio_entries = fetch_calendar_entries(from_date, to_date, session)
+    # The court calendar's party is the petitioner — the other side when we
+    # represent the respondent — so also match against open matters' OPs.
+    opposing_parties = [c for c in fetch_oc_op_contacts(session)
+                        if c.role == "OP" and c.matter_id in case_numbers_by_matter]
 
     results = compare_events(court_events, clio_entries, matters_by_name, purpose_mappings,
-                              case_numbers_by_matter, matter_owner_by_matter)
+                              case_numbers_by_matter, matter_owner_by_matter, check_types=True,
+                              opposing_parties=opposing_parties)
     # Stays in the same date/time order compare_events() produced (from
     # fetch_upcoming_events()'s "ORDER BY datetime ASC") — chronological,
     # not grouped by status, so the list still reads like a real calendar.
     # The "needing attention" checkbox is what isolates exceptions instead.
 
-    return {"results": results, "from_date": from_date, "to_date": to_date}
+    conflicts = find_conflicts(results, clio_entries)
+
+    return {"results": results, "from_date": from_date, "to_date": to_date, "conflicts": conflicts}
 
 
 @router.post("/import")
