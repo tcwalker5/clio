@@ -3,7 +3,7 @@
 {% block main_class %}wide{% endblock %}
 {% block content %}
 <h1>Case Closing</h1>
-<p class="subtitle">Two steps in closing a case. <strong>Ready to close:</strong> every open or pending matter, checked for a filed Substitution of Attorney, Notice of Withdrawal, or Request for Dismissal (CIV-110) — a real signal a matter is done and was never closed. Only matters with a signed/conformed/conf document on our side are listed — an unsigned draft, a partial dismissal (TRO, RFO, joinder), or something found only in OP's own pleadings isn't shown. Close Case is never blocked on anything found here; this is a checklist, not a gate. A full scan takes several minutes, so it only runs when you click Run Audit. <strong>Trust to refund:</strong> closed matters with no unbilled work and no unpaid bills that still hold trust — process the refund in Clio.</p>
+<p class="subtitle">Two steps in closing a case. <strong>Ready to close:</strong> every open or pending matter, checked for a filed Substitution of Attorney <em>out</em> (an SoA without "out" in the filename is us coming in, so it's ignored), Notice of Withdrawal, or Request for Dismissal (CIV-110) — a real signal a matter is done and was never closed. Only matters with a signed/conformed/conf document on our side are listed — an unsigned draft, a partial dismissal (TRO, RFO, joinder), or something found only in OP's own pleadings isn't shown. Close Case is never blocked on anything found here; this is a checklist, not a gate. A full scan takes several minutes, so it only runs when you click Run Audit. <strong>Trust to refund:</strong> closed matters with no unbilled work and no unpaid bills that still hold trust — process the refund in Clio.</p>
 
 {% if error %}
 <div class="panel"><p class="error-text">{{ error }}</p></div>
@@ -12,14 +12,17 @@
 <h2>Ready to close</h2>
 <div class="panel" id="results">
   <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;margin-bottom:0.75rem;">
-    <button type="button" class="btn" id="run-audit-btn" onclick="runAudit(this)">{{ "Re-run Audit" if matters is not none else "Run Audit" }}</button>
+    <button type="button" class="btn audit-btn" onclick="runAudit(this, false)">{{ "Re-run Audit" if matters is not none else "Run Audit" }}</button>
+    {% if matters is not none %}
+    <button type="button" class="btn secondary audit-btn" onclick="runAudit(this, true)" title="Re-scan every open matter, not just ones with changed documents. Use after the matching rules change, or if a deleted document still shows.">Full rescan</button>
+    {% endif %}
     {% if last_run_at %}
-    <span style="font-size:0.85rem;color:var(--text-muted);">Last run: {{ last_run_at.strftime("%Y-%m-%d %I:%M %p") }}{% if duration_text %} (took {{ duration_text }}){% endif %}</span>
+    <span style="font-size:0.85rem;color:var(--text-muted);">Last run: {{ last_run_at.strftime("%Y-%m-%d %I:%M %p") }}{% if duration_text %} (took {{ duration_text }}{% if full_scan %}, full scan{% elif rescanned_count is not none %}, re-checked {{ rescanned_count }} changed of {{ scanned_count }}{% endif %}){% endif %}</span>
     {% endif %}
   </div>
 
   {% if matters is none %}
-  <p class="subtitle">No audit has been run yet this session — click Run Audit to scan every open/pending matter. Expect several minutes.</p>
+  <p class="subtitle">No audit has been run yet — click Run Audit to scan every open/pending matter. The first run checks everything and takes several minutes; after that, each run only re-checks matters whose documents changed.</p>
   {% else %}
   <div class="summary-bar">
     <div class="summary-stat"><strong>{{ scanned_count }}</strong>matters scanned</div>
@@ -81,7 +84,7 @@
   </div>
 
   {% if refunds is none %}
-  <p class="subtitle">Not checked yet this session — click Check Refunds. Takes a few seconds.</p>
+  <p class="subtitle">Not checked yet — click Check Refunds. Takes a few seconds.</p>
   {% elif not refunds %}
   <p class="subtitle">No closed matters with trust left to refund.</p>
   {% else %}
@@ -124,16 +127,21 @@ async function checkRefunds(button) {
   window.location.reload();
 }
 
-async function runAudit(button) {
-  button.disabled = true;
+async function runAudit(button, full) {
+  const buttons = document.querySelectorAll(".audit-btn");
+  buttons.forEach(b => b.disabled = true);
   const originalLabel = button.textContent;
-  button.textContent = "Running... this can take several minutes";
+  button.textContent = full ? "Running full rescan... several minutes" : "Running... checking for changes";
   try {
-    const resp = await fetch("/soa-now-audit/run", { method: "POST" });
+    const resp = await fetch("/soa-now-audit/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: `full=${full ? "true" : "false"}`,
+    });
     const body = await resp.json();
     if (!resp.ok || !body.success) throw new Error(body.error || "Audit failed");
   } catch (e) {
-    button.disabled = false;
+    buttons.forEach(b => b.disabled = false);
     button.textContent = originalLabel;
     alert(`Couldn't run audit: ${e.message}`);
     return;

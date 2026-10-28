@@ -53,9 +53,10 @@ see this project's own `_get_with_retry()` pattern — this is now a
 cross-project convention, see the api-rate-limit-handling memory in the
 `~/projects/` hub) — so it's triggered explicitly
 (`POST /soa-now-audit/run`, see routes_soa_now_audit.py) rather than
-recomputed on every page view. Results are cached in-memory between runs
-(same "in-memory handoff" pattern this app already uses for
-preview_store.py's dry-run previews) — there is deliberately no fancy
+recomputed on every page view. Since 2026-10-14 results are saved in
+data/clio_dashboard.db and a normal run only re-scans matters whose
+documents changed (see "Incremental scan + persistence" below) — before
+that they lived in an in-memory cache lost on every dashboard restart. There is deliberately no fancy
 progress UI yet (Ted, 2026-09-24, declined it for now); the trigger just
 blocks until the whole scan finishes.
 
@@ -67,9 +68,11 @@ exact file, posted in the same click) is still deferred, per Ted's
 original ask on 2026-09-22.
 """
 
+import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -123,10 +126,26 @@ CLOSING_DOC_PATTERN = re.compile(
 )
 
 
+# SoA = "out" only (Ted, 2026-10-14: "SOA is almost always in, so we can
+# ignore it. We only need to find SOA.out (case does not matter)"). A
+# Substitution of Attorney usually means we came IN on the case — the
+# opposite of a closing signal (real false positives from the first live
+# run: CASTRUITA, ESTER and FULMER, VERNON, both active). Matched as the
+# word "out" anywhere in an SoA filename, not only a literal "SOA.out",
+# because real filenames also say e.g. "Sub of Atty Glover out 4.2025.pdf";
+# \b keeps the MC-050 form title's "(Without Court Order)" from counting.
+# A Notice of Withdrawal is always us going out, so it needs no such check.
+NOW_PATTERN = re.compile(r"\bnow\b|notice[\s_-]+of[\s_-]+withdrawal", re.IGNORECASE)
+SOA_OUT_PATTERN = re.compile(r"\bout\b", re.IGNORECASE)
+
+
 def _finding_kind(name: str) -> str | None:
-    """"soa_now" | "dismissal" | None (a partial dismissal — dropped)."""
-    if ca.SOA_NOW_PATTERN.search(name):
+    """"soa_now" | "dismissal" | None (an SoA without "out", or a partial
+    dismissal — dropped)."""
+    if NOW_PATTERN.search(name):
         return "soa_now"
+    if ca.SOA_NOW_PATTERN.search(name):
+        return "soa_now" if SOA_OUT_PATTERN.search(name) else None
     if DISMISSAL_PATTERN.search(name) and not PARTIAL_DISMISSAL_PATTERN.search(name):
         return "dismissal"
     return None
@@ -154,6 +173,16 @@ class AuditMatter:
         self.findings: list[dict] = []
         self.can_close = False  # informational only here — never gates Close Case
         self.soa_now_marked = soa_now_marked
+
+    def to_dict(self) -> dict:
+        return {k: getattr(self, k) for k in self.__slots__}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "AuditMatter":
+        m = cls(d["name"], d["matter_id"], d["status"], d["soa_now_marked"])
+        m.findings = d["findings"]
+        m.can_close = d["can_close"]
+        return m
 
 
 _soa_now_field_id_cache: int | None = None
@@ -267,26 +296,173 @@ def fetch_open_matters_for_audit(session: requests.Session) -> list[AuditMatter]
     return result
 
 
-def run_audit(session: requests.Session) -> list[AuditMatter]:
-    """Runs the SoA/NoW document check (Clio only — see module docstring
+# ---------------------------------------------------------------------------
+# Incremental scan + persistence (added 2026-10-14, Ted: "would it speed up
+# the audit by having a cached version on disk?"). A full scan is ~2 Clio
+# calls per open matter and takes ~10 minutes under the rate limit. Each
+# matter's findings are now saved; a normal run asks Clio which matters had
+# a document or folder change since the last run (firm-wide
+# documents/folders.json?updated_since= — one paged call each, ~1s,
+# confirmed live 2026-10-14 to return only genuinely-changed items, folders
+# included since a folder rename changes a document's classification) and
+# re-scans only those, plus any matter with no saved result or one saved
+# under older matching rules. Everything else reuses its saved findings.
+# Results and run history live in data/clio_dashboard.db, so the page
+# survives a dashboard restart (the old in-memory cache didn't).
+#
+# Known gap: a document DELETED from Clio doesn't show up as "updated", so
+# its saved finding would linger until that matter changes again — "Full
+# rescan" on the page clears that up.
+# ---------------------------------------------------------------------------
+
+# Bump whenever matching/classification changes (patterns above, or
+# client_assignment's folder/token rules) — any saved result from an older
+# version is re-scanned on the next run instead of trusted.
+SCAN_RULES_VERSION = 3  # 1 = SoA/NoW only (pre-2026-10-14), 2 = + Request for Dismissal, 3 = SoA counts only if "out"
+
+# Look back a little before the previous run's start, so a document changed
+# while that run was in progress (or a small clock skew) isn't missed.
+CHANGE_CURSOR_OVERLAP = timedelta(minutes=10)
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS case_closing_matter_scans (
+    matter_id INTEGER PRIMARY KEY,
+    findings_json TEXT NOT NULL,
+    can_close INTEGER NOT NULL,
+    rules_version INTEGER NOT NULL,
+    scanned_at TEXT NOT NULL
+);
+
+-- One row per Run Audit / Check Refunds. results_json is exactly what the
+-- page displays; an audit run's started_at (UTC) is the next run's change
+-- cursor.
+CREATE TABLE IF NOT EXISTS case_closing_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    finished_at TEXT NOT NULL,
+    full_scan INTEGER NOT NULL DEFAULT 0,
+    scanned_count INTEGER,
+    rescanned_count INTEGER,
+    results_json TEXT NOT NULL
+);
+"""
+SCHEMA_COLUMNS: list[tuple[str, str, str]] = []
+
+RUN_KIND_AUDIT = "audit"
+RUN_KIND_REFUNDS = "refunds"
+
+
+def fetch_changed_matter_ids(session: requests.Session, since: datetime) -> set[int]:
+    """Matter ids with any document or folder created/updated since `since`."""
+    changed: set[int] = set()
+    for resource in ("documents", "folders"):
+        url = f"{BASE_URL}/api/v4/{resource}.json"
+        params = {"updated_since": since.isoformat(), "fields": "id,matter{id}", "limit": 200}
+        while url:
+            resp = ca._get_with_retry(session, url, params=params)
+            if resp.status_code != 200:
+                raise RuntimeError(f"Failed to fetch changed {resource}: {resp.status_code} {resp.text[:200]}")
+            body = resp.json()
+            for item in body.get("data", []):
+                mid = (item.get("matter") or {}).get("id")
+                if mid:
+                    changed.add(int(mid))
+            url, params = body.get("meta", {}).get("paging", {}).get("next"), None
+    return changed
+
+
+def _scan_matter(session: requests.Session, m: AuditMatter) -> None:
+    findings = []
+    for f in ca.find_soa_now_documents(session, m.matter_id, pattern=CLOSING_DOC_PATTERN):
+        f["kind"] = _finding_kind(f["name"])
+        if f["kind"]:
+            findings.append(f)
+    m.findings = findings
+    m.can_close = ca.evaluate_close_readiness(findings)["can_close"]
+
+
+def latest_run(conn, kind: str):
+    return conn.execute(
+        "SELECT * FROM case_closing_runs WHERE kind = ? ORDER BY id DESC LIMIT 1", (kind,)
+    ).fetchone()
+
+
+def run_audit(session: requests.Session, conn, full: bool = False) -> tuple[list[AuditMatter], int]:
+    """Runs the closing-document check (Clio only — see module docstring
     on why the Y: drive fallback was dropped) for every currently open or
-    pending matter. Slow — a couple of Clio API calls per matter, no
-    artificial delay between them (relies entirely on find_soa_now_documents()'s
-    own reactive 429 retry, never throttles preemptively) — expect several
-    minutes for the full caseload. Meant to be triggered explicitly and
-    cached by the caller (see routes_soa_now_audit.py), not re-run on
-    every page view."""
+    pending matter, re-scanning only what changed since the last run unless
+    `full` (see the section comment above). Returns (every matter, how many
+    were actually re-scanned). Each re-scanned matter's result is saved as
+    soon as it's done, so a run that dies partway still keeps its progress.
+    Never throttles preemptively — relies on find_soa_now_documents()'s own
+    reactive 429 retry."""
     matters = fetch_open_matters_for_audit(session)
+    open_ids = {m.matter_id for m in matters}
+
+    # A matter that left the open list (closed, or excluded) loses its saved
+    # result, so if it's ever reopened it gets a fresh scan rather than
+    # trusting findings from before changes we never looked at.
+    saved = {
+        row["matter_id"]: row
+        for row in conn.execute("SELECT * FROM case_closing_matter_scans").fetchall()
+    }
+    stale = [mid for mid in saved if mid not in open_ids]
+    conn.executemany("DELETE FROM case_closing_matter_scans WHERE matter_id = ?", [(mid,) for mid in stale])
+    conn.commit()
+
+    previous = latest_run(conn, RUN_KIND_AUDIT)
+    changed: set[int] | None = None
+    if not full and previous is not None:
+        since = datetime.fromisoformat(previous["started_at"]) - CHANGE_CURSOR_OVERLAP
+        changed = fetch_changed_matter_ids(session, since)
+
+    rescanned = 0
     for m in matters:
-        findings = []
-        for f in ca.find_soa_now_documents(session, m.matter_id, pattern=CLOSING_DOC_PATTERN):
-            f["kind"] = _finding_kind(f["name"])
-            if f["kind"]:
-                findings.append(f)
-        readiness = ca.evaluate_close_readiness(findings)
-        m.findings = findings
-        m.can_close = readiness["can_close"]
-    return matters
+        row = saved.get(m.matter_id)
+        if changed is not None and row is not None and row["rules_version"] == SCAN_RULES_VERSION and m.matter_id not in changed:
+            m.findings = json.loads(row["findings_json"])
+            m.can_close = bool(row["can_close"])
+            continue
+        _scan_matter(session, m)
+        rescanned += 1
+        conn.execute(
+            "INSERT OR REPLACE INTO case_closing_matter_scans (matter_id, findings_json, can_close, rules_version, scanned_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (m.matter_id, json.dumps(m.findings), int(m.can_close), SCAN_RULES_VERSION, datetime.now(timezone.utc).isoformat()),
+        )
+        conn.commit()
+
+    logging.info(
+        "Case Closing audit: %d open/pending matters, %d re-scanned (%s)",
+        len(matters), rescanned, "full" if changed is None else f"{len(changed)} matters with changed documents/folders",
+    )
+    return matters, rescanned
+
+
+def record_run(conn, kind: str, started_at: datetime, results: list[dict], full: bool = False,
+               scanned_count: int | None = None, rescanned_count: int | None = None) -> None:
+    conn.execute(
+        "INSERT INTO case_closing_runs (kind, started_at, finished_at, full_scan, scanned_count, rescanned_count, results_json) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (kind, started_at.isoformat(), datetime.now(timezone.utc).isoformat(), int(full),
+         scanned_count, rescanned_count, json.dumps(results)),
+    )
+    conn.commit()
+
+
+def update_latest_results(conn, kind: str, fn) -> None:
+    """Applies fn(list[dict]) -> list[dict] to the latest run's displayed
+    results in place — used after Close Case / Mark Filed so a reload shows
+    the change without a fresh run."""
+    row = latest_run(conn, kind)
+    if row is None:
+        return
+    conn.execute(
+        "UPDATE case_closing_runs SET results_json = ? WHERE id = ?",
+        (json.dumps(fn(json.loads(row["results_json"]))), row["id"]),
+    )
+    conn.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -312,6 +488,9 @@ class RefundCandidate:
     # held on the contact, not any matter — shown in its own column, since
     # it's one balance shared by every matter that client has
     client_trust: float
+
+    def to_dict(self) -> dict:
+        return asdict(self)
 
 
 def fetch_refund_candidates(session: requests.Session) -> list[RefundCandidate]:

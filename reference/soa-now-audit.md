@@ -71,6 +71,10 @@ disambiguation, the folder classification mirror, the file:// → "Copy path" fi
 removed along with the hardcoded list — see git history before this rewrite if it's
 ever needed again, not reproduced here.
 
+> **Superseded 2026-10-14:** the in-memory cache described in the next paragraph was
+> replaced by saved results in `data/clio_dashboard.db` plus an incremental scan — see
+> "Incremental scan + saved results" at the end of this doc. Kept as history.
+
 **Explicit "Run Audit" trigger + in-memory cache, not recomputed on every page
 view** — a full scan is slow (a couple of Clio API calls per open matter, no
 artificial delay between them — retries reactively on a 429 via the shared
@@ -295,3 +299,56 @@ $1,587.40; KENNEDY, KATHERINE $1,401.15; JACKSON, GREG $623.00; HARTMAN, NICOLA
 $223.85; COMER, MEGAN $180.80), no client-level trust on any of them. Same check
 found 32 closed matters still **owing** money — that's collections, deliberately not
 shown here.
+
+## Incremental scan + saved results (added 2026-10-14)
+
+Ted: "If I run the audit and change web page, do I lose the time it was run?" then
+"would it speed up the audit by having a cached version on disk?" Saving alone
+wouldn't — the scan is ~2 Clio calls per open matter, ~10 minutes under the rate
+limit — so this does both: saves results and uses them to skip unchanged matters.
+
+- **Change detection:** `fetch_changed_matter_ids()` — firm-wide
+  `documents.json` and `folders.json` with `updated_since=` (no `matter_id`), one paged
+  call each. **Verified live before building**, not taken from the OpenAPI spec: a
+  7-day window returned 783 documents / 473 folders in ~1s, and parsed properly, none
+  older than the cutoff (an earlier apparent "74 leaked" was a string-compare artifact
+  of mixed UTC/`-07:00` offsets in the check script, not Clio). Folders are included
+  because a folder rename changes a document's classification. Cursor = the previous
+  audit run's start time minus `CHANGE_CURSOR_OVERLAP` (10 min).
+- **What gets re-scanned:** a matter in that changed set, a matter with no saved result
+  (new/reopened), or one saved under an older `SCAN_RULES_VERSION`. **Bump
+  `SCAN_RULES_VERSION` whenever matching rules change** (here or in
+  `client_assignment.py`'s folder/token rules) — that forces those rows to re-scan
+  on the next normal run, no Full rescan click needed. Saved rows for matters that are
+  no longer open/pending are deleted each run, so a reopened matter starts fresh.
+- **Tables** (own schema fragment in `soa_now_audit.py`, registered in `web/db.py` as
+  `case_closing`): `case_closing_matter_scans` (per-matter findings + rules version),
+  `case_closing_runs` (one row per Run Audit / Check Refunds — `kind`, start/finish,
+  counts, and `results_json`, exactly what the page shows). Each re-scanned matter is
+  committed as soon as it's done, so a run that dies partway keeps its progress.
+- **Page:** renders the latest run of each kind from the DB, so results and "Last run"
+  survive page changes *and* dashboard restarts. Last-run line says "re-checked N
+  changed of M" or "full scan". Close Case / Mark SoA/NoW Filed edit the latest run's
+  `results_json` in place (same behavior the in-memory version had).
+- **Full rescan** button forces every matter. Needed for one known gap: a document
+  **deleted** from Clio never shows as "updated," so its saved finding lingers until
+  that matter changes again or a Full rescan runs.
+
+## SoA counts only when it's "out" (2026-10-14)
+
+Ted: "SOA is almost always in, so we can ignore it. We only need to find SOA.out (case
+does not matter)." A Substitution of Attorney usually means we came **in** on a case —
+the opposite of a closing signal. Confirmed by the first live run of the dismissal
+version: CASTRUITA, ESTER (new client) and FULMER, VERNON (active, drafts dated that
+week) were flagged on an SoA.
+
+`_finding_kind()` now splits the old combined check: `NOW_PATTERN` (NoW / Notice of
+Withdrawal — always us going out, unchanged) vs. SoA (`client_assignment.SOA_NOW_PATTERN`'s
+SoA forms), which only counts if `SOA_OUT_PATTERN` (`\bout\b`, any case) appears
+anywhere in the filename. Deliberately wider than a literal `SOA.out`: real filenames
+include "Sub of Atty Glover out 4.2025.pdf". `\b` keeps the MC-050 form title's
+"(With**out** Court Order)" from counting. `SCAN_RULES_VERSION` bumped to 3, so every
+saved result re-scans on the next run.
+
+**Only this page changed.** `client_assignment.SOA_NOW_PATTERN` itself, and
+`/assignments`' own Close gate built on it, still accept any SoA — not touched here.
