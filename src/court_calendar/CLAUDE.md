@@ -11,13 +11,13 @@ a prior version of this doc claimed the whole subproject never writes to Clio, b
 there is now one explicit, single-matter write path (Court Case Number, see below),
 added along with case-number reconciliation and never updated here at the time.
 
-**Auth — deliberately open, unlike every other subproject (2026-08-04):** every route
-under `/calendar` in `routes_calendar.py`, including the client court-date list/report
-and the Court Case Number write, has no `require_auth` dependency — no dashboard
-passphrase needed. This was an explicit decision so the court calendar can be used by
-anyone on the LAN/Tailscale, while the dashboard passphrase still gates every other
-subproject (Bradford, Printer, Legs, RingCentral, Trust); logging in still unlocks those
-in the same browser session (see "Auth" in `src/web/CLAUDE.md`).
+**Auth — any signed-in staff member (changed 2026-10-22):** every route under
+`/calendar` requires Clio sign-in (`require_login`, applied router-wide) but not admin
+access, and all its Clio calls — including the Court Case Number write — run with the
+signed-in person's own token (`clio_session(user)`), so changes are attributed to them.
+From 2026-08-04 until then it had no login at all; Ted chose to require Clio sign-in
+here when Sign in with Clio replaced the shared passphrase (see "Auth" in
+`src/web/CLAUDE.md`).
 
 **Input — two ways to get court text in, both feed the same comparison:**
 1. **One-click fetch** (`court_calendar/court_fetch.py`, ported from `calendar-check`'s

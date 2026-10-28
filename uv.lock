@@ -132,6 +132,7 @@ name = "clio"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "cryptography" },
     { name = "fastapi" },
     { name = "itsdangerous" },
     { name = "jinja2" },
@@ -153,6 +154,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cryptography", specifier = ">=45.0.0" },
     { name = "fastapi", specifier = ">=0.139.0" },
     { name = "itsdangerous", specifier = ">=2.2.0" },
     { name = "jinja2", specifier = ">=3.1.6" },

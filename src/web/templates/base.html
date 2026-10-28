@@ -46,9 +46,13 @@
       <div class="nav-dropdown">
         <a href="/assignments">Client Assignment</a>
         <a href="/calendar">Court Calendar</a>
+        {% if is_admin %}
+        <a href="/soa-now-audit">Case Closing</a>
         <a href="/ringcentral">RingCentral Directory</a>
+        {% endif %}
       </div>
     </div>
+    {% if is_admin %}
     <div class="nav-group">
       <button type="button" class="nav-trigger">Billing &amp; Expenses</button>
       <div class="nav-dropdown">
@@ -59,9 +63,11 @@
         <a href="/trust">Trust Monitor</a>
         <a href="/collections">Collections</a>
         <a href="/staff-unbilled">Staff Unbilled</a>
+        <a href="/audit-log">Audit Log</a>
       </div>
     </div>
-    <a href="/logout">Log out</a>
+    {% endif %}
+    <a href="/logout" title="Signed in to Clio as {{ current_user.name }}">Log out{% if current_user and current_user.name %} ({{ current_user.name.split()[0] }}){% endif %}</a>
   </nav>
 </header>
 <script>
@@ -90,7 +96,7 @@
 </script>
 {% elif request.url.path != '/login' %}
 <header class="topbar">
-  <a class="brand" href="/calendar">
+  <a class="brand" href="/login">
     <svg class="brand-mark" width="26" height="26" viewBox="0 0 64 64" fill="none" aria-hidden="true">
       <circle cx="16" cy="48" r="6" fill="currentColor"></circle>
       <circle cx="48" cy="16" r="6" fill="currentColor"></circle>
@@ -102,8 +108,7 @@
     </span>
   </a>
   <nav>
-    <a href="/calendar">Court Calendar</a>
-    <a href="/login">Log in</a>
+    <a href="/login">Sign in</a>
   </nav>
 </header>
 {% endif %}

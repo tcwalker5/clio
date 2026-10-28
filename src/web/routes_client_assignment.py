@@ -18,7 +18,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 import client_assignment
-from web.auth import require_auth
+from web.auth import clio_session, require_login
 
 router = APIRouter(prefix="/assignments", tags=["assignments"])
 
@@ -79,8 +79,8 @@ def build_pie_chart(counts: list[tuple[str, int]], size: int = 200) -> dict:
     return {"slices": slices, "legend": legend, "total": total}
 
 
-def _load(status: str = "open"):
-    session = client_assignment.build_session()
+def _load(user: dict, status: str = "open"):
+    session = clio_session(user)
     attorneys, paralegals = client_assignment.get_assignable_users()
     matters = client_assignment.fetch_matters_for_assignment(session, status=status)
     return matters, attorneys, paralegals
@@ -93,12 +93,12 @@ def _clean_status(status: str) -> str:
 
 
 @router.get("", response_class=HTMLResponse)
-async def assignments_home(request: Request, status: str = "open", _: None = Depends(require_auth)):
+async def assignments_home(request: Request, status: str = "open", user: dict = Depends(require_login)):
     from web.app import render
 
     status = _clean_status(status)
     try:
-        matters, attorneys, paralegals = await run_in_threadpool(_load, status)
+        matters, attorneys, paralegals = await run_in_threadpool(_load, user, status)
     except RuntimeError as e:
         return render(request, "client_assignment.html", error=str(e), matters=None, matter_status=status)
 
@@ -115,7 +115,7 @@ async def assignments_home(request: Request, status: str = "open", _: None = Dep
 @router.post("/set")
 async def set_assignment(
     matter_id: int = Form(...), field: str = Form(...), user_id: int = Form(...),
-    _: None = Depends(require_auth),
+    user: dict = Depends(require_login),
 ):
     if field not in client_assignment.ASSIGNMENT_FIELDS:
         return JSONResponse({"error": f"Unknown field: {field}"}, status_code=400)
@@ -125,7 +125,7 @@ async def set_assignment(
         roster = attorneys if client_assignment.FIELD_ROSTER[field] == "attorney" else paralegals
         if user_id not in {u["id"] for u in roster}:
             raise ValueError(f"That's not a valid choice for {client_assignment.FIELD_LABELS[field]}")
-        session = client_assignment.build_session()
+        session = clio_session(user)
         return client_assignment.update_matter_field(session, matter_id, field, user_id)
 
     try:
@@ -139,9 +139,9 @@ async def set_assignment(
 
 
 @router.get("/close_check")
-async def assignments_close_check(matter_id: int, _: None = Depends(require_auth)):
+async def assignments_close_check(matter_id: int, user: dict = Depends(require_login)):
     def _do() -> dict:
-        session = client_assignment.build_session()
+        session = clio_session(user)
         findings = client_assignment.find_soa_now_documents(session, matter_id)
         readiness = client_assignment.evaluate_close_readiness(findings)
         # Only worth the extra call when nothing turned up at all — tells
@@ -164,10 +164,10 @@ async def assignments_close_check(matter_id: int, _: None = Depends(require_auth
 @router.post("/close")
 async def assignments_close(
     matter_id: int = Form(...), override: bool = Form(False),
-    _: None = Depends(require_auth),
+    user: dict = Depends(require_login),
 ):
     def _do() -> str:
-        session = client_assignment.build_session()
+        session = clio_session(user)
         if override:
             # Staff-initiated bypass ("Close Anyway") — the filename scan
             # can miss a real filing (different wording, scanned image with
@@ -200,11 +200,11 @@ async def assignments_close(
 
 
 @router.get("/caseload", response_class=HTMLResponse)
-async def assignments_caseload(request: Request, _: None = Depends(require_auth)):
+async def assignments_caseload(request: Request, user: dict = Depends(require_login)):
     from web.app import render
 
     try:
-        matters, _, _ = await run_in_threadpool(_load)
+        matters, _, _ = await run_in_threadpool(_load, user)
     except RuntimeError as e:
         return render(request, "client_assignment_caseload.html", error=str(e), attorney_chart=None, paralegal_chart=None)
 
@@ -217,12 +217,12 @@ async def assignments_caseload(request: Request, _: None = Depends(require_auth)
 
 
 @router.get("/report", response_class=HTMLResponse)
-async def assignments_report(request: Request, view: str = "missing", status: str = "open", _: None = Depends(require_auth)):
+async def assignments_report(request: Request, view: str = "missing", status: str = "open", user: dict = Depends(require_login)):
     from web.app import render
 
     status = _clean_status(status)
     try:
-        matters, _, _ = await run_in_threadpool(_load, status)
+        matters, _, _ = await run_in_threadpool(_load, user, status)
     except RuntimeError as e:
         return render(request, "client_assignment_report.html", error=str(e), matters=None, matter_status=status)
 
@@ -245,7 +245,7 @@ async def assignments_report(request: Request, view: str = "missing", status: st
 
 
 @router.get("/report/download")
-async def assignments_report_download(view: str = "missing", status: str = "open", _: None = Depends(require_auth)):
+async def assignments_report_download(view: str = "missing", status: str = "open", user: dict = Depends(require_login)):
     status = _clean_status(status)
     path = Path("output") / f"client_assignment_report_{view}_{status}_{datetime.today().strftime('%Y-%m-%d')}.csv"
     if not path.exists():

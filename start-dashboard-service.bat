@@ -19,8 +19,8 @@ set LOGFILE=logs\dashboard_service_%DATESTAMP%.log
 echo [%date% %time%] Syncing dependencies... >> "%LOGFILE%"
 call uv sync >> "%LOGFILE%" 2>&1
 
-echo [%date% %time%] Starting Collier Automation Platform on http://0.0.0.0:8421 ... >> "%LOGFILE%"
-call uv run uvicorn web.app:app --app-dir src --host 0.0.0.0 --port 8421 >> "%LOGFILE%" 2>&1
+echo [%date% %time%] Starting Collier Automation Platform on https://0.0.0.0:8421 ... >> "%LOGFILE%"
+call uv run uvicorn web.app:app --app-dir src --host 0.0.0.0 --port 8421 --ssl-keyfile data/certs/cap-server.key --ssl-certfile data/certs/cap-server.crt >> "%LOGFILE%" 2>&1
 
 echo [%date% %time%] uvicorn exited with code %errorlevel% >> "%LOGFILE%"
 exit /b %errorlevel%

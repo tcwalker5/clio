@@ -34,7 +34,7 @@ import equalizer.clio_parties as clio_parties
 import equalizer.pdf as pdf
 import equalizer.store as store
 import matter_matching
-from web.auth import require_auth
+from web.auth import clio_session, require_login
 from web.db import get_connection
 
 router = APIRouter(prefix="/equalizer", tags=["equalizer"])
@@ -64,7 +64,7 @@ def _sanitize_filename(raw: str, fallback: str) -> str:
     return cleaned
 
 
-async def _create_worksheet_for_matter(conn, matter_id: int) -> int:
+async def _create_worksheet_for_matter(conn, user: dict, matter_id: int) -> int:
     """Always resolves the matter's display_number live from Clio rather
     than trusting any client-supplied name — the one place a new worksheet
     row actually gets created, used both by the plain "start a worksheet"
@@ -72,7 +72,7 @@ async def _create_worksheet_for_matter(conn, matter_id: int) -> int:
     with one blank item rather than an empty grid — a brand-new worksheet
     with zero rows looked broken (nothing to click H/W/= on, no obvious
     next step) versus one blank row waiting to be filled in."""
-    session = clio_documents.build_session()
+    session = clio_session(user)
     try:
         matter = await run_in_threadpool(clio_parties.fetch_matter_summary, session, matter_id)
     except RuntimeError as e:
@@ -83,7 +83,7 @@ async def _create_worksheet_for_matter(conn, matter_id: int) -> int:
 
 
 @router.get("", response_class=HTMLResponse)
-async def equalizer_home(request: Request, error: str | None = None, _: None = Depends(require_auth)):
+async def equalizer_home(request: Request, error: str | None = None, user: dict = Depends(require_login)):
     from web.app import render
 
     conn = get_connection()
@@ -94,7 +94,7 @@ async def equalizer_home(request: Request, error: str | None = None, _: None = D
 
     all_matters: list[dict] = []
     try:
-        session = clio_documents.build_session()
+        session = clio_session(user)
         # Includes Pending, not just Open — Equalizer's own designated test
         # matter (DOE, JANE) is Pending, and a real matter can plausibly
         # need an asset/debt worksheet started before its status flips to
@@ -114,7 +114,7 @@ async def equalizer_home(request: Request, error: str | None = None, _: None = D
 
 
 @router.get("/lookup", response_class=HTMLResponse)
-async def equalizer_lookup(request: Request, matter_id: str = "", matter_name: str = "", _: None = Depends(require_auth)):
+async def equalizer_lookup(request: Request, matter_id: str = "", matter_name: str = "", user: dict = Depends(require_login)):
     """Where the landing page's matter search actually lands: a matter with
     no worksheets yet goes straight to a fresh one (the common case — no
     extra click); a matter with existing worksheets (draft or saved to
@@ -139,7 +139,7 @@ async def equalizer_lookup(request: Request, matter_id: str = "", matter_name: s
     try:
         existing = store.list_worksheets_by_matter(conn, matter_id_int)
         if not existing:
-            worksheet_id = await _create_worksheet_for_matter(conn, matter_id_int)
+            worksheet_id = await _create_worksheet_for_matter(conn, user, matter_id_int)
             return RedirectResponse(url=f"/equalizer/{worksheet_id}", status_code=303)
         display_name = matter_name or existing[0]["matter_display_number"]
     finally:
@@ -150,7 +150,7 @@ async def equalizer_lookup(request: Request, matter_id: str = "", matter_name: s
     # where staff go to recall a saved worksheet, so a stale "saved" badge
     # would be actively misleading right where it matters most.
     trashed_by_id: dict[int, bool] = {}
-    session = clio_documents.build_session()
+    session = clio_session(user)
     for w in existing:
         if w["clio_document_id"]:
             try:
@@ -165,10 +165,10 @@ async def equalizer_lookup(request: Request, matter_id: str = "", matter_name: s
 
 
 @router.post("/new")
-async def equalizer_new(request: Request, matter_id: int = Form(...), _: None = Depends(require_auth)):
+async def equalizer_new(request: Request, matter_id: int = Form(...), user: dict = Depends(require_login)):
     conn = get_connection()
     try:
-        worksheet_id = await _create_worksheet_for_matter(conn, matter_id)
+        worksheet_id = await _create_worksheet_for_matter(conn, user, matter_id)
     finally:
         conn.close()
 
@@ -177,7 +177,7 @@ async def equalizer_new(request: Request, matter_id: int = Form(...), _: None = 
 
 @router.post("/{worksheet_id}/delete")
 async def equalizer_delete_worksheet(
-    worksheet_id: int, return_to: str = Form("/equalizer"), _: None = Depends(require_auth),
+    worksheet_id: int, return_to: str = Form("/equalizer"), user: dict = Depends(require_login),
 ):
     """Blocked once a worksheet has ever been saved to Clio (clio_document_id
     set) — it already has a real Document + matter Note pointing at it there
@@ -204,7 +204,7 @@ async def equalizer_delete_worksheet(
 
 
 @router.post("/{worksheet_id}/duplicate")
-async def equalizer_duplicate(worksheet_id: int, _: None = Depends(require_auth)):
+async def equalizer_duplicate(worksheet_id: int, user: dict = Depends(require_login)):
     """"Save As" — clone this worksheet's settings and rows into a brand
     new draft for a variant scenario (Ted, 2026-08-14: staff may run
     several scenarios for the same matter in one day), rather than
@@ -223,7 +223,7 @@ async def equalizer_duplicate(worksheet_id: int, _: None = Depends(require_auth)
 
 
 @router.get("/{worksheet_id}", response_class=HTMLResponse)
-async def equalizer_editor(worksheet_id: int, request: Request, _: None = Depends(require_auth)):
+async def equalizer_editor(worksheet_id: int, request: Request, user: dict = Depends(require_login)):
     """Checks live whether the linked Clio document has been trashed
     directly in Clio (Clio's own DELETE is a soft delete — deleted_at gets
     set, the record stays fetchable for 30 days) — otherwise the "Saved to
@@ -243,7 +243,7 @@ async def equalizer_editor(worksheet_id: int, request: Request, _: None = Depend
     clio_document_trashed = False
     if worksheet["clio_document_id"]:
         try:
-            session = clio_documents.build_session()
+            session = clio_session(user)
             clio_document_trashed = await run_in_threadpool(
                 clio_documents.is_document_trashed, session, worksheet["clio_document_id"],
             )
@@ -259,7 +259,7 @@ async def equalizer_editor(worksheet_id: int, request: Request, _: None = Depend
 
 
 @router.patch("/{worksheet_id}/settings")
-async def equalizer_update_settings(worksheet_id: int, payload: dict = Body(...), _: None = Depends(require_auth)):
+async def equalizer_update_settings(worksheet_id: int, payload: dict = Body(...), user: dict = Depends(require_login)):
     conn = get_connection()
     try:
         _worksheet_or_404(conn, worksheet_id)
@@ -277,7 +277,7 @@ async def equalizer_update_settings(worksheet_id: int, payload: dict = Body(...)
 
 
 @router.post("/{worksheet_id}/settings/autofill-names")
-async def equalizer_autofill_names(worksheet_id: int, _: None = Depends(require_auth)):
+async def equalizer_autofill_names(worksheet_id: int, user: dict = Depends(require_login)):
     """Best-effort prefill for the Settings panel's same-sex first-name
     fields — pulled from the matter's client + Opposing Party contact.
     Never fails the request; a blank name just means "type it in yourself"."""
@@ -287,7 +287,7 @@ async def equalizer_autofill_names(worksheet_id: int, _: None = Depends(require_
     finally:
         conn.close()
 
-    session = clio_documents.build_session()
+    session = clio_session(user)
     client_name, opposing_name = await run_in_threadpool(
         clio_parties.fetch_default_names, session, worksheet["matter_id"]
     )
@@ -295,7 +295,7 @@ async def equalizer_autofill_names(worksheet_id: int, _: None = Depends(require_
 
 
 @router.post("/{worksheet_id}/items")
-async def equalizer_add_item(worksheet_id: int, _: None = Depends(require_auth)):
+async def equalizer_add_item(worksheet_id: int, user: dict = Depends(require_login)):
     conn = get_connection()
     try:
         worksheet = _worksheet_or_404(conn, worksheet_id)
@@ -310,7 +310,7 @@ async def equalizer_add_item(worksheet_id: int, _: None = Depends(require_auth))
 
 
 @router.patch("/{worksheet_id}/items/{item_id}")
-async def equalizer_update_item(worksheet_id: int, item_id: int, payload: dict = Body(...), _: None = Depends(require_auth)):
+async def equalizer_update_item(worksheet_id: int, item_id: int, payload: dict = Body(...), user: dict = Depends(require_login)):
     conn = get_connection()
     try:
         worksheet = _worksheet_or_404(conn, worksheet_id)
@@ -330,7 +330,7 @@ async def equalizer_update_item(worksheet_id: int, item_id: int, payload: dict =
 
 
 @router.post("/{worksheet_id}/items/{item_id}/assign")
-async def equalizer_assign_item(worksheet_id: int, item_id: int, payload: dict = Body(...), _: None = Depends(require_auth)):
+async def equalizer_assign_item(worksheet_id: int, item_id: int, payload: dict = Body(...), user: dict = Depends(require_login)):
     side = payload.get("side")
     if side not in ("a", "b", "split"):
         raise HTTPException(status_code=400, detail=f"side must be 'a', 'b', or 'split', got {side!r}")
@@ -355,7 +355,7 @@ async def equalizer_assign_item(worksheet_id: int, item_id: int, payload: dict =
 
 
 @router.delete("/{worksheet_id}/items/{item_id}")
-async def equalizer_delete_item(worksheet_id: int, item_id: int, _: None = Depends(require_auth)):
+async def equalizer_delete_item(worksheet_id: int, item_id: int, user: dict = Depends(require_login)):
     conn = get_connection()
     try:
         worksheet = _worksheet_or_404(conn, worksheet_id)
@@ -369,7 +369,7 @@ async def equalizer_delete_item(worksheet_id: int, item_id: int, _: None = Depen
 
 
 @router.get("/{worksheet_id}/preview.pdf")
-async def equalizer_preview_pdf(worksheet_id: int, _: None = Depends(require_auth)):
+async def equalizer_preview_pdf(worksheet_id: int, user: dict = Depends(require_login)):
     conn = get_connection()
     try:
         worksheet = _worksheet_or_404(conn, worksheet_id)
@@ -386,7 +386,7 @@ async def equalizer_preview_pdf(worksheet_id: int, _: None = Depends(require_aut
 
 @router.post("/{worksheet_id}/save", response_class=HTMLResponse)
 async def equalizer_save_to_clio(
-    worksheet_id: int, request: Request, filename: str = Form(""), _: None = Depends(require_auth),
+    worksheet_id: int, request: Request, filename: str = Form(""), user: dict = Depends(require_login),
 ):
     """Repeatable, not one-way (Ted, 2026-08-14: "nothing is ever final" in
     this line of work) — a worksheet stays editable after this and Save to
@@ -426,7 +426,7 @@ async def equalizer_save_to_clio(
     conn = get_connection()
     try:
         try:
-            session = clio_documents.build_session()
+            session = clio_session(user)
             document_id = await run_in_threadpool(
                 clio_documents.upload_pdf, session, worksheet["matter_id"], safe_filename, pdf_bytes,
                 previous_document_id,

@@ -48,4 +48,4 @@ REM DATESTAMP rather than trusting %date%/%time% directly.
 if not exist logs mkdir logs
 powershell -NoProfile -Command "$info = Get-ScheduledTaskInfo -TaskName 'CAP Dashboard'; $stamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'; Write-Host \"Task last result: $($info.LastTaskResult) (0 = launched OK so far; nonzero means it failed, e.g. still couldn't bind the port)\"; \"$stamp -- Start-ScheduledTask issued (LastTaskResult: $($info.LastTaskResult))\" | Set-Content 'logs\last-restart.txt'; Write-Host \"Restarted at $stamp\""
 
-echo Give it a few seconds, then check http://cap.lan:8421/
+echo Give it a few seconds, then check https://cap.lan:8421/

@@ -10,13 +10,11 @@ The comparison itself is read-only (matches calendar-check's "shows what
 would change" behavior); the one write path is /update-case-number, fired
 only by an explicit button click on a mismatched or missing case-number row.
 
-Deliberately unauthenticated (no require_auth) — every route in this file,
-including the client-list report and the Court Case Number write, is
-reachable without the dashboard passphrase, unlike every other subproject's
-routes. Decision 2026-08-04: the court calendar should be usable by anyone
-on the LAN/Tailscale without a login; the passphrase still gates every other
-subproject (Bradford, Printer, Legs, RingCentral, Trust) and, once entered
-via /login, unlocks those in the same session.
+Open to every signed-in staff member (require_login, applied router-wide).
+Was fully unauthenticated from 2026-08-04 until Sign in with Clio replaced the
+shared passphrase (2026-10-22) — Ted chose to require Clio sign-in here too,
+so the Court Case Number write and every Clio read run as the person using
+the page instead of under the shared .env token.
 """
 
 import os
@@ -24,7 +22,7 @@ import uuid
 from datetime import date
 
 import requests
-from fastapi import APIRouter, Form, Request
+from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 
 from clio_users import get_staff_directory
@@ -43,21 +41,13 @@ from court_calendar.schedule import COURT_EVENT_DEFAULT_MINUTES, find_conflicts
 from court_calendar.store import fetch_date_range, fetch_upcoming_events, get_purpose_mappings, upsert_court_events
 from matter_matching import fetch_open_matters, index_by_last_name_all
 from outlook_calendar.relationships import fetch_oc_op_contacts
+from web.auth import clio_session, require_login
 from web.preview_store import PREVIEWS
 
-router = APIRouter(prefix="/calendar", tags=["calendar"])
+router = APIRouter(prefix="/calendar", tags=["calendar"], dependencies=[Depends(require_login)])
 
 DEFAULT_ATTORNEY_LAST_NAME = "Collier"
 CLIO_BASE_URL = os.getenv("CLIO_BASE_URL", "https://app.clio.com").rstrip("/")
-
-
-def _session() -> requests.Session:
-    s = requests.Session()
-    s.headers.update({
-        "Authorization": f"Bearer {os.getenv('CLIO_ACCESS_TOKEN', '')}",
-        "Content-Type": "application/json",
-    })
-    return s
 
 
 def _staff_names() -> list[str]:
@@ -122,7 +112,7 @@ async def calendar_home(request: Request, token: str | None = None):
 
 
 @router.post("/fetch")
-async def calendar_fetch(attorney: str = Form(...)):
+async def calendar_fetch(attorney: str = Form(...), user: dict = Depends(require_login)):
     error = None
     calendar_text = ""
     fetch_stats = None
@@ -136,7 +126,7 @@ async def calendar_fetch(attorney: str = Form(...)):
             parsed = [parse_court_calendar_line(line) for line in calendar_text.splitlines()]
             parsed = [ce for ce in parsed if ce]
             upsert_court_events(parsed)
-            comparison = _run_comparison()
+            comparison = _run_comparison(user)
             if "error" in comparison:
                 error = comparison.pop("error")
     except (RuntimeError, requests.RequestException) as e:
@@ -147,7 +137,7 @@ async def calendar_fetch(attorney: str = Form(...)):
     return RedirectResponse(url=f"/calendar?token={token}", status_code=303)
 
 
-def _run_comparison() -> dict:
+def _run_comparison(user: dict) -> dict:
     """Shared by /import (auto-compare right after parsing/storing) and
     /compare (manual re-run against whatever's already stored, e.g. after
     fixing something in Clio without re-pasting court text). Returns a dict
@@ -162,7 +152,7 @@ def _run_comparison() -> dict:
     court_events = [parse_court_calendar_line(row["raw_line"]) for row in events]
     court_events = [ce for ce in court_events if ce]
 
-    session = _session()
+    session = clio_session(user)
     matters = fetch_open_matters(session, fields=MATTER_SYNC_FIELDS)
     matters_by_name = index_by_last_name_all(matters)
     case_numbers_by_matter = index_case_numbers_by_matter_id(matters)
@@ -188,18 +178,18 @@ def _run_comparison() -> dict:
 
 
 @router.post("/import")
-async def calendar_import(calendar_text: str = Form(...)):
+async def calendar_import(calendar_text: str = Form(...), user: dict = Depends(require_login)):
     parsed = [parse_court_calendar_line(line) for line in calendar_text.splitlines()]
     parsed = [ce for ce in parsed if ce]
     upsert_court_events(parsed)
 
-    token = _flash({"imported_count": len(parsed), **_run_comparison()})
+    token = _flash({"imported_count": len(parsed), **_run_comparison(user)})
     return RedirectResponse(url=f"/calendar?token={token}", status_code=303)
 
 
 @router.post("/compare")
-async def calendar_compare():
-    token = _flash(_run_comparison())
+async def calendar_compare(user: dict = Depends(require_login)):
+    token = _flash(_run_comparison(user))
     return RedirectResponse(url=f"/calendar?token={token}", status_code=303)
 
 
@@ -207,23 +197,24 @@ async def calendar_compare():
 async def update_case_number(
     matter_id: int = Form(...),
     case_number: str = Form(...),
+    user: dict = Depends(require_login),
 ):
     try:
-        update_matter_case_number(_session(), matter_id, case_number)
+        update_matter_case_number(clio_session(user), matter_id, case_number)
     except RuntimeError as e:
         return JSONResponse({"error": str(e)}, status_code=502)
     return JSONResponse({"success": True})
 
 
 @router.get("/client-list", response_class=HTMLResponse)
-async def client_list_preview():
-    clients = build_client_list(_session())
+async def client_list_preview(user: dict = Depends(require_login)):
+    clients = build_client_list(clio_session(user))
     return HTMLResponse(render_html(clients))
 
 
 @router.get("/client-list/download")
-async def client_list_download():
-    clients = build_client_list(_session())
+async def client_list_download(user: dict = Depends(require_login)):
+    clients = build_client_list(clio_session(user))
     buf = render_docx(clients)
     filename = f"client-court-dates-{date.today().isoformat()}.docx"
     return StreamingResponse(

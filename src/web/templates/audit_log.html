@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Audit Log{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+<div class="panel">
+  <h2>Audit Log</h2>
+  <p class="subtitle">Who made each change from the dashboard (every save/post/update request), newest first — last 500.
+     Open-app changes are also attributed to the person in Clio itself; billing &amp; operations writes go through
+     the shared Clio token, so this log is the record of who triggered them.</p>
+  <div class="table-scroll">
+  <table class="nowrap">
+    <thead><tr><th>When</th><th>Who</th><th>Action</th><th>Page</th><th>Result</th></tr></thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td>{{ r.at|local_time }}</td>
+        <td>{{ r.user_name or "—" }}</td>
+        <td>{{ r.method }}</td>
+        <td>{{ r.path }}</td>
+        <td>{% if r.status_code and r.status_code < 400 %}<span class="badge ok">{{ r.status_code }}</span>{% else %}<span class="badge err">{{ r.status_code }}</span>{% endif %}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5">Nothing logged yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endblock %}

@@ -7,8 +7,8 @@ echo Syncing dependencies...
 call uv sync
 
 REM Start the dashboard, listening on the LAN (not just localhost)
-echo Starting Collier Automation Platform on http://0.0.0.0:8421 ...
-call uv run uvicorn web.app:app --app-dir src --host 0.0.0.0 --port 8421
+echo Starting Collier Automation Platform on https://0.0.0.0:8421 ...
+call uv run uvicorn web.app:app --app-dir src --host 0.0.0.0 --port 8421 --ssl-keyfile data/certs/cap-server.key --ssl-certfile data/certs/cap-server.crt
 
 REM Keep window open if it crashes immediately
 pause

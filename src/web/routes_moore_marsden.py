@@ -43,7 +43,7 @@ import moore_marsden.clio_notes as clio_notes
 import moore_marsden.clio_parties as clio_parties
 import moore_marsden.pdf as pdf
 import moore_marsden.store as store
-from web.auth import require_auth
+from web.auth import clio_session, require_login
 from web.db import get_connection
 
 router = APIRouter(prefix="/moore-marsden", tags=["moore_marsden"])
@@ -72,11 +72,11 @@ def _sanitize_filename(raw: str, fallback: str) -> str:
     return cleaned
 
 
-async def _create_worksheet_for_matter(conn, matter_id: int) -> int:
+async def _create_worksheet_for_matter(conn, user: dict, matter_id: int) -> int:
     """Always resolves the matter's display_number live from Clio rather
     than trusting any client-supplied name. create_worksheet() also seeds
     the required purchase + valuation rows (see moore_marsden/store.py)."""
-    session = clio_documents.build_session()
+    session = clio_session(user)
     try:
         matter = await run_in_threadpool(clio_parties.fetch_matter_summary, session, matter_id)
     except RuntimeError as e:
@@ -119,7 +119,7 @@ async def _worksheet_with_live_dates(worksheet: dict, session) -> dict:
 
 
 @router.get("", response_class=HTMLResponse)
-async def moore_marsden_home(request: Request, error: str | None = None, _: None = Depends(require_auth)):
+async def moore_marsden_home(request: Request, error: str | None = None, user: dict = Depends(require_login)):
     from web.app import render
 
     conn = get_connection()
@@ -130,7 +130,7 @@ async def moore_marsden_home(request: Request, error: str | None = None, _: None
 
     all_matters: list[dict] = []
     try:
-        session = clio_documents.build_session()
+        session = clio_session(user)
         # Open + Pending, same reasoning as Equalizer's own matter search —
         # a real matter can plausibly need this calculation started before
         # its status flips to Open.
@@ -148,7 +148,7 @@ async def moore_marsden_home(request: Request, error: str | None = None, _: None
 
 
 @router.get("/lookup", response_class=HTMLResponse)
-async def moore_marsden_lookup(request: Request, matter_id: str = "", matter_name: str = "", _: None = Depends(require_auth)):
+async def moore_marsden_lookup(request: Request, matter_id: str = "", matter_name: str = "", user: dict = Depends(require_login)):
     """A matter with no worksheets yet goes straight to a fresh one; a
     matter with existing worksheets (draft or saved) shows the list to
     recall from instead of silently creating a duplicate — same pattern as
@@ -172,14 +172,14 @@ async def moore_marsden_lookup(request: Request, matter_id: str = "", matter_nam
     try:
         existing = store.list_worksheets_by_matter(conn, matter_id_int)
         if not existing:
-            worksheet_id = await _create_worksheet_for_matter(conn, matter_id_int)
+            worksheet_id = await _create_worksheet_for_matter(conn, user, matter_id_int)
             return RedirectResponse(url=f"/moore-marsden/{worksheet_id}", status_code=303)
         display_name = matter_name or existing[0]["matter_display_number"]
     finally:
         conn.close()
 
     trashed_by_id: dict[int, bool] = {}
-    session = clio_documents.build_session()
+    session = clio_session(user)
     for w in existing:
         if w["clio_document_id"]:
             try:
@@ -194,10 +194,10 @@ async def moore_marsden_lookup(request: Request, matter_id: str = "", matter_nam
 
 
 @router.post("/new")
-async def moore_marsden_new(request: Request, matter_id: int = Form(...), _: None = Depends(require_auth)):
+async def moore_marsden_new(request: Request, matter_id: int = Form(...), user: dict = Depends(require_login)):
     conn = get_connection()
     try:
-        worksheet_id = await _create_worksheet_for_matter(conn, matter_id)
+        worksheet_id = await _create_worksheet_for_matter(conn, user, matter_id)
     finally:
         conn.close()
 
@@ -206,7 +206,7 @@ async def moore_marsden_new(request: Request, matter_id: int = Form(...), _: Non
 
 @router.post("/{worksheet_id}/delete")
 async def moore_marsden_delete_worksheet(
-    worksheet_id: int, return_to: str = Form("/moore-marsden"), _: None = Depends(require_auth),
+    worksheet_id: int, return_to: str = Form("/moore-marsden"), user: dict = Depends(require_login),
 ):
     """Blocked once a worksheet has ever been saved to Clio (clio_document_id
     set) — same reasoning as Equalizer: it already has a real Document +
@@ -227,7 +227,7 @@ async def moore_marsden_delete_worksheet(
 
 
 @router.post("/{worksheet_id}/duplicate")
-async def moore_marsden_duplicate(worksheet_id: int, _: None = Depends(require_auth)):
+async def moore_marsden_duplicate(worksheet_id: int, user: dict = Depends(require_login)):
     """"Save As" — clone this worksheet's settings and every segment into a
     brand new draft for a variant scenario, same reasoning as Equalizer."""
     conn = get_connection()
@@ -241,7 +241,7 @@ async def moore_marsden_duplicate(worksheet_id: int, _: None = Depends(require_a
 
 
 @router.get("/{worksheet_id}", response_class=HTMLResponse)
-async def moore_marsden_editor(worksheet_id: int, request: Request, _: None = Depends(require_auth)):
+async def moore_marsden_editor(worksheet_id: int, request: Request, user: dict = Depends(require_login)):
     """Checks live whether the linked Clio document has been trashed
     directly in Clio — same soft-delete detection as Equalizer's editor
     page. Best-effort: a check failure just skips the warning."""
@@ -255,7 +255,7 @@ async def moore_marsden_editor(worksheet_id: int, request: Request, _: None = De
     finally:
         conn.close()
 
-    session = clio_documents.build_session()
+    session = clio_session(user)
     clio_document_trashed = False
     if worksheet["clio_document_id"]:
         try:
@@ -282,7 +282,7 @@ _CLIO_DATE_FIELDS = ("date_of_marriage", "date_of_separation")
 
 
 @router.patch("/{worksheet_id}/settings")
-async def moore_marsden_update_settings(worksheet_id: int, payload: dict = Body(...), _: None = Depends(require_auth)):
+async def moore_marsden_update_settings(worksheet_id: int, payload: dict = Body(...), user: dict = Depends(require_login)):
     conn = get_connection()
     try:
         worksheet = _worksheet_or_404(conn, worksheet_id)
@@ -296,7 +296,7 @@ async def moore_marsden_update_settings(worksheet_id: int, payload: dict = Body(
 
     clio_dates = {k: v for k, v in payload.items() if k in _CLIO_DATE_FIELDS and v}
     if clio_dates:
-        session = clio_documents.build_session()
+        session = clio_session(user)
         try:
             await run_in_threadpool(clio_matter_dates.update_matter_dates, session, worksheet["matter_id"], **clio_dates)
         except RuntimeError as e:
@@ -306,7 +306,7 @@ async def moore_marsden_update_settings(worksheet_id: int, payload: dict = Body(
 
 
 @router.post("/{worksheet_id}/settings/autofill-names")
-async def moore_marsden_autofill_names(worksheet_id: int, _: None = Depends(require_auth)):
+async def moore_marsden_autofill_names(worksheet_id: int, user: dict = Depends(require_login)):
     """Best-effort prefill for owner/non-owner spouse labels, pulled from
     the matter's client + Opposing Party contact. Never fails the request."""
     conn = get_connection()
@@ -315,7 +315,7 @@ async def moore_marsden_autofill_names(worksheet_id: int, _: None = Depends(requ
     finally:
         conn.close()
 
-    session = clio_documents.build_session()
+    session = clio_session(user)
     owner_name, non_owner_name = await run_in_threadpool(
         clio_parties.fetch_default_names, session, worksheet["matter_id"]
     )
@@ -323,7 +323,7 @@ async def moore_marsden_autofill_names(worksheet_id: int, _: None = Depends(requ
 
 
 @router.post("/{worksheet_id}/segments")
-async def moore_marsden_add_segment(worksheet_id: int, _: None = Depends(require_auth)):
+async def moore_marsden_add_segment(worksheet_id: int, user: dict = Depends(require_login)):
     conn = get_connection()
     try:
         worksheet = _worksheet_or_404(conn, worksheet_id)
@@ -336,11 +336,11 @@ async def moore_marsden_add_segment(worksheet_id: int, _: None = Depends(require
     finally:
         conn.close()
 
-    return await _totals_payload(worksheet, segments, capital_improvements, clio_documents.build_session())
+    return await _totals_payload(worksheet, segments, capital_improvements, clio_session(user))
 
 
 @router.patch("/{worksheet_id}/segments/{segment_id}")
-async def moore_marsden_update_segment(worksheet_id: int, segment_id: int, payload: dict = Body(...), _: None = Depends(require_auth)):
+async def moore_marsden_update_segment(worksheet_id: int, segment_id: int, payload: dict = Body(...), user: dict = Depends(require_login)):
     conn = get_connection()
     try:
         worksheet = _worksheet_or_404(conn, worksheet_id)
@@ -355,11 +355,11 @@ async def moore_marsden_update_segment(worksheet_id: int, segment_id: int, paylo
 
     if not any(s["id"] == segment_id for s in segments):
         raise HTTPException(status_code=404, detail=f"No such segment: {segment_id}")
-    return await _totals_payload(worksheet, segments, capital_improvements, clio_documents.build_session())
+    return await _totals_payload(worksheet, segments, capital_improvements, clio_session(user))
 
 
 @router.delete("/{worksheet_id}/segments/{segment_id}")
-async def moore_marsden_delete_segment(worksheet_id: int, segment_id: int, _: None = Depends(require_auth)):
+async def moore_marsden_delete_segment(worksheet_id: int, segment_id: int, user: dict = Depends(require_login)):
     conn = get_connection()
     try:
         worksheet = _worksheet_or_404(conn, worksheet_id)
@@ -372,11 +372,11 @@ async def moore_marsden_delete_segment(worksheet_id: int, segment_id: int, _: No
     finally:
         conn.close()
 
-    return await _totals_payload(worksheet, segments, capital_improvements, clio_documents.build_session())
+    return await _totals_payload(worksheet, segments, capital_improvements, clio_session(user))
 
 
 @router.post("/{worksheet_id}/capital-improvements")
-async def moore_marsden_add_capital_improvement(worksheet_id: int, _: None = Depends(require_auth)):
+async def moore_marsden_add_capital_improvement(worksheet_id: int, user: dict = Depends(require_login)):
     conn = get_connection()
     try:
         worksheet = _worksheet_or_404(conn, worksheet_id)
@@ -386,13 +386,13 @@ async def moore_marsden_add_capital_improvement(worksheet_id: int, _: None = Dep
     finally:
         conn.close()
 
-    payload = await _totals_payload(worksheet, segments, capital_improvements, clio_documents.build_session())
+    payload = await _totals_payload(worksheet, segments, capital_improvements, clio_session(user))
     return {**payload, "capital_improvements": capital_improvements}
 
 
 @router.patch("/{worksheet_id}/capital-improvements/{improvement_id}")
 async def moore_marsden_update_capital_improvement(
-    worksheet_id: int, improvement_id: int, payload: dict = Body(...), _: None = Depends(require_auth),
+    worksheet_id: int, improvement_id: int, payload: dict = Body(...), user: dict = Depends(require_login),
 ):
     conn = get_connection()
     try:
@@ -408,12 +408,12 @@ async def moore_marsden_update_capital_improvement(
 
     if not any(i["id"] == improvement_id for i in capital_improvements):
         raise HTTPException(status_code=404, detail=f"No such capital improvement: {improvement_id}")
-    result = await _totals_payload(worksheet, segments, capital_improvements, clio_documents.build_session())
+    result = await _totals_payload(worksheet, segments, capital_improvements, clio_session(user))
     return {**result, "capital_improvements": capital_improvements}
 
 
 @router.delete("/{worksheet_id}/capital-improvements/{improvement_id}")
-async def moore_marsden_delete_capital_improvement(worksheet_id: int, improvement_id: int, _: None = Depends(require_auth)):
+async def moore_marsden_delete_capital_improvement(worksheet_id: int, improvement_id: int, user: dict = Depends(require_login)):
     conn = get_connection()
     try:
         worksheet = _worksheet_or_404(conn, worksheet_id)
@@ -423,12 +423,12 @@ async def moore_marsden_delete_capital_improvement(worksheet_id: int, improvemen
     finally:
         conn.close()
 
-    result = await _totals_payload(worksheet, segments, capital_improvements, clio_documents.build_session())
+    result = await _totals_payload(worksheet, segments, capital_improvements, clio_session(user))
     return {**result, "capital_improvements": capital_improvements}
 
 
 @router.get("/{worksheet_id}/preview.pdf")
-async def moore_marsden_preview_pdf(worksheet_id: int, _: None = Depends(require_auth)):
+async def moore_marsden_preview_pdf(worksheet_id: int, user: dict = Depends(require_login)):
     conn = get_connection()
     try:
         worksheet = _worksheet_or_404(conn, worksheet_id)
@@ -437,7 +437,7 @@ async def moore_marsden_preview_pdf(worksheet_id: int, _: None = Depends(require
     finally:
         conn.close()
 
-    session = clio_documents.build_session()
+    session = clio_session(user)
     worksheet_for_pdf = await _worksheet_with_live_dates(worksheet, session)
     pdf_bytes = await run_in_threadpool(pdf.render_worksheet_pdf, worksheet_for_pdf, segments, capital_improvements)
     return Response(
@@ -448,7 +448,7 @@ async def moore_marsden_preview_pdf(worksheet_id: int, _: None = Depends(require
 
 @router.post("/{worksheet_id}/save", response_class=HTMLResponse)
 async def moore_marsden_save_to_clio(
-    worksheet_id: int, request: Request, filename: str = Form(""), _: None = Depends(require_auth),
+    worksheet_id: int, request: Request, filename: str = Form(""), user: dict = Depends(require_login),
 ):
     """Repeatable, not one-way — same as Equalizer: a worksheet stays
     editable after this and Save to Clio can be clicked again any time.
@@ -466,7 +466,7 @@ async def moore_marsden_save_to_clio(
         conn.close()
 
     async def _render_editor(worksheet, segments, capital_improvements, **extra):
-        session = clio_documents.build_session()
+        session = clio_session(user)
         payload = await _totals_payload(worksheet, segments, capital_improvements, session)
         return render(request, "moore_marsden_worksheet.html", worksheet=worksheet, segments=payload["segments"],
                       totals=payload["totals"], capital_improvements=capital_improvements,
@@ -477,7 +477,7 @@ async def moore_marsden_save_to_clio(
         return await _render_editor(worksheet, segments, capital_improvements,
                                      error="A worksheet needs at least a purchase and a valuation row before saving to Clio.")
 
-    session = clio_documents.build_session()
+    session = clio_session(user)
     worksheet_for_pdf = await _worksheet_with_live_dates(worksheet, session)
     pdf_bytes = await run_in_threadpool(pdf.render_worksheet_pdf, worksheet_for_pdf, segments, capital_improvements)
     default_filename = f"moore-marsden-{datetime.today().strftime('%Y-%m-%d')}"

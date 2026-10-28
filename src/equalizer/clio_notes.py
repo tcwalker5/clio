@@ -33,7 +33,7 @@ NOTES_ENDPOINT = f"{BASE_URL}/api/v4/notes.json"
 # CLAUDE.md's "On-LAN access" note (CAP Dashboard.url points here too).
 # Deliberately not localhost/127.0.0.1: this URL goes into a Note any staff
 # member might open, not just whoever's running the server.
-CAP_BASE_URL = os.getenv("CAP_BASE_URL", "http://cap.lan:8421").rstrip("/")
+CAP_BASE_URL = os.getenv("CAP_BASE_URL", "https://cap.lan:8421").rstrip("/")
 
 
 def create_worksheet_note(session: requests.Session, matter_id: int, worksheet_id: int) -> int:

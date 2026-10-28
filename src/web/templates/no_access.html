@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}No access{% endblock %}
+{% block content %}
+<div class="panel">
+  <h2>This page is limited to billing &amp; operations staff</h2>
+  <p>You're signed in as {{ current_user.name }}, which doesn't include access to this tool.
+     If you need it, ask Ted.</p>
+  <p><a class="btn secondary" href="/">Back to the dashboard</a></p>
+</div>
+{% endblock %}

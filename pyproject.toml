@@ -16,6 +16,7 @@ dependencies = [
     "tzdata>=2026.3",
     "pytesseract>=0.3.13",
     "reportlab>=5.0.0",
+    "cryptography>=45.0.0",
 ]
 
 [tool.pytest.ini_options]

@@ -52,9 +52,10 @@ USER_ID_TED
 USER_ID_DAHANN
 
 CLIO_DASHBOARD_SECRET       # web dashboard session signing key
-CLIO_DASHBOARD_PASSPHRASE  # web dashboard shared login passphrase
+CAP_OAUTH_REDIRECT_URI      # optional — "Sign in with Clio" redirect; defaults to
+                             # https://cap.lan:8421/oauth/callback (see src/web/CLAUDE.md "Auth")
 CAP_BASE_URL                # optional — LAN URL used in links posted back to Clio (Equalizer's
-                             # matter Note); defaults to http://cap.lan:8421, same host as
+                             # matter Note); defaults to https://cap.lan:8421, same host as
                              # "CAP Dashboard.url"
 
 # Outlook Calendar Migration only — see src/outlook_calendar/CLAUDE.md
@@ -100,6 +101,7 @@ clio/
 │   ├── clio_auth.py              # OAuth token management (shared)
 │   ├── matter_matching.py        # Shared name -> Clio matter ID lookup (all subprojects)
 │   ├── clio_users.py             # Clio staff directory (/users.json), cached to SQLite
+│   ├── cap_certs.py              # Private root CA + HTTPS cert for the dashboard → src/web/CLAUDE.md "Auth"
 │   ├── printer_expenses.py       # Printer Expenses               → reference/printer-papercut.md
 │   ├── generate_papercut_accounts.py  # PaperCut Shared Account Sync → reference/printer-papercut.md
 │   ├── papercut_balance_migration.py  # PaperCut Shared Account Sync → reference/printer-papercut.md
@@ -163,11 +165,12 @@ clio/
 │       │                         #   equalizer/moore_marsden)
 │       ├── templates/            #   Jinja2 templates
 │       └── static/                #   CSS + drag-and-drop JS
-├── start-dashboard.bat            # Launches the dashboard (uv sync + uvicorn), for manual use
+├── start-dashboard.bat            # Launches the dashboard (uv sync + uvicorn, HTTPS), for manual use
+├── install-cap-cert.bat           # One-time per staff PC: trust the dashboard's HTTPS root CA
 ├── start-dashboard-silent.vbs     # Same, hidden window, fire-and-forget — desktop shortcut
 ├── start-dashboard-service.bat    # Unattended variant (no pause, dated log file) — Scheduled Task use
 ├── start-dashboard-service.vbs    # Hidden window, BLOCKS until it exits — see src/web/CLAUDE.md's CAP section
-├── CAP Dashboard.url              # Desktop shortcut to http://cap.lan:8421/, for staff
+├── CAP Dashboard.url              # Desktop shortcut to https://cap.lan:8421/, for staff
 ├── .env                # Credentials (gitignored)
 ├── .env.example
 ├── .gitignore
@@ -264,10 +267,11 @@ schemas for `/documents.json` and `/notes.json` — neither field appears among 
 writable properties) — they're server-derived from whichever identity the API call
 authenticates as, with no per-request override. This means every Equalizer/Moore-
 Marsden PDF, every posted Note, every custom field write, shows as done by Ted
-regardless of which staff member actually used the dashboard. Real per-user
-attribution needs per-user Clio OAuth, a genuinely large undertaking — see
-`src/web/CLAUDE.md`'s CAP section, "Per-user Clio attribution" for the full scoping
-and the open decision (2026-09-08, on hold).
+regardless of which staff member actually used the dashboard — **for CLI/scheduled
+runs and the admin-only dashboard apps.** Since 2026-10-22 the dashboard's open apps
+(Equalizer, Moore/Marsden, Date Calculator, Client Assignment, Court Calendar) use
+"Sign in with Clio" and call Clio with the signed-in person's own token, so their
+writes are attributed correctly — see `src/web/CLAUDE.md`'s "Auth".
 
 ### App permissions (Developer Portal) — not a freely-requestable OAuth scope string
 

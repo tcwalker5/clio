@@ -20,13 +20,13 @@ from fastapi.responses import HTMLResponse, JSONResponse
 import date_calculator
 import matter_matching
 from moore_marsden.clio_matter_dates import fetch_matter_dates, update_matter_dates
-from web.auth import require_auth
+from web.auth import clio_session, require_login
 
 router = APIRouter(prefix="/date-calculator", tags=["date-calculator"])
 
 
-def _all_matters() -> list[dict]:
-    session = date_calculator.build_session()
+def _all_matters(user: dict) -> list[dict]:
+    session = clio_session(user)
     # Open + pending, same reasoning as Moore/Marsden's own matter search —
     # Date of Marriage/Separation can plausibly be entered before a matter
     # formally flips to Open.
@@ -37,11 +37,11 @@ def _all_matters() -> list[dict]:
     )
 
 
-def _load_matter(matter_id: int, all_matters: list[dict]) -> dict | None:
+def _load_matter(user: dict, matter_id: int, all_matters: list[dict]) -> dict | None:
     display_number = next((m["name"] for m in all_matters if m["id"] == matter_id), None)
     if display_number is None:
         return None
-    session = date_calculator.build_session()
+    session = clio_session(user)
     dom, dos = fetch_matter_dates(session, matter_id)
     current_value, _ = date_calculator.fetch_length_of_marriage(session, matter_id)
     return {
@@ -54,16 +54,16 @@ def _load_matter(matter_id: int, all_matters: list[dict]) -> dict | None:
 @router.get("", response_class=HTMLResponse)
 async def date_calculator_home(
     request: Request, matter_id: int | None = None, error: str | None = None,
-    _: None = Depends(require_auth),
+    user: dict = Depends(require_login),
 ):
     from web.app import render
 
     all_matters: list[dict] = []
     matter = None
     try:
-        all_matters = await run_in_threadpool(_all_matters)
+        all_matters = await run_in_threadpool(_all_matters, user)
         if matter_id:
-            matter = await run_in_threadpool(_load_matter, matter_id, all_matters)
+            matter = await run_in_threadpool(_load_matter, user, matter_id, all_matters)
             if matter is None:
                 error = error or "That matter wasn't found among open/pending matters."
     except RuntimeError as e:
@@ -78,13 +78,13 @@ async def date_calculator_home(
 @router.post("/save")
 async def date_calculator_save(
     matter_id: int = Form(...), start_date: str = Form(...), end_date: str = Form(...),
-    _: None = Depends(require_auth),
+    user: dict = Depends(require_login),
 ):
     def _do() -> dict:
         start = date_calculator.parse_iso_date(start_date)
         end = date_calculator.parse_iso_date(end_date)
         text_value = date_calculator.calculate_duration(start, end).format()
-        session = date_calculator.build_session()
+        session = clio_session(user)
         # Same single explicit click writes all three fields — Save always
         # means "these are the real dates," not "just remember the summary."
         # Date of Marriage/Separation is the more foundational write (the

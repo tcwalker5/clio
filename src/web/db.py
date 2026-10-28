@@ -33,6 +33,7 @@ import equalizer.store as equalizer_store
 import generate_papercut_accounts
 import moore_marsden.store as moore_marsden_store
 import soa_now_audit
+from web import auth as auth_store
 
 DB_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "clio_dashboard.db"
 
@@ -213,6 +214,7 @@ _FRAGMENTS = [
     ("papercut", generate_papercut_accounts.SCHEMA, generate_papercut_accounts.SCHEMA_COLUMNS),
     ("bradford", bradford_invoice.SCHEMA, bradford_invoice.SCHEMA_COLUMNS),
     ("case_closing", soa_now_audit.SCHEMA, soa_now_audit.SCHEMA_COLUMNS),
+    ("auth", auth_store.SCHEMA, auth_store.SCHEMA_COLUMNS),
 ]
 
 

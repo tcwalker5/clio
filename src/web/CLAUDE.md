@@ -62,19 +62,40 @@ considered and rejected — the dashboard's dry-run-preview -> confirm handoff
 processes, so multiple workers would break "Confirm & Post" whenever the confirm
 request landed on a different worker than the preview did.
 
-**Auth:** Single shared passphrase (`CLIO_DASHBOARD_PASSPHRASE` in `.env`), not per-staff
-login — the Clio side already uses one shared app registration. Session is a signed cookie
-(`CLIO_DASHBOARD_SECRET`). This is LAN-only gatekeeping, not intended as a public-internet
-login system. Auth is applied per-route (`Depends(require_auth)` in each `routes_*.py`),
-not as blanket middleware — **2026-08-04: every route under `/calendar` (Court Calendar
-Sync — see that section — including its client-list report and the Court Case Number
-write) deliberately has no `require_auth` at all**, by explicit decision, so the court
-calendar is usable by anyone on the LAN/Tailscale without logging in. Every other
-subproject (Bradford, Printer, Legs, RingCentral, Trust) still requires the passphrase;
-logging in via `/login` sets one session cookie for the whole app, so entering the
-passphrase from anywhere unlocks those too in the same session. `base.html`'s topbar
-reflects this: authenticated sessions get the full nav, unauthenticated visitors (outside
-`/login`) get a minimal one with just "Court Calendar" and "Log in".
+**Auth — Sign in with Clio + two access levels (2026-10-22, replaced the shared
+passphrase):** `web/auth.py`. Each person signs in with their own Clio account (OAuth,
+same app registration as `clio_auth.py`; redirect URI
+`https://cap.lan:8421/oauth/callback`, registered in Clio's Developer Portal alongside
+the CLI's `http://127.0.0.1/callback`). Their access/refresh token is stored server-side
+in `clio_user_tokens` (auth.py's own schema fragment) and refreshed automatically; the
+signed session cookie only holds their Clio user id + name.
+- **`require_login`** (any signed-in staff) — Equalizer, Moore/Marsden, Date Calculator,
+  Client Assignment, Court Calendar (router-wide), and the home page. These routes call
+  Clio with **`clio_session(user)`** — the signed-in person's own token — so Documents,
+  Notes and field edits are attributed to them in Clio, not to Ted.
+- **`require_admin`** (signed in AND in `ADMIN_USER_IDS` — Ted, Dalinah; by Clio user
+  id) — every billing & operations app. `require_auth` is an alias for it, which is why
+  those routers didn't change. They still use the shared `.env` token: only admins use
+  them, and their modules also run as CLI/scheduled jobs with no signed-in user. A
+  non-admin gets `no_access.html` (403), and the nav/home page hide those apps.
+- **`audit_log`** — middleware in `app.py` records user + method + path + status for
+  every non-GET request (all apps, including admin ones whose Clio writes go through the
+  shared token). Admin page: `/audit-log`.
+
+**HTTPS is required for this** — Clio's Developer Portal only accepts `https` redirect
+URIs (or `http://127.0.0.1`). The dashboard serves TLS directly from uvicorn
+(`--ssl-keyfile/--ssl-certfile` in both `start-dashboard*.bat`) using a cert signed by a
+private firm root CA made by `src/cap_certs.py` (files in `data/certs/`, gitignored).
+Each staff PC runs `install-cap-cert.bat` once to trust that root (current-user store,
+no admin rights; Chrome/Edge only, not Firefox). The server cert is valid ~13 months —
+re-issue with `uv run src/cap_certs.py --server` (same root CA, no PC reinstall) and
+restart. Never delete `cap-root-ca.key/.crt`: a new root means reinstalling on every PC.
+Session cookie is `https_only`, so plain-http access no longer works at all — the
+`CAP Dashboard.url` shortcut and `CAP_BASE_URL` default moved to `https://`. Matter Notes
+posted before 2026-10-22 still link to `http://cap.lan:8421/...` and won't open.
+**Always reach the dashboard as `cap.lan`** — the OAuth `state` lives in the session
+cookie, which is per-host, so starting sign-in from `localhost`/an IP and returning to
+`cap.lan` fails the state check.
 
 **Storage:** SQLite at `data/clio_dashboard.db` — court events, purpose mappings,
 staff cache, RingCentral sync run history, trust request settings/lifecycle. No
@@ -138,17 +159,19 @@ forwarding or public-facing server required. The dashboard itself only ever bind
 LAN/Tailscale interface, never a public one.
 
 **On-LAN access:** `CAP Dashboard.url` (repo root, added 2026-07-28) is an internet
-shortcut pointed at `http://cap.lan:8421/` — meant to be copied to individual staff
+shortcut pointed at `https://cap.lan:8421/` (http until 2026-10-22) — meant to be copied to individual staff
 desktops or emailed as an attachment so non-technical staff double-click instead of
 typing an IP and port. `cap.lan` is a local DNS/hosts-file name resolved on the office
 LAN (not something this repo configures or documents further — it's network-side setup,
 same category as the Windows Scheduled Task registration for RingCentral sync).
 
-**New `.env` keys:**
+**`.env` keys:**
 ```
 CLIO_DASHBOARD_SECRET       # session cookie signing key
-CLIO_DASHBOARD_PASSPHRASE   # shared login passphrase
+CAP_OAUTH_REDIRECT_URI      # optional; defaults to https://cap.lan:8421/oauth/callback
 ```
+(`CLIO_DASHBOARD_PASSPHRASE` is no longer read — the shared passphrase was replaced by
+Sign in with Clio 2026-10-22.)
 
 ---
 
@@ -385,7 +408,16 @@ system synced with Clio" pattern the rest of this platform is built around.
 ---
 
 
-## Per-user Clio attribution — open decision (2026-09-08, on hold)
+## Per-user Clio attribution — BUILT 2026-10-22 (was on hold since 2026-09-08)
+
+**Decided and built 2026-10-22** — see "Auth" near the top of this doc for how it works
+now. Ted's either/or below resolved to "build it", with the scope landing as: per-user
+tokens for the five open apps (the ones staff actually write to Clio from), shared token
+kept for admin-only billing & operations apps (only Ted/Dalinah use them), plus a
+dashboard-side audit log covering everything. The 2026-09-08 scoping notes below are
+kept as history; point 6 (staff Clio permissions) is still worth watching — a staff
+member whose own Clio role lacks a permission will now see that as an error in the
+open apps, where Ted's token used to succeed.
 
 **The problem:** every Document, Note, and write this platform makes shows up in Clio
 as authored by whoever authorized the one shared `CLIO_ACCESS_TOKEN` — currently Ted
@@ -447,7 +479,7 @@ built):
    rejected on operations Ted's sails through today. Needs a per-person Clio
    permission audit before trusting this platform-wide, not assumed to just work.
 
-**Not decided:** whether to build this (full scope, per point 1-6 above, no smaller
+**Was not decided (resolved 2026-10-22, see top of section):** whether to build this (full scope, per point 1-6 above, no smaller
 version per Ted's stated either/or) or drop the ask entirely. Revisit when picked back
 up — start from this section rather than re-deriving the schema findings above.
 
