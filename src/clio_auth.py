@@ -14,7 +14,6 @@ Required scopes for this project:
 
 import argparse
 import os
-import re
 import sys
 import threading
 import webbrowser
@@ -24,6 +23,8 @@ from urllib.parse import parse_qs, urlencode, urlparse
 
 import requests
 from dotenv import load_dotenv
+
+from clio_token import save_tokens
 
 ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 load_dotenv(ENV_PATH)
@@ -42,23 +43,13 @@ if not CLIENT_ID or not CLIENT_SECRET:
 
 
 def update_env(access_token: str, refresh_token: str) -> None:
-    text = ENV_PATH.read_text(encoding="utf-8")
-
-    def replace_or_append(t: str, key: str, value: str) -> str:
-        pattern = rf"^{re.escape(key)}=.*$"
-        line = f"{key}={value}"
-        if re.search(pattern, t, re.MULTILINE):
-            return re.sub(pattern, line, t, flags=re.MULTILINE)
-        return t + f"\n{line}"
-
-    text = replace_or_append(text, "CLIO_ACCESS_TOKEN", access_token)
+    # Same .env writer the automatic renewal in clio_token.py uses.
+    save_tokens(access_token, refresh_token)
     # Only update refresh token if Clio returned a new one — they don't always rotate it
     if refresh_token:
-        text = replace_or_append(text, "CLIO_REFRESH_TOKEN", refresh_token)
         print(f"  CLIO_REFRESH_TOKEN : {refresh_token[:12]}...")
     else:
         print("  CLIO_REFRESH_TOKEN : unchanged (Clio did not issue a new one)")
-    ENV_PATH.write_text(text, encoding="utf-8")
     print(f"  CLIO_ACCESS_TOKEN  : {access_token[:12]}...")
 
 

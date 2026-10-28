@@ -245,6 +245,17 @@ uv run src/clio_auth.py --refresh
 
 Both commands update `CLIO_ACCESS_TOKEN` and `CLIO_REFRESH_TOKEN` in `.env` automatically.
 
+**Expired tokens renew themselves (2026-10-26).** Every call made with the shared
+.env token goes through `CLIO_AUTH` from `src/clio_token.py` (`session.auth =
+CLIO_AUTH`, or `auth=CLIO_AUTH` on a one-off request) — **never** a hand-built
+`"Authorization": f"Bearer {ACCESS_TOKEN}"` header, which would skip renewal. On a
+401 it renews with the refresh token, saves to .env, and retries once; a lock file
+(`data/clio_token.lock`) plus a re-read of .env stop the dashboard and scheduled
+tasks from renewing twice. `--refresh` by hand is now only a fallback. If renewal
+itself fails (refresh token revoked), calls raise "run `uv run src/clio_auth.py`" —
+do the full browser flow. Signed-in staff tokens (`web/auth.py`) are separate and
+renew there. Tests: `tests/test_clio_token.py`.
+
 **Every write this whole platform makes is attributed to whoever authorized this one
 shared token** — confirmed live via `/users/who_am_i.json`: currently Ted Walker (id
 `359072911`). A Document's `creator` field and a Note's `author` field are **not

@@ -65,6 +65,8 @@ import os
 
 import requests
 
+from clio_token import CLIO_AUTH
+
 BASE_URL = os.getenv("CLIO_BASE_URL", "https://app.clio.com").rstrip("/")
 FOLDERS_ENDPOINT = f"{BASE_URL}/api/v4/folders.json"
 DOCUMENTS_ENDPOINT = f"{BASE_URL}/api/v4/documents.json"
@@ -167,5 +169,6 @@ def build_session() -> requests.Session:
     if not token:
         raise RuntimeError("CLIO_ACCESS_TOKEN not set in .env")
     session = requests.Session()
-    session.headers.update({"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+    session.headers.update({"Content-Type": "application/json"})
+    session.auth = CLIO_AUTH
     return session

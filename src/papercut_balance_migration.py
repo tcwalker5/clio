@@ -57,6 +57,8 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
+from clio_token import CLIO_AUTH
+
 ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 load_dotenv(ENV_PATH)
 
@@ -245,9 +247,9 @@ def main() -> None:
 
     session = requests.Session()
     session.headers.update({
-        "Authorization": f"Bearer {ACCESS_TOKEN}",
         "Content-Type": "application/json",
     })
+    session.auth = CLIO_AUTH
     matters = fetch_open_matters(session)
     new_rows = build_rows(matters)
 

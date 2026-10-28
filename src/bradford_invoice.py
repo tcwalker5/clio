@@ -40,6 +40,7 @@ import pdfplumber
 import requests
 from dotenv import load_dotenv
 
+from clio_token import CLIO_AUTH
 from matter_matching import fetch_open_matters, index_by_last_name
 
 load_dotenv()
@@ -773,9 +774,9 @@ def run_pipeline(
 
     session = requests.Session()
     session.headers.update({
-        "Authorization": f"Bearer {ACCESS_TOKEN}",
         "Content-Type":  "application/json",
     })
+    session.auth = CLIO_AUTH
 
     matters_raw = fetch_open_matters(session, fields=MATTERS_FIELDS_WITH_RATES)
     matters = index_by_last_name(matters_raw)

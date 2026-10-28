@@ -36,6 +36,7 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
+from clio_token import CLIO_AUTH
 from matter_matching import fetch_open_matters, index_by_display_name, normalize_name
 
 load_dotenv()
@@ -535,9 +536,9 @@ def run_pipeline(
 
     session = requests.Session()
     session.headers.update({
-        "Authorization": f"Bearer {ACCESS_TOKEN}",
         "Content-Type": "application/json",
     })
+    session.auth = CLIO_AUTH
 
     report_date, period_label, period, period_ok, period_note, aggregated = parse_printer_report(input_path)
 

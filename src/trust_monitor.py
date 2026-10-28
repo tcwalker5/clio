@@ -73,6 +73,8 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
+from clio_token import CLIO_AUTH
+
 ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 load_dotenv(ENV_PATH)
 
@@ -525,7 +527,7 @@ def build_session() -> requests.Session:
     if not ACCESS_TOKEN:
         raise RuntimeError("CLIO_ACCESS_TOKEN not set in .env")
     session = requests.Session()
-    session.headers.update({"Authorization": f"Bearer {ACCESS_TOKEN}"})
+    session.auth = CLIO_AUTH
     return session
 
 

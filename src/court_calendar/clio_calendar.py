@@ -16,6 +16,8 @@ from zoneinfo import ZoneInfo
 import requests
 from dotenv import load_dotenv
 
+from clio_token import CLIO_AUTH
+
 load_dotenv()
 
 PACIFIC = ZoneInfo("America/Los_Angeles")
@@ -105,9 +107,9 @@ def fetch_calendar_entries(
     if own_session:
         session = requests.Session()
         session.headers.update({
-            "Authorization": f"Bearer {ACCESS_TOKEN}",
             "Content-Type": "application/json",
         })
+        session.auth = CLIO_AUTH
 
     from_dt = datetime.combine(datetime.strptime(from_date, "%Y-%m-%d").date(), time.min, tzinfo=PACIFIC)
     to_dt = datetime.combine(datetime.strptime(to_date, "%Y-%m-%d").date(), time.max, tzinfo=PACIFIC)

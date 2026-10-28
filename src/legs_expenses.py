@@ -83,6 +83,8 @@ import pytesseract
 import requests
 from dotenv import load_dotenv
 
+from clio_token import CLIO_AUTH
+
 from court_calendar.normalizer import PURPOSE_CODES, party_names_match
 from matter_matching import fetch_open_matters, index_by_last_name
 
@@ -784,9 +786,9 @@ class RunResult:
 def build_session() -> requests.Session:
     session = requests.Session()
     session.headers.update({
-        "Authorization": f"Bearer {ACCESS_TOKEN}",
         "Content-Type": "application/json",
     })
+    session.auth = CLIO_AUTH
     return session
 
 

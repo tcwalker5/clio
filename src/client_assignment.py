@@ -43,6 +43,7 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
+from clio_token import CLIO_AUTH
 import clio_users
 from matter_matching import fetch_open_matters
 
@@ -128,7 +129,8 @@ def build_session() -> requests.Session:
     if not ACCESS_TOKEN:
         raise RuntimeError("CLIO_ACCESS_TOKEN not set in .env")
     session = requests.Session()
-    session.headers.update({"Authorization": f"Bearer {ACCESS_TOKEN}", "Content-Type": "application/json"})
+    session.headers.update({"Content-Type": "application/json"})
+    session.auth = CLIO_AUTH
     return session
 
 

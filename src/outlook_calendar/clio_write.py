@@ -17,6 +17,8 @@ from datetime import datetime
 
 import requests
 
+from clio_token import CLIO_AUTH
+
 BASE_URL = os.getenv("CLIO_BASE_URL", "https://app.clio.com").rstrip("/")
 CALENDAR_ENTRIES_ENDPOINT = f"{BASE_URL}/api/v4/calendar_entries.json"
 RETRY_DELAYS = [5, 15, 30]  # seconds, matches clio_calendar.py's pattern on 429
@@ -38,9 +40,9 @@ HEIDI_EVENT_TYPE_ID = 591618
 def clio_session() -> requests.Session:
     s = requests.Session()
     s.headers.update({
-        "Authorization": f"Bearer {os.getenv('CLIO_ACCESS_TOKEN', '')}",
         "Content-Type": "application/json",
     })
+    s.auth = CLIO_AUTH
     return s
 
 

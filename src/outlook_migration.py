@@ -28,6 +28,8 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
+from clio_token import CLIO_AUTH
+
 load_dotenv()
 
 from court_calendar.clio_calendar import CalendarEntry, fetch_calendar_entries
@@ -77,9 +79,9 @@ def setup_logging(log_dir: Path) -> None:
 def _clio_session() -> requests.Session:
     s = requests.Session()
     s.headers.update({
-        "Authorization": f"Bearer {os.getenv('CLIO_ACCESS_TOKEN', '')}",
         "Content-Type": "application/json",
     })
+    s.auth = CLIO_AUTH
     return s
 
 
