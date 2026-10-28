@@ -62,16 +62,16 @@ function viewCourtCalendar() {
   {% set to_update = results|selectattr("status", "equalto", "to_update")|list %}
   {% set to_create = results|selectattr("status", "equalto", "to_create")|list %}
   <div class="summary-bar">
-    <div class="summary-stat"><strong>{{ matched|length }}</strong>in sync</div>
-    <div class="summary-stat"><strong>{{ to_update|length }}</strong>need changes</div>
-    <div class="summary-stat"><strong>{{ to_create|length }}</strong>missing from Clio</div>
+    <div class="summary-stat"><strong id="count-matched">{{ matched|length }}</strong>in sync</div>
+    <div class="summary-stat"><strong id="count-to-update">{{ to_update|length }}</strong>need changes</div>
+    <div class="summary-stat"><strong id="count-to-create">{{ to_create|length }}</strong>missing from Clio</div>
   </div>
 
   {% set owners = results|map(attribute="matter_owner_initials")|reject("equalto", "")|unique|sort|list %}
   <div style="display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap;margin-bottom:0.75rem;">
     <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.9rem;">
       <input type="checkbox" id="exceptions-only" onchange="filterResults()">
-      Show only rows needing attention ({{ (to_update|length) + (to_create|length) }}) — hide the {{ matched|length }} already in sync
+      Show only rows needing attention (<span id="count-attention">{{ (to_update|length) + (to_create|length) }}</span>) — hide the <span id="count-matched-hint">{{ matched|length }}</span> already in sync
     </label>
     {% if owners %}
     <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.9rem;">
@@ -188,11 +188,20 @@ function filterResults() {
   const onlyExceptions = document.getElementById("exceptions-only").checked;
   const ownerFilterEl = document.getElementById("owner-filter");
   const owner = ownerFilterEl ? ownerFilterEl.value : "";
+  // Summary counts follow the owner filter (not the exceptions-only toggle,
+  // which would just zero out "in sync").
+  const counts = { matched: 0, to_update: 0, to_create: 0 };
   document.querySelectorAll("#results tbody tr[data-status]").forEach((row) => {
     const hiddenByStatus = onlyExceptions && row.dataset.status === "matched";
     const hiddenByOwner = owner && row.dataset.owner !== owner;
     row.style.display = (hiddenByStatus || hiddenByOwner) ? "none" : "";
+    if (!hiddenByOwner) counts[row.dataset.status]++;
   });
+  document.getElementById("count-matched").textContent = counts.matched;
+  document.getElementById("count-to-update").textContent = counts.to_update;
+  document.getElementById("count-to-create").textContent = counts.to_create;
+  document.getElementById("count-attention").textContent = counts.to_update + counts.to_create;
+  document.getElementById("count-matched-hint").textContent = counts.matched;
 }
 
 filterResults();
