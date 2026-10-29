@@ -47,6 +47,7 @@
       <th class="sortable" data-col-index="6" onclick="sortTable('collections-table', 6, 'number', this)">Balance <span class="sort-icon">&#8645;</span></th>
       <th>Handling</th>
       <th title="Confirmation from Clio, not something set here — FLARPL shows Clio's own FLARPL Recorded matter field, Payment plan shows Clio's own Payment Plan matter field (both read-only).">Confirmed</th>
+      <th title="Free-text details — FLARPL amount, payment plan terms, etc. Saves when you click out of the box. Stays in this dashboard; nothing is written to Clio.">Notes</th>
     </tr></thead>
     <tbody>
       {% for s in summaries %}
@@ -87,16 +88,27 @@
           —
           {% endif %}
         </td>
+        <td>
+          {% if s.matter_id %}
+          <textarea class="collections-note" data-matter-id="{{ s.matter_id }}" rows="2" onchange="saveNote(this)"
+                    title="{% if s.note_updated_by %}Last edited by {{ s.note_updated_by }}, {{ s.note_updated_at|local_time }}{% endif %}"
+                    style="width:16rem;padding:0.3rem 0.4rem;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text);font:inherit;font-size:0.85rem;resize:vertical;white-space:pre-wrap;">{{ s.note }}</textarea>
+          <div class="note-status" style="color:var(--text-muted);font-size:0.75rem;">{% if s.note_updated_by %}{{ s.note_updated_by.split()[0] }}, {{ s.note_updated_at|local_time("%m/%d/%y") }}{% endif %}</div>
+          {% else %}
+          <span title="No matter linked to this bill">—</span>
+          {% endif %}
+        </td>
       </tr>
       {% for b in s.bills %}
       <tr class="bill-row hidden" data-group="{{ group_id }}">
         <td></td>
         <td>{% if b.is_trust_request %}<span class="badge warn" title="{{ b.trust_label }} — not treated as past due">Trust request</span>{% elif b.overdue %}<span class="badge err">{{ b.days_overdue }}d past due</span>{% else %}<span class="badge ok">Current</span>{% endif %}</td>
-        <td class="bill-number">Bill #{{ b.number }}</td>
+        <td class="bill-number"><a class="clio-link" href="{{ clio_base_url }}/nc/#/bills/{{ b.bill_id }}" target="_blank" rel="noopener" title="Open this bill in Clio">Bill #{{ b.number }}</a></td>
         <td>{{ b.issued_at }}</td>
         <td>{{ b.due_at or "—" }}</td>
         <td>{{ "—" if b.is_trust_request else b.days_overdue }}</td>
         <td>${{ b.balance|money }}</td>
+        <td></td>
         <td></td>
         <td></td>
       </tr>
@@ -110,6 +122,28 @@
   {% endif %}
 </div>
 <script>
+// Unlike setAction(), no reload — a note has no live Clio read behind it, and
+// reloading would throw away whatever the user tabbed into next.
+async function saveNote(textarea) {
+  const status = textarea.parentElement.querySelector(".note-status");
+  status.textContent = "Saving…";
+  try {
+    const resp = await fetch("/collections/set-note", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: `matter_id=${encodeURIComponent(textarea.dataset.matterId)}&note=${encodeURIComponent(textarea.value)}`,
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      status.textContent = textarea.value.trim() ? `Saved — ${data.updated_by.split(" ")[0]}` : "Cleared";
+    } else {
+      status.textContent = "Couldn't save — click in and out to retry";
+    }
+  } catch (e) {
+    status.textContent = "Couldn't save — click in and out to retry";
+  }
+}
+
 async function setAction(select) {
   const matterId = select.dataset.matterId;
   const action = select.value;

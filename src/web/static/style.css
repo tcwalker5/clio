@@ -387,6 +387,8 @@ tr.bill-row.hidden { display: none; }
 tr.bill-row { background: var(--bg); }
 tr.bill-row td { color: var(--text-muted); font-size: 0.85rem; border-bottom: 1px solid var(--border); }
 tr.bill-row td.bill-number { padding-left: 1.8rem; }
+a.clio-link { color: var(--link); text-decoration: none; }
+a.clio-link:hover { text-decoration: underline; }
 
 th.formula-op, td.formula-op { text-align: center; color: var(--text-muted); padding-left: 0.3rem; padding-right: 0.3rem; }
 

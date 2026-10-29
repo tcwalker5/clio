@@ -129,6 +129,17 @@ CREATE TABLE IF NOT EXISTS collections_actions (
 -- nothing had ever been chosen for that matter.
 UPDATE collections_actions SET action = 'Uncollectible and Withdraw'
     WHERE action IN ('Claim as uncollectable', 'Claim as uncollectable and withdraw');
+
+-- Free-text notes per matter (2026-10-28, Ted) — FLARPL amount, payment plan
+-- terms, anything Handling's fixed dropdown can't say. Its own table rather
+-- than a collections_actions column: set_action() deletes that row when
+-- Handling is cleared, which would silently take the notes with it.
+CREATE TABLE IF NOT EXISTS collections_notes (
+    matter_id INTEGER PRIMARY KEY,
+    note TEXT NOT NULL,
+    updated_by TEXT,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 SCHEMA_COLUMNS = []
@@ -137,6 +148,28 @@ SCHEMA_COLUMNS = []
 def fetch_actions_by_matter(conn) -> dict[int, str]:
     rows = conn.execute("SELECT matter_id, action FROM collections_actions").fetchall()
     return {row["matter_id"]: row["action"] for row in rows}
+
+
+def fetch_notes_by_matter(conn) -> dict[int, dict]:
+    rows = conn.execute("SELECT matter_id, note, updated_by, updated_at FROM collections_notes").fetchall()
+    return {row["matter_id"]: dict(row) for row in rows}
+
+
+def set_note(conn, matter_id: int, note: str, updated_by: str) -> None:
+    """A blank note deletes the row, same as clearing Handling."""
+    note = note.strip()
+    if not note:
+        conn.execute("DELETE FROM collections_notes WHERE matter_id = ?", (matter_id,))
+        conn.commit()
+        return
+    conn.execute(
+        """INSERT INTO collections_notes (matter_id, note, updated_by, updated_at)
+           VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+           ON CONFLICT(matter_id) DO UPDATE SET note = excluded.note, updated_by = excluded.updated_by,
+               updated_at = CURRENT_TIMESTAMP""",
+        (matter_id, note, updated_by),
+    )
+    conn.commit()
 
 
 def set_action(conn, matter_id: int, action: str) -> None:
@@ -264,6 +297,9 @@ class MatterBillSummary:
     bills: list[UnpaidBill]  # this matter's unpaid bills, oldest issued first
     client_id: int = 0  # 0 = no client on the underlying bill (shouldn't happen in practice) — lets a matter-less summary still link to the Clio contact instead of nothing
     action: str = ""  # persisted collections_actions.action, set by the route layer
+    note: str = ""  # persisted collections_notes.note, set by the route layer
+    note_updated_by: str = ""
+    note_updated_at: str = ""  # SQLite CURRENT_TIMESTAMP (UTC) — render with the local_time filter
     flarpl_recorded: bool = False  # live, read-only from Clio's own FLARPL Recorded custom field, only meaningful when action == "FLARPL"
     payment_plan_active: bool = False  # live, read-only from Clio's own Payment Plan custom field, only meaningful when action == "Payment plan"
     matter_trust_balance: float = 0.0  # live, only fetched/meaningful for a client-level trust request (matter_id is None and all_trust) — see trust_level_mismatch and fetch_matter_trust_balance
@@ -461,7 +497,7 @@ def write_action_report_csv(
         writer = csv.writer(f)
         writer.writerow([
             "Section", "Matter", "Oldest Issued", "Earned Balance", "Replenishment Balance",
-            "New Client Retainer Balance", "Handling", "Confirmed",
+            "New Client Retainer Balance", "Handling", "Confirmed", "Notes",
         ])
         for section, summaries in (("Invoice", invoice_summaries), ("Trust Request", trust_summaries)):
             for s in summaries:
@@ -479,7 +515,7 @@ def write_action_report_csv(
                     f"{s.earned_balance:.2f}" if s.earned_balance else "",
                     f"{s.replenishment_balance:.2f}" if s.replenishment_balance else "",
                     f"{s.new_trust_balance:.2f}" if s.new_trust_balance else "",
-                    s.action, confirmed,
+                    s.action, confirmed, s.note,
                 ])
 
 

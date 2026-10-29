@@ -488,6 +488,27 @@ a checkbox here. Current design:
   (`{"id": "checkbox-1122682188", "value": false}`) rather than re-using the
   `custom_field: {id}` create-shape a second time.
 
+**Notes column, added 2026-10-28 (Ted)** — a free-text box per matter on `/collections`
+for details Handling's fixed dropdown can't hold (FLARPL amount, payment plan terms).
+Stored in its own `collections_notes` table (matter_id, note, updated_by, updated_at —
+part of `collections_monitor.SCHEMA`), deliberately **not** a `collections_actions`
+column: `set_action()` deletes that row when Handling is cleared, which would silently
+take the note with it. Saves on blur via `POST /collections/set-note` with no page
+reload (unlike `setAction()`, there's no live Clio read to refresh); a blank note deletes
+the row. `updated_by` is the signed-in Clio user's name (see Sign in with Clio in
+`src/web/CLAUDE.md`), shown under the box and in its tooltip. Dashboard-only — nothing
+is written to Clio. Also shown on the print report (its own column, `pre-wrap` so typed
+line breaks survive) and as a "Notes" column in the action-report CSV. Matter-less
+summaries (client-level trust deposits) get no box, same as Handling.
+
+**Bill # links on `/collections`, added 2026-10-28 (Ted)** — each bill row's number in
+the expanded bill list now opens that bill in Clio (`{{ clio_base_url }}/nc/#/bills/{bill_id}`,
+new tab, `a.clio-link` in `style.css`), the same link the print report already had.
+The matter name is deliberately **not** a link here: it was briefly linked to the
+matter's bills page (`/nc/#/matters/{matter_id}/bills`), then reverted the same day —
+Ted found clicking the name to expand its bill list more intuitive, since every bill is
+already listed and linked underneath. `clio_base_url` is passed by `collections_home`.
+
 **Open/Closed/All matter-status filter, added 2026-09-23** — `/collections` never
 filtered by the underlying matter's status at all before this: `fetch_unpaid_bills()`
 queries `bills.json?state=awaiting_payment` directly, which has no matter-status

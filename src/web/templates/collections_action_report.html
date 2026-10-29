@@ -61,9 +61,10 @@
         {% else %}—
         {% endif %}
       </td>
+      <td class="note-cell">{{ s.note or "—" }}</td>
     </tr>
     <tr class="bill-subrow" id="{{ group_id }}" data-section="{{ section }}">
-      <td colspan="6">
+      <td colspan="7">
         <table class="nowrap detail-table">
           <thead><tr>
             <th>Bill #</th><th>Issued</th><th>Due</th><th>Days Overdue</th><th>Balance</th>
@@ -87,12 +88,12 @@
   <div class="table-scroll">
   <table class="nowrap" id="report-table">
     <thead><tr>
-      <th></th><th>Matter</th><th>Oldest Issued</th><th>Total Balance</th><th>Handling</th><th>Confirmed</th>
+      <th></th><th>Matter</th><th>Oldest Issued</th><th>Total Balance</th><th>Handling</th><th>Confirmed</th><th>Notes</th>
     </tr></thead>
     <tbody>
       {{ summary_rows(invoice_summaries, "invoice") }}
       {% if trust_summaries %}
-      <tr class="section-divider-row" data-section="trust"><td colspan="6">Trust Requests — not subject to collections</td></tr>
+      <tr class="section-divider-row" data-section="trust"><td colspan="7">Trust Requests — not subject to collections</td></tr>
       {{ summary_rows(trust_summaries, "trust") }}
       {% endif %}
     </tbody>
@@ -182,6 +183,9 @@ table.detail-table a:hover { text-decoration: underline; }
    for the new leading expand-arrow column. */
 #report-table th:nth-child(5), #report-table td:nth-child(5),
 #report-table th:nth-child(6), #report-table td:nth-child(6) { white-space: normal; }
+/* Notes keep the line breaks staff typed (pre-wrap), and wrap like Handling. */
+#report-table th:nth-child(7) { white-space: normal; }
+#report-table td.note-cell { white-space: pre-wrap; min-width: 14rem; }
 
 /* "Trust request" (replacing a numeric Days Overdue) is short enough to fit
    nowrap today, but scope this the same way as above so a longer label
@@ -232,11 +236,13 @@ table.detail-table td:nth-child(4) { white-space: normal; }
   #report-table { table-layout: fixed; width: 100%; }
   #report-table th, #report-table td { padding: 0.3rem 0.4rem; }
   #report-table th:nth-child(1), #report-table td:nth-child(1) { width: 2%; }
-  #report-table th:nth-child(2), #report-table td:nth-child(2) { width: 33%; white-space: normal; }
-  #report-table th:nth-child(3), #report-table td:nth-child(3) { width: 10%; }
-  #report-table th:nth-child(4), #report-table td:nth-child(4) { width: 15%; white-space: normal; }
-  #report-table th:nth-child(5), #report-table td:nth-child(5) { width: 20%; }
-  #report-table th:nth-child(6), #report-table td:nth-child(6) { width: 20%; }
+  /* Rebalanced 2026-10-28 to make room for Notes (was 2/33/10/15/20/20). */
+  #report-table th:nth-child(2), #report-table td:nth-child(2) { width: 25%; white-space: normal; }
+  #report-table th:nth-child(3), #report-table td:nth-child(3) { width: 9%; }
+  #report-table th:nth-child(4), #report-table td:nth-child(4) { width: 13%; white-space: normal; }
+  #report-table th:nth-child(5), #report-table td:nth-child(5) { width: 14%; }
+  #report-table th:nth-child(6), #report-table td:nth-child(6) { width: 14%; }
+  #report-table th:nth-child(7), #report-table td:nth-child(7) { width: 23%; min-width: 0; }
 
   /* Bill sub-table — the specific "space between Issued and Due" Ted
      flagged. Same fixed-layout fix, tight percentages sized to what a date

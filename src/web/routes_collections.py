@@ -39,10 +39,14 @@ def _attach_actions(summaries: list[collections_monitor.MatterBillSummary]) -> N
     conn = get_connection()
     try:
         actions_by_matter = collections_monitor.fetch_actions_by_matter(conn)
+        notes_by_matter = collections_monitor.fetch_notes_by_matter(conn)
     finally:
         conn.close()
     for s in summaries:
         s.action = actions_by_matter.get(s.matter_id, "") if s.matter_id else ""
+        note = notes_by_matter.get(s.matter_id) if s.matter_id else None
+        if note:
+            s.note, s.note_updated_by, s.note_updated_at = note["note"], note["updated_by"] or "", note["updated_at"]
 
     session = None
 
@@ -107,7 +111,7 @@ async def collections_home(request: Request, _: None = Depends(require_auth)):
         request, "collections.html", error=None,
         summaries=summaries, overdue_count=overdue_count, total_balance=total_balance,
         replenishment_balance=replenishment_balance, new_trust_balance=new_trust_balance,
-        actions=collections_monitor.COLLECTIONS_ACTIONS,
+        actions=collections_monitor.COLLECTIONS_ACTIONS, clio_base_url=CLIO_BASE_URL,
     )
 
 
@@ -127,6 +131,18 @@ async def set_action(matter_id: int = Form(...), action: str = Form(""), _: None
     finally:
         conn.close()
     return JSONResponse({"success": True})
+
+
+@router.post("/set-note")
+async def set_note(matter_id: int = Form(...), note: str = Form(""), user: dict = Depends(require_auth)):
+    # Form("") for the same reason as /set-action above — a cleared note is an
+    # empty string, which Form(...) would reject as missing.
+    conn = get_connection()
+    try:
+        collections_monitor.set_note(conn, matter_id, note, user["name"])
+    finally:
+        conn.close()
+    return JSONResponse({"success": True, "updated_by": user["name"]})
 
 
 def _passes_matter_status_filter(summary: collections_monitor.MatterBillSummary, matter_status_filter: str) -> bool:
